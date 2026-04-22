@@ -33,4 +33,8 @@ Mular aims to become a unified runtime layer where:
 ---
 
 ## 🏗 Architecture Overview
-![Muplar Screenshot](https://drive.google.com/uc?export=view&id=1NaxCQf9Gedzkexm8vMlpUI8O7F5fFFkG)
+![Muplar Architecture](https://drive.google.com/uc?export=view&id=1NaxCQf9Gedzkexm8vMlpUI8O7F5fFFkG)
+
+## 🏗 Data flow
+![Muplar Flow](
+https://drive.google.com/uc?export=view&id=1iHtdPoD2v1JAirY_NDO8dU2RXywjrJiO)
