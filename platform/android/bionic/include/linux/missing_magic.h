@@ -1,0 +1,308 @@
+/* SPDX-License-Identifier: LGPL-2.1-or-later */
+#pragma once
+
+#include <linux/magic.h>
+
+/* 62aa81d7c4c24b90fdb61da70ac0dbbc414f9939 (4.13) */
+#ifndef OCFS2_SUPER_MAGIC
+#define OCFS2_SUPER_MAGIC 0x7461636f
+#endif
+
+/* 67e9c74b8a873408c27ac9a8e4c1d1c8d72c93ff (4.5) */
+#ifndef CGROUP2_SUPER_MAGIC
+#define CGROUP2_SUPER_MAGIC 0x63677270
+#endif
+
+/* 4282d60689d4f21b40692029080440cc58e8a17d (4.1) */
+#ifndef TRACEFS_MAGIC
+#define TRACEFS_MAGIC 0x74726163
+#endif
+
+/* e149ed2b805fefdccf7ccdfc19eca22fdd4514ac (3.19) */
+#ifndef NSFS_MAGIC
+#define NSFS_MAGIC 0x6e736673
+#endif
+
+/* b2197755b2633e164a439682fb05a9b5ea48f706 (4.4) */
+#ifndef BPF_FS_MAGIC
+#define BPF_FS_MAGIC 0xcafe4a11
+#endif
+
+/* Not exposed yet (4.20). Defined at ipc/mqueue.c */
+#ifndef MQUEUE_MAGIC
+#define MQUEUE_MAGIC 0x19800202
+#endif
+
+/* Not exposed yet (as of Linux 5.4). Defined in fs/xfs/libxfs/xfs_format.h */
+#ifndef XFS_SB_MAGIC
+#define XFS_SB_MAGIC 0x58465342
+#endif
+
+/* dea2903719283c156b53741126228c4a1b40440f (5.17) */
+#ifndef CIFS_SUPER_MAGIC
+#define CIFS_SUPER_MAGIC 0xFF534D42
+#endif
+
+/* dea2903719283c156b53741126228c4a1b40440f (5.17) */
+#ifndef SMB2_SUPER_MAGIC
+#define SMB2_SUPER_MAGIC 0xFE534D42
+#endif
+
+/* 257f871993474e2bde6c497b54022c362cf398e1 (4.5) */
+#ifndef OVERLAYFS_SUPER_MAGIC
+#define OVERLAYFS_SUPER_MAGIC 0x794c7630
+#endif
+
+/* 2a28900be20640fcd1e548b1e3bad79e8221fcf9 (4.7) */
+#ifndef UDF_SUPER_MAGIC
+#define UDF_SUPER_MAGIC 0x15013346
+#endif
+
+/* b1123ea6d3b3da25af5c8a9d843bd07ab63213f4 (4.8)*/
+#ifndef BALLOON_KVM_MAGIC
+#define BALLOON_KVM_MAGIC 0x13661366
+#endif
+
+/* 48b4800a1c6af2cdda344ea4e2c843dcc1f6afc9 (4.8) */
+#ifndef ZSMALLOC_MAGIC
+#define ZSMALLOC_MAGIC 0x58295829
+#endif
+
+/* 3bc52c45bac26bf7ed1dc8d287ad1aeaed1250b6 (4.9) */
+#ifndef DAXFS_MAGIC
+#define DAXFS_MAGIC 0x64646178
+#endif
+
+/* 5ff193fbde20df5d80fec367cea3e7856c057320 (4.10) */
+#ifndef RDTGROUP_SUPER_MAGIC
+#define RDTGROUP_SUPER_MAGIC 0x7655821
+#endif
+
+/* a481f4d917835cad86701fc0d1e620c74bb5cd5f (4.13) */
+#ifndef AAFS_MAGIC
+#define AAFS_MAGIC 0x5a3c69f0
+#endif
+
+/* f044c8847bb61eff5e1e95b6f6bb950e7f4a73a4 (4.15) */
+#ifndef AFS_FS_MAGIC
+#define AFS_FS_MAGIC 0x6b414653
+#endif
+
+/* dddde68b8f06dd83486124b8d245e7bfb15c185d (4.20) */
+#ifndef XFS_SUPER_MAGIC
+#define XFS_SUPER_MAGIC 0x58465342
+#endif
+
+/* 3ad20fe393b31025bebfc2d76964561f65df48aa (5.0) */
+#ifndef BINDERFS_SUPER_MAGIC
+#define BINDERFS_SUPER_MAGIC 0x6c6f6f70
+#endif
+
+/* ed63bb1d1f8469586006a9ca63c42344401aa2ab (5.3) */
+#ifndef DMA_BUF_MAGIC
+#define DMA_BUF_MAGIC 0x444d4142
+#endif
+
+/* ea8157ab2ae5e914dd427e5cfab533b6da3819cd (5.3) */
+#ifndef Z3FOLD_MAGIC
+#define Z3FOLD_MAGIC 0x33
+#endif
+
+/* 47e4937a4a7ca4184fd282791dfee76c6799966a (5.4) */
+#ifndef EROFS_SUPER_MAGIC_V1
+#define EROFS_SUPER_MAGIC_V1 0xe0f5e1e2
+#endif
+
+/* fe030c9b85e6783bc52fe86449c0a4b8aa16c753 (5.5) */
+#ifndef PPC_CMM_MAGIC
+#define PPC_CMM_MAGIC 0xc7571590
+#endif
+
+/* 8dcc1a9d90c10fa4143e5c17821082e5e60e46a1 (5.6) */
+#ifndef ZONEFS_MAGIC
+#define ZONEFS_MAGIC 0x5a4f4653
+#endif
+
+/* 3234ac664a870e6ea69ae3a57d824cd7edbeacc5 (5.8) */
+#ifndef DEVMEM_MAGIC
+#define DEVMEM_MAGIC 0x454d444d
+#endif
+
+/* cb12fd8e0dabb9a1c8aef55a6a41e2c255fcdf4b (6.8) */
+#ifndef PID_FS_MAGIC
+#define PID_FS_MAGIC 0x50494446
+#endif
+
+/* Not in mainline but included in Ubuntu */
+#ifndef SHIFTFS_MAGIC
+#define SHIFTFS_MAGIC 0x6a656a62
+#endif
+
+/* 1507f51255c9ff07d75909a84e7c0d7f3c4b2f49 (5.14) */
+#ifndef SECRETMEM_MAGIC
+#define SECRETMEM_MAGIC 0x5345434d
+#endif
+
+/* Not exposed yet. Defined at fs/fuse/inode.c */
+#ifndef FUSE_SUPER_MAGIC
+#define FUSE_SUPER_MAGIC 0x65735546
+#endif
+
+/* Not exposed yet. Defined at fs/fuse/control.c */
+#ifndef FUSE_CTL_SUPER_MAGIC
+#define FUSE_CTL_SUPER_MAGIC 0x65735543
+#endif
+
+/* Not exposed yet. Defined at fs/ceph/super.h */
+#ifndef CEPH_SUPER_MAGIC
+#define CEPH_SUPER_MAGIC 0x00c36400
+#endif
+
+/* Not exposed yet. Defined at fs/orangefs/orangefs-kernel.h */
+#ifndef ORANGEFS_DEVREQ_MAGIC
+#define ORANGEFS_DEVREQ_MAGIC 0x20030529
+#endif
+
+/* linux/gfs2_ondisk.h */
+#ifndef GFS2_MAGIC
+#define GFS2_MAGIC 0x01161970
+#endif
+
+/* Not exposed yet. Defined at fs/configfs/mount.c */
+#ifndef CONFIGFS_MAGIC
+#define CONFIGFS_MAGIC 0x62656570
+#endif
+
+/* Not exposed yet. Defined at fs/vboxsf/super.c */
+#ifndef VBOXSF_SUPER_MAGIC
+#define VBOXSF_SUPER_MAGIC 0x786f4256
+#endif
+
+/* Not exposed yet. Defined at fs/exfat/exfat_fs.h */
+#ifndef EXFAT_SUPER_MAGIC
+#define EXFAT_SUPER_MAGIC 0x2011BAB0UL
+#endif
+
+/* Not exposed yet, defined at fs/ntfs/ntfs.h */
+#ifndef NTFS_SB_MAGIC
+#define NTFS_SB_MAGIC 0x5346544e
+#endif
+
+/* Not exposed yet, encoded literally in fs/ntfs3/super.c. */
+#ifndef NTFS3_SUPER_MAGIC
+#define NTFS3_SUPER_MAGIC 0x7366746e
+#endif
+
+#define AFS_SUPER_MAGIC        0x5346414F
+#define AFFS_SUPER_MAGIC       0xADFF
+#define CGROUP_SUPER_MAGIC     0x27E0EB
+#define DEBUGFS_MAGIC          0x64626720
+#define DEVPTS_SUPER_MAGIC     0x1CD1
+#define ECRYPTFS_SUPER_MAGIC   0xF15F
+#define EFIVARFS_MAGIC         0xDEADBEEF
+#define EFS_SUPER_MAGIC        0x00414A53
+#define MSDFS_SUPER_MAGIC      0x4D44
+#define MSDOS_SUPER_MAGIC      0x4d44
+#define NCP_SUPER_MAGIC        0x564c
+#define NCPFS_SUPER_MAGIC      0x564c
+#define PROC_SUPER_MAGIC       0x9fa0
+#define SELINUX_MAGIC          0xf97cff8c
+#define SECURITYFS_MAGIC       0x73636673
+#define SMACK_MAGIC            0x43415f53
+#define SMB_SUPER_MAGIC        0x517B
+#define SOCKFS_MAGIC           0x534F434B
+#define V9FS_MAGIC             0x01021994
+#define SYSFS_MAGIC        0x62656572
+/* "PIPE" in ASCII */
+#define RPC_PIPEFS_SUPER_MAGIC 0x50495045
+
+#define ADFS_SUPER_MAGIC	0xadf5
+#define AFS_SUPER_MAGIC                0x5346414F
+#define AUTOFS_SUPER_MAGIC	0x0187
+#define CEPH_SUPER_MAGIC	0x00c36400
+#define CODA_SUPER_MAGIC	0x73757245
+#define CRAMFS_MAGIC		0x28cd3d45	/* some random number */
+#define CRAMFS_MAGIC_WEND	0x453dcd28	/* magic number with the wrong endianess */
+#define DEBUGFS_MAGIC          0x64626720
+#define SECURITYFS_MAGIC	0x73636673
+#define SELINUX_MAGIC		0xf97cff8c
+#define RAMFS_MAGIC		0x858458f6	/* some random number */
+#define TMPFS_MAGIC		0x01021995
+#define HUGETLBFS_MAGIC 	0x958458f6	/* some random number */
+#define SQUASHFS_MAGIC		0x73717368
+#define EXT2_SUPER_MAGIC	0xEF53
+#define EXT3_SUPER_MAGIC	0xEF53
+#define XENFS_SUPER_MAGIC	0xabba1974
+#define EXT4_SUPER_MAGIC	0xEF53
+#define BTRFS_SUPER_MAGIC	0x9123683E
+#define NILFS_SUPER_MAGIC	0x3434
+#define F2FS_SUPER_MAGIC	0xF2F52010
+#define HPFS_SUPER_MAGIC	0xf995e849
+#define ISOFS_SUPER_MAGIC	0x9660
+#define JFFS2_SUPER_MAGIC	0x72b6
+#define XFS_SUPER_MAGIC		0x58465342	/* "XFSB" */
+#define PSTOREFS_MAGIC		0x6165676C
+#define HOSTFS_SUPER_MAGIC	0x00c0ffee
+#define OVERLAYFS_SUPER_MAGIC	0x794c7630
+#define FUSE_SUPER_MAGIC	0x65735546
+#ifndef ECHRNG
+#define ECHRNG 44
+#endif
+
+#define MINIX_SUPER_MAGIC	0x137F		/* minix v1 fs, 14 char names */
+#define MINIX_SUPER_MAGIC2	0x138F		/* minix v1 fs, 30 char names */
+#define MINIX2_SUPER_MAGIC	0x2468		/* minix v2 fs, 14 char names */
+#define MINIX2_SUPER_MAGIC2	0x2478		/* minix v2 fs, 30 char names */
+#define MINIX3_SUPER_MAGIC	0x4d5a		/* minix v3 fs, 60 char names */
+
+#define MSDOS_SUPER_MAGIC	0x4d44		/* MD */
+#define NCP_SUPER_MAGIC		0x564c		/* Guess, what 0x564c is :-) */
+#define NFS_SUPER_MAGIC		0x6969
+#define OCFS2_SUPER_MAGIC	0x7461636f
+#define OPENPROM_SUPER_MAGIC	0x9fa1
+#define QNX4_SUPER_MAGIC	0x002f		/* qnx4 fs detection */
+#define QNX6_SUPER_MAGIC	0x68191122	/* qnx6 fs detection */
+
+#define REISERFS_SUPER_MAGIC	0x52654973	/* used by gcc */
+					/* used by file system utilities that
+	                                   look at the superblock, etc.  */
+#define REISERFS_SUPER_MAGIC_STRING	"ReIsErFs"
+#define REISER2FS_SUPER_MAGIC_STRING	"ReIsEr2Fs"
+#define REISER2FS_JR_SUPER_MAGIC_STRING	"ReIsEr3Fs"
+
+#define SMB_SUPER_MAGIC		0x517B
+#define CIFS_SUPER_MAGIC	0xFF534D42      /* the first four bytes of SMB PDUs */
+#define SMB2_SUPER_MAGIC	0xFE534D42
+
+#define CGROUP2_SUPER_MAGIC	0x63677270
+
+#define RDTGROUP_SUPER_MAGIC	0x7655821
+
+#define STACK_END_MAGIC		0x57AC6E9D
+
+#define TRACEFS_MAGIC          0x74726163
+
+#define BDEVFS_MAGIC            0x62646576
+#define DAXFS_MAGIC             0x64646178
+#define BINFMTFS_MAGIC          0x42494e4d
+#define BINDERFS_SUPER_MAGIC	0x6c6f6f70
+#define FUTEXFS_SUPER_MAGIC	0xBAD1DEA
+#define PIPEFS_MAGIC            0x50495046
+#define PROC_SUPER_MAGIC	0x9fa0
+#define SOCKFS_MAGIC		0x534F434B
+#define SYSFS_MAGIC		0x62656572
+#define USBDEVICE_SUPER_MAGIC	0x9fa2
+#define MTD_INODE_FS_MAGIC      0x11307854
+#define ANON_INODE_FS_MAGIC	0x09041934
+#define BTRFS_TEST_MAGIC	0x73727279
+#define NSFS_MAGIC		0x6e736673
+#define BPF_FS_MAGIC		0xcafe4a11
+#define AAFS_MAGIC		0x5a3c69f0
+#define ZONEFS_MAGIC		0x5a4f4653
+
+/* Since UDF 2.01 is ISO 13346 based... */
+#define UDF_SUPER_MAGIC		0x15013346
+#define DMA_BUF_MAGIC		0x444d4142	/* "DMAB" */
+#define DEVMEM_MAGIC		0x454d444d	/* "DMEM" */
+#define SECRETMEM_MAGIC		0x5345434d	/* "SECM" */
+#define PID_FS_MAGIC		0x50494446	/* "PIDF" */

@@ -1,0 +1,25 @@
+{
+    "version": 4,
+    "configurations": [
+        {
+            "name": "Mac",
+            "compilerPath": "/usr/bin/clang",
+
+            "includePath": [
+                "${workspaceFolder}/android/bionic/include",
+                "${workspaceFolder}/android/bionic/include/linux",
+                "${workspaceFolder}/android/bionic/include/asm",
+                "${workspaceFolder}/android/bionic/include/sys_compat"
+            ],
+
+            "defines": [
+                "PLATFORM_MACOS"
+            ],
+
+            "cStandard": "c11",
+            "cppStandard": "c++17",
+
+            "intelliSenseMode": "macos-clang-arm64"
+        }
+    ]
+}
