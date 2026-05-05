@@ -8,8 +8,13 @@
             "includePath": [
                 "${workspaceFolder}/android/bionic/include",
                 "${workspaceFolder}/android/bionic/include/linux",
+                "${workspaceFolder}/android/bionic/include/android",
                 "${workspaceFolder}/android/bionic/include/asm",
-                "${workspaceFolder}/android/bionic/include/sys_compat"
+                "${workspaceFolder}/android/bionic/include/bits",
+                "${workspaceFolder}/android/bionic/include/basic",
+                "${workspaceFolder}/android/bionic/include/sys",
+                "${workspaceFolder}/android/bionic/include/sys_compat",
+                "${workspaceFolder}/runtime/elf"
             ],
 
             "defines": [

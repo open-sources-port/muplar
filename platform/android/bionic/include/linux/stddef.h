@@ -4,7 +4,8 @@
 
 
 #ifndef __always_inline
-#define __always_inline inline
+// #define __always_inline inline
+#define __always_inline __attribute__((__always_inline__))
 #endif
 
 /**

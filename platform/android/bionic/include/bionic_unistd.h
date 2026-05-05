@@ -28,20 +28,24 @@
 
 #pragma once
 
+#include <unistd.h>
+
 #include <sys/cdefs.h>
-
-#include <stddef.h>
+#include <linux/types.h>
 #include <sys/types.h>
+#include <sys_compat/bionic_types.h>
 #include <sys/select.h>
+#include <linux/stddef.h>
+#include <sys_compat/missing_syscall.h>
 
-#include <bits/fcntl.h>
+#include <fcntl.h>
 #include <bits/getentropy.h>
 #include <bits/getopt.h>
 #include <bits/ioctl.h>
 #include <bits/lockf.h>
-#include <bits/posix_limits.h>
+// #include <bits/posix_limits.h>
 #include <bits/seek_constants.h>
-#include <bits/sysconf.h>
+// #include <bits/sysconf.h>
 
 __BEGIN_DECLS
 
@@ -50,34 +54,38 @@ __BEGIN_DECLS
 #define STDERR_FILENO	2
 
 #define F_OK 0
-#define X_OK 1
-#define W_OK 2
-#define R_OK 4
+// #define X_OK 1
+// #define W_OK 2
+// #define R_OK 4
 
-#define _PC_FILESIZEBITS 0
+// #define _PC_FILESIZEBITS 0
 #define _PC_LINK_MAX 1
 #define _PC_MAX_CANON 2
 #define _PC_MAX_INPUT 3
 #define _PC_NAME_MAX 4
 #define _PC_PATH_MAX 5
 #define _PC_PIPE_BUF 6
-#define _PC_2_SYMLINKS 7
-#define _PC_ALLOC_SIZE_MIN 8
-#define _PC_REC_INCR_XFER_SIZE 9
-#define _PC_REC_MAX_XFER_SIZE 10
-#define _PC_REC_MIN_XFER_SIZE 11
-#define _PC_REC_XFER_ALIGN 12
-#define _PC_SYMLINK_MAX 13
-#define _PC_CHOWN_RESTRICTED 14
-#define _PC_NO_TRUNC 15
-#define _PC_VDISABLE 16
+// #define _PC_2_SYMLINKS 7
+// #define _PC_ALLOC_SIZE_MIN 8
+// #define _PC_REC_INCR_XFER_SIZE 9
+// #define _PC_REC_MAX_XFER_SIZE 10
+// #define _PC_REC_MIN_XFER_SIZE 11
+// #define _PC_REC_XFER_ALIGN 12
+// #define _PC_SYMLINK_MAX 13
+// #define _PC_CHOWN_RESTRICTED 14
+// #define _PC_NO_TRUNC 15
+// #define _PC_VDISABLE 16
 #define _PC_ASYNC_IO 17
-#define _PC_PRIO_IO 18
-#define _PC_SYNC_IO 19
+// #define _PC_PRIO_IO 18
+// #define _PC_SYNC_IO 19
 
 extern char* _Nullable * _Nullable environ;
 
 __noreturn void _exit(int __status);
+
+typedef int64_t off_t;
+typedef off_t loff_t;
+typedef loff_t off64_t;
 
 /**
  * [fork(2)](https://man7.org/linux/man-pages/man2/fork.2.html) creates a new
@@ -132,7 +140,7 @@ pid_t  getpid(void);
  *
  * Returns the caller's thread ID.
  */
-pid_t  gettid(void);
+// pid_t  gettid(void);
 
 pid_t  getpgid(pid_t __pid);
 int    setpgid(pid_t __pid, pid_t __pgid);
@@ -251,7 +259,7 @@ uid_t geteuid(void);
 gid_t getgid(void);
 gid_t getegid(void);
 int getgroups(int __size, gid_t* _Nullable __list);
-int setgroups(size_t __size, const gid_t* _Nullable __list);
+// int setgroups(size_t __size, const gid_t* _Nullable __list);
 int getresuid(uid_t* _Nonnull __ruid, uid_t* _Nonnull __euid, uid_t* _Nonnull __suid);
 int getresgid(gid_t* _Nonnull __rgid, gid_t* _Nonnull __egid, gid_t* _Nonnull __sgid);
 char* _Nullable getlogin(void);
@@ -383,8 +391,8 @@ int sethostname(const char* _Nonnull __name, size_t __n) __INTRODUCED_IN(23);
 #endif /* __BIONIC_AVAILABILITY_GUARD(23) */
 
 
-int brk(void* _Nonnull __addr);
-void* _Nullable sbrk(ptrdiff_t __increment);
+// int brk(void* _Nonnull __addr);
+// void* _Nullable sbrk(ptrdiff_t __increment);
 
 int isatty(int __fd);
 char* _Nullable ttyname(int __fd);
@@ -401,7 +409,7 @@ int acct(const char* _Nullable __path);
  */
 int getpagesize(void) __attribute_const__;
 
-long syscall(long __number, ...);
+// long syscall(long __number, ...);
 
 int daemon(int __no_chdir, int __no_close);
 
@@ -472,7 +480,7 @@ int close_range(unsigned int __min_fd, unsigned int __max_fd, int __flags) __INT
 
 #if defined(__BIONIC_INCLUDE_FORTIFY_HEADERS)
 #define _UNISTD_H_
-#include <bits/fortify/unistd.h>
+// #include <bits/fortify/unistd.h>
 #undef _UNISTD_H_
 #endif
 

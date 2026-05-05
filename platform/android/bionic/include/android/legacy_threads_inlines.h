@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2017 The Android Open Source Project
+ * Copyright (C) 2019 The Android Open Source Project
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -26,22 +26,13 @@
  * SUCH DAMAGE.
  */
 
-#ifndef _STDLIB_H
-#error "Never include this file directly; instead, include <stdlib.h>"
+#pragma once
+
+#include <sys/cdefs.h>
+
+#if __ANDROID_API__ < 30
+
+#define __BIONIC_THREADS_INLINE static __inline
+#include <bits/threads_inlines.h>
+
 #endif
-
-#if defined(__BIONIC_FORTIFY)
-
-/* PATH_MAX is unavailable without polluting the namespace, but it's always 4096 on Linux */
-#define __PATH_MAX 4096
-
-char* _Nullable realpath(const char* _Nonnull path, char* _Nullable resolved)
-        __clang_error_if(!path, "'realpath': NULL path is never correct; flipped arguments?")
-        __clang_error_if(__bos_unevaluated_lt(__bos(resolved), __PATH_MAX),
-                         "'realpath' output parameter must be NULL or a pointer to a buffer "
-                         "with >= PATH_MAX bytes");
-
-/* No need for a definition; the only issues we can catch are at compile-time. */
-
-#undef __PATH_MAX
-#endif /* defined(__BIONIC_FORTIFY) */

@@ -9,8 +9,13 @@ add_executable(mup
 #         muplar_compositor
 # )
 
-# target_include_directories(mup
-#     PRIVATE
-#         ${CMAKE_SOURCE_DIR}/runtime
-#         ${CMAKE_SOURCE_DIR}/compositor/include
-# )
+target_link_libraries(mup
+    PRIVATE
+    muplar_runtime_elf
+)
+
+target_include_directories(mup PUBLIC
+    ${CMAKE_SOURCE_DIR}
+    ${CMAKE_SOURCE_DIR}/platform/android/bionic/include
+    ${CMAKE_SOURCE_DIR}/runtime/elf
+)

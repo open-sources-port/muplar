@@ -1,16 +1,15 @@
 #include <iostream>
+#include <elf_loader.h>
 
 int main(int argc, char** argv) {
     std::cout << "Muplar CLI (mup)\n";
 
-    // Compositor comp;
+    if (argc < 2)
+    {
+        return 1;
+    }
 
-    // if (!comp.init()) {
-    //     return -1;
-    // }
-
-    // comp.run();
-    // comp.shutdown();
+    muplar::runtime::elf::parse(argv[1]);
 
     return 0;
 }

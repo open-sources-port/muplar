@@ -11,6 +11,7 @@
 #include <stddef.h> // for offsetof
 #include <assert.h> // for static_assert if needed
 #include <sys_compat/muplar_errno.h>
+#include <bionic_unistd.h>  // getuid, geteuid, getgid, getegid
 #include <unistd.h>  // getuid, geteuid, getgid, getegid
 #include <stdlib.h>  // for getenv
 #include <macro-fundamental.h>
