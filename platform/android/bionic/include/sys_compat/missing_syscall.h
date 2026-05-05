@@ -5,7 +5,7 @@
 
 #include <sys_compat/muplar_errno.h>
 #include <fcntl.h>
-
+#include <linux/types.h>
 #include <linux/time_types.h>
 #include <linux/random.h>
 

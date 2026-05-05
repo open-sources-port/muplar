@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2017 The Android Open Source Project
+ * Copyright (C) 2008 The Android Open Source Project
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -28,22 +28,72 @@
 
 #pragma once
 
-mode_t __umask_chk(mode_t);
-mode_t __umask_real(mode_t mode) __RENAME(umask);
+#include <sys/cdefs.h>
+#include <sys/types.h>
+#include <linux/types.h>
 
-#if defined(__BIONIC_FORTIFY)
-
-/* Abuse enable_if to make this an overload of umask. */
-__BIONIC_FORTIFY_INLINE
-mode_t umask(mode_t mode)
-    __overloadable
-    __enable_if(1, "")
-    __clang_error_if(mode & ~0777, "'umask' called with invalid mode") {
-#if __BIONIC_FORTIFY_RUNTIME_CHECKS_ENABLED
-  return __umask_chk(mode);
-#else
-  return __umask_real(mode);
+typedef struct {
+  uint32_t flags;
+  void* stack_base;
+  size_t stack_size;
+  size_t guard_size;
+  int32_t sched_policy;
+  int32_t sched_priority;
+#ifdef __LP64__
+  char __reserved[16];
 #endif
-}
+} bionic_pthread_attr_t;
 
-#endif /* defined(__BIONIC_FORTIFY) */
+typedef struct {
+#if defined(__LP64__)
+  int64_t __private[4];
+#else
+  int32_t __private[8];
+#endif
+} bionic_pthread_barrier_t;
+
+typedef int bionic_pthread_barrierattr_t;
+
+typedef struct {
+#if defined(__LP64__)
+  int32_t __private[12];
+#else
+  int32_t __private[1];
+#endif
+} bionic_pthread_cond_t;
+
+typedef long bionic_pthread_condattr_t;
+
+typedef int bionic_pthread_key_t;
+
+typedef struct {
+#if defined(__LP64__)
+  int32_t __private[10];
+#else
+  int32_t __private[1];
+#endif
+} bionic_pthread_mutex_t;
+
+typedef long bionic_pthread_mutexattr_t;
+
+typedef int bionic_pthread_once_t;
+
+typedef struct {
+#if defined(__LP64__)
+  int32_t __private[14];
+#else
+  int32_t __private[10];
+#endif
+} bionic_pthread_rwlock_t;
+
+typedef long bionic_pthread_rwlockattr_t;
+
+typedef struct {
+#if defined(__LP64__)
+  int64_t __private;
+#else
+  int32_t __private[2];
+#endif
+} bionic_pthread_spinlock_t;
+
+typedef long bionic_pthread_t;

@@ -1,16 +1,15 @@
 # android/bionic/CMakeLists.txt
 
-# =========================================
-# Include directories
-# =========================================
-include_directories(
-    ${CMAKE_CURRENT_SOURCE_DIR}/include
-    ${CMAKE_CURRENT_SOURCE_DIR}/include/linux
-    ${CMAKE_CURRENT_SOURCE_DIR}/include/asm
-    ${CMAKE_CURRENT_SOURCE_DIR}/include/sys_compat
-    ${CMAKE_CURRENT_SOURCE_DIR}/include/basic
-    ${CMAKE_CURRENT_SOURCE_DIR}/include/bits
-    ${CMAKE_CURRENT_SOURCE_DIR}/include/bits/fortify
+execute_process(
+    COMMAND ${CMAKE_C_COMPILER} -print-resource-dir
+    OUTPUT_VARIABLE CLANG_RESOURCE_DIR
+    OUTPUT_STRIP_TRAILING_WHITESPACE
+)
+
+execute_process(
+    COMMAND xcrun --show-sdk-path
+    OUTPUT_VARIABLE MACOS_SDK
+    OUTPUT_STRIP_TRAILING_WHITESPACE
 )
 
 # =========================================
@@ -37,12 +36,30 @@ add_library(bionic STATIC
 # )
 
 # =========================================
+# Include directories
+# =========================================
+target_include_directories(bionic PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
+    ${CMAKE_CURRENT_SOURCE_DIR}/include/linux
+    ${CMAKE_CURRENT_SOURCE_DIR}/include/asm
+    ${CMAKE_CURRENT_SOURCE_DIR}/include/sys_compat
+    ${CMAKE_CURRENT_SOURCE_DIR}/include/basic
+    ${CMAKE_CURRENT_SOURCE_DIR}/include/bits
+    ${CMAKE_CURRENT_SOURCE_DIR}/include/bits/fortify
+)
+
+# =========================================
 # Compiler options
 # =========================================
-target_compile_options(bionic PRIVATE
+target_compile_options(bionic PRIVATE -v
     -Wall
     -Wextra
 )
+
+# target_include_directories(bionic PRIVATE
+#     ${CMAKE_CURRENT_SOURCE_DIR}/include
+#     ${CLANG_RESOURCE_DIR}/include
+# )
 
 # =========================================
 # Platform specific
@@ -58,6 +75,7 @@ elseif(APPLE)
 elseif(UNIX)
     target_compile_definitions(bionic PRIVATE
         PLATFORM_LINUX
+        _FORTIFY_SOURCE=0
     )
 endif()
 

@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2019 The Android Open Source Project
+ * Copyright (C) 2015 The Android Open Source Project
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -26,36 +26,27 @@
  * SUCH DAMAGE.
  */
 
-#if defined(__BIONIC_FORTIFY)
+#pragma once
 
-__BIONIC_FORTIFY_INLINE
-void __bionic_bcopy(const void * _Nonnull src, void* _Nonnull const dst __pass_object_size0, size_t len)
-        __overloadable
-        __clang_error_if(__bos_unevaluated_lt(__bos0(dst), len),
-                         "'bcopy' called with size bigger than buffer") {
-#if __BIONIC_FORTIFY_RUNTIME_CHECKS_ENABLED
-    size_t bos = __bos0(dst);
-    if (!__bos_trivially_ge(bos, len)) {
-        __builtin___memmove_chk(dst, src, len, bos);
-        return;
-    }
+#include <sys/cdefs.h>
+
+// The last bugfixes to <bits/termios_inlines.h> were
+// 5da96467a99254c963aef44e75167661d3e02278, so even those these functions were
+// in API level 21, ensure that everyone's using the latest versions.
+#if __ANDROID_API__ < 28
+
+#include <linux/termios.h>
+#include <sys/ioctl.h>
+#include <sys/types.h>
+
+#define __BIONIC_TERMIOS_INLINE static __inline
+#include <bits/termios_inlines.h>
+
 #endif
-    __builtin_memmove(dst, src, len);
-}
 
-__BIONIC_FORTIFY_INLINE
-void __bionic_bzero(void* _Nonnull const b __pass_object_size0, size_t len)
-        __overloadable
-        __clang_error_if(__bos_unevaluated_lt(__bos0(b), len),
-                         "'bzero' called with size bigger than buffer") {
-#if __BIONIC_FORTIFY_RUNTIME_CHECKS_ENABLED
-    size_t bos = __bos0(b);
-    if (!__bos_trivially_ge(bos, len)) {
-        __builtin___memset_chk(b, 0, len, bos);
-        return;
-    }
+#if __ANDROID_API__ < 35
+
+#define __BIONIC_TERMIOS_WINSIZE_INLINE static __inline
+#include <bits/termios_winsize_inlines.h>
+
 #endif
-    __builtin_memset(b, 0, len);
-}
-
-#endif /* defined(__BIONIC_FORTIFY) */
