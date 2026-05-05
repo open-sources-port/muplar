@@ -297,3 +297,15 @@ typedef Elf64_Xword Elf64_Relr;
 
 /* FreeBSD spells this slightly differently to Linux. */
 #define R_X86_64_JUMP_SLOT R_X86_64_JMP_SLOT
+
+#ifndef PT_GNU_EH_FRAME
+#define PT_GNU_EH_FRAME 0x6474e550
+#endif
+
+#ifndef PT_GNU_STACK
+#define PT_GNU_STACK 0x6474e551
+#endif
+
+#ifndef PT_GNU_RELRO
+#define PT_GNU_RELRO 0x6474e552
+#endif
