@@ -22,27 +22,75 @@ namespace muplar::runtime::elf
         }
     }
 
-    bool parse(const char* path)
+    static void print_flags(uint32_t flags) {
+        if (flags & PF_R) std::cout << "R";
+        if (flags & PF_W) std::cout << "W";
+        if (flags & PF_X) std::cout << "X";
+    }
+
+    ElfBinary parse(const char* path)
     {
+        ElfBinary binary {};
         std::ifstream file(path, std::ios::binary);
 
-        if (!file)
-        {
-            return false;
+        if (!file) {
+            std::cerr << "Failed to open ELF file\n";
+            return binary;
         }
 
-        Elf64_Ehdr ehdr{};
+        Elf64_Ehdr ehdr {};
 
-        file.read(reinterpret_cast<char*>(&ehdr), sizeof(ehdr));
+        file.read(
+            reinterpret_cast<char*>(&ehdr),
+            sizeof(Elf64_Ehdr)
+        );
 
-        if (ehdr.e_ident[EI_MAG0] != ELFMAG0)
-        {
-            return false;
+        if (!file) {
+            std::cerr << "Failed to read ELF header\n";
+            return binary;
         }
 
-        std::vector<Elf64_Phdr> phdrs;
+        if (
+            ehdr.e_ident[EI_MAG0] != ELFMAG0 ||
+            ehdr.e_ident[EI_MAG1] != ELFMAG1 ||
+            ehdr.e_ident[EI_MAG2] != ELFMAG2 ||
+            ehdr.e_ident[EI_MAG3] != ELFMAG3
+        ) {
+            std::cerr << "Invalid ELF magic\n";
+            return binary;
+        }
+
+        if (ehdr.e_ident[EI_CLASS] != ELFCLASS64) {
+            std::cerr << "Unsupported ELF class\n";
+            return binary;
+        }
+
+        if (ehdr.e_ident[EI_DATA] != ELFDATA2LSB) {
+            std::cerr << "Unsupported ELF endianness\n";
+            return binary;
+        }
+
+        if (ehdr.e_machine != EM_AARCH64) {
+            std::cerr << "Unsupported machine type\n";
+            return binary;
+        }
+
+        binary.valid = true;
+        binary.entrypoint = ehdr.e_entry;
 
         file.seekg(ehdr.e_phoff);
+
+        std::cout << "ELF64\n";
+        std::cout << "Machine: AArch64\n";
+        std::cout << "Endian : Little\n\n";
+
+        std::cout
+            << "Entrypoint: 0x"
+            << std::hex
+            << binary.entrypoint
+            << "\n\n";
+
+        std::cout << "Program Headers:\n";
 
         for (int i = 0; i < ehdr.e_phnum; ++i) {
             Elf64_Phdr phdr {};
@@ -52,38 +100,62 @@ namespace muplar::runtime::elf
                 sizeof(Elf64_Phdr)
             );
 
-            phdrs.push_back(phdr);
-        }
-
-        std::cout << "\nProgram Headers:\n";
-
-        for (const auto& phdr : phdrs) {
             std::cout
                 << "  "
                 << phdr_type_name(phdr.p_type)
                 << "\n";
 
             std::cout
-                << "    vaddr: 0x"
+                << "    offset: 0x"
+                << std::hex
+                << phdr.p_offset
+                << "\n";
+
+            std::cout
+                << "    vaddr : 0x"
                 << std::hex
                 << phdr.p_vaddr
                 << "\n";
 
             std::cout
-                << "    memsz: 0x"
+                << "    filesz: 0x"
+                << std::hex
+                << phdr.p_filesz
+                << "\n";
+
+            std::cout
+                << "    memsz : 0x"
                 << std::hex
                 << phdr.p_memsz
                 << "\n";
 
             std::cout
-                << "    flags: ";
+                << "    align : 0x"
+                << std::hex
+                << phdr.p_align
+                << "\n";
 
-            if (phdr.p_flags & PF_R) std::cout << "R";
-            if (phdr.p_flags & PF_W) std::cout << "W";
-            if (phdr.p_flags & PF_X) std::cout << "X";
+            std::cout << "    flags : ";
+
+            print_flags(phdr.p_flags);
 
             std::cout << "\n\n";
+
+            if (phdr.p_type == PT_LOAD) {
+                MemorySegment segment {};
+
+                segment.offset = phdr.p_offset;
+                segment.vaddr = phdr.p_vaddr;
+                segment.filesz = phdr.p_filesz;
+                segment.memsz = phdr.p_memsz;
+                segment.align = phdr.p_align;
+                segment.flags = phdr.p_flags;
+
+                binary.segments.push_back(segment);
+            }
         }
-        return true;
+
+        return binary;
+
     }
 }
