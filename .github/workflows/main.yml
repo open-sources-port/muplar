@@ -1,0 +1,261 @@
+# Build elfuse and run the lint + analysis suites.
+#
+# Four jobs run in parallel:
+#   lint        : format/newline/security/cppcheck/dispatch on Linux
+#   build-macos : compile + entitlement check on macOS Apple Silicon
+#   tidy-macos  : clang-tidy via `make lint`
+#   scan-macos  : LLVM scan-build via `make analyze`
+#
+# Runtime tests (test-hello, make check, test-multi-vcpu) require
+# Hypervisor.framework, which GitHub-hosted macOS runners do not expose
+# (the runner OS itself runs under a virtualization layer that withholds
+# HVF and returns HV_UNSUPPORTED from hv_vm_create). Those tests must run
+# on a self-hosted Apple Silicon runner; the hosted job stops at build.
+#
+# Within the lint job, all sub-checks run even if an earlier one fails so
+# the report shows every problem at once instead of stopping at the first.
+name: CI
+
+on:
+  push:
+    branches: [main]
+    paths-ignore:
+      - '**.md'
+      - 'docs/**'
+      - 'LICENSE'
+  pull_request:
+    branches: [main]
+    paths-ignore:
+      - '**.md'
+      - 'docs/**'
+      - 'LICENSE'
+  workflow_dispatch:
+
+# Cancel in-progress runs for the same PR; keep main runs going.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+jobs:
+  # Lint: formatting + static analysis on a fast Linux runner.
+  lint:
+    name: Lint (Linux)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    env:
+      # Single source of truth for the apt package list. Used by both the
+      # cache key (so unrelated workflow edits don't bust the cache) and
+      # the install step.
+      LINT_PKGS: clang-format-22 cppcheck shellcheck
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Cache apt packages
+        uses: actions/cache@v5
+        with:
+          path: ~/apt-cache
+          key: apt-${{ runner.os }}-${{ env.LINT_PKGS }}
+
+      - name: Add LLVM apt repo (clang-format-22)
+        # Place the key in /etc/apt/keyrings and bind it via signed-by so
+        # it grants trust only to the LLVM repository, not system-wide.
+        run: |
+          set -euo pipefail
+          sudo install -d -m 0755 /etc/apt/keyrings
+          wget -qO- https://apt.llvm.org/llvm-snapshot.gpg.key \
+            | sudo tee /etc/apt/keyrings/llvm.asc > /dev/null
+          echo "deb [signed-by=/etc/apt/keyrings/llvm.asc] http://apt.llvm.org/noble/ llvm-toolchain-noble-22 main" \
+            | sudo tee /etc/apt/sources.list.d/llvm.list
+
+      - name: Install tools
+        run: |
+          set -euo pipefail
+          mkdir -p ~/apt-cache
+          sudo apt-get update
+          # shellcheck disable=SC2086 -- LINT_PKGS is a space-separated list.
+          sudo apt-get install -y -o Dir::Cache::Archives="$HOME/apt-cache" \
+            $LINT_PKGS
+
+      - name: Trailing newline
+        if: ${{ !cancelled() }}
+        run: .ci/check-newline.sh
+
+      - name: clang-format
+        if: ${{ !cancelled() }}
+        run: .ci/check-format.sh
+
+      - name: Banned APIs / secrets / unsafe pp directives
+        if: ${{ !cancelled() }}
+        run: .ci/check-security.sh
+
+      - name: shellcheck
+        # Scoped to .ci/ -- tests/ has pre-existing warnings that the
+        # repository's own check-format target already surfaces.
+        if: ${{ !cancelled() }}
+        run: |
+          set -euo pipefail
+          mapfile -d '' files < <(git ls-files -z -- '.ci/*.sh')
+          shellcheck --severity=warning "${files[@]}"
+
+      - name: cppcheck
+        if: ${{ !cancelled() }}
+        run: .ci/check-cppcheck.sh
+
+      - name: Syscall dispatch table consistency
+        # The generator validates dispatch.tbl <-> syscall.c on every run;
+        # writing to a throwaway path is enough to exercise validate_wrappers().
+        if: ${{ !cancelled() }}
+        run: python3 scripts/gen-syscall-dispatch.py --output "$RUNNER_TEMP/dispatch.h"
+
+  # Build verification on macOS Apple Silicon (no HVF runtime tests).
+  # Hosted runners don't expose Hypervisor.framework, so this job stops at
+  # `make elfuse` + entitlement check.
+  build-macos:
+    name: Build (macOS Apple Silicon)
+    runs-on: macos-15
+    timeout-minutes: 15
+    env:
+      GNU_OBJCOPY: /opt/homebrew/opt/binutils/bin/objcopy
+      HOMEBREW_NO_INSTALL_CLEANUP: 1
+      HOMEBREW_NO_AUTO_UPDATE: 1
+      BREW_PKGS: binutils
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Cache Homebrew downloads
+        # No restore-keys: a partial match would mask upstream regressions.
+        uses: actions/cache@v5
+        with:
+          path: ~/Library/Caches/Homebrew/downloads
+          key: brew-${{ runner.os }}-${{ runner.arch }}-${{ env.BREW_PKGS }}
+
+      - name: Confirm host is arm64
+        run: |
+          set -euo pipefail
+          uname -mrs
+          test "$(uname -m)" = "arm64"
+
+      - name: Install GNU objcopy
+        # shellcheck disable=SC2086 -- BREW_PKGS is a space-separated list.
+        run: |
+          set -euo pipefail
+          brew install --quiet $BREW_PKGS
+          "$GNU_OBJCOPY" --version | head -1
+
+      - name: Build elfuse
+        run: |
+          set -euo pipefail
+          clang --version | head -1
+          make elfuse
+
+      - name: Verify HVF entitlement is embedded
+        run: |
+          set -euo pipefail
+          codesign -d --entitlements - build/elfuse 2>&1 \
+            | grep -q 'com\.apple\.security\.hypervisor'
+
+      - name: Upload elfuse binary
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: elfuse-${{ runner.os }}-${{ runner.arch }}
+          path: build/elfuse
+          retention-days: 7
+          if-no-files-found: warn
+
+  # clang-tidy via `make lint`. Runs in parallel with build/scan jobs.
+  # Advisory: .clang-tidy sets WarningsAsErrors='', so findings are logged
+  # for review but do not gate the job.
+  tidy-macos:
+    name: clang-tidy (macOS Apple Silicon)
+    runs-on: macos-15
+    timeout-minutes: 20
+    env:
+      GNU_OBJCOPY: /opt/homebrew/opt/binutils/bin/objcopy
+      HOMEBREW_NO_INSTALL_CLEANUP: 1
+      HOMEBREW_NO_AUTO_UPDATE: 1
+      # binutils is needed because make lint depends on the shim_blob.h
+      # generated by the assembly + objcopy pipeline.
+      BREW_PKGS: binutils llvm
+      CLANG_TIDY: /opt/homebrew/opt/llvm/bin/clang-tidy
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Cache Homebrew downloads
+        uses: actions/cache@v5
+        with:
+          path: ~/Library/Caches/Homebrew/downloads
+          key: brew-${{ runner.os }}-${{ runner.arch }}-${{ env.BREW_PKGS }}
+
+      - name: Install Homebrew packages
+        # shellcheck disable=SC2086 -- BREW_PKGS is a space-separated list.
+        run: |
+          set -euo pipefail
+          brew install --quiet $BREW_PKGS
+          "$CLANG_TIDY" --version | head -1
+
+      - name: Generate build/dispatch.h, shim_blob.h, version.h
+        # `make lint` depends on these generated headers; building the
+        # full elfuse binary is unnecessary, so just satisfy the deps.
+        run: make build/shim_blob.h build/version.h build/dispatch.h
+
+      - name: clang-tidy (make lint)
+        run: make lint
+
+  # LLVM scan-build via `make analyze`. Runs in parallel with build/tidy.
+  # Advisory: scan-build's Make target does not pass --status-bugs, so
+  # findings appear in logs and in the uploaded HTML report but do not
+  # gate the job.
+  scan-macos:
+    name: scan-build (macOS Apple Silicon)
+    runs-on: macos-15
+    timeout-minutes: 25
+    env:
+      GNU_OBJCOPY: /opt/homebrew/opt/binutils/bin/objcopy
+      HOMEBREW_NO_INSTALL_CLEANUP: 1
+      HOMEBREW_NO_AUTO_UPDATE: 1
+      BREW_PKGS: binutils llvm
+      LLVM_BIN: /opt/homebrew/opt/llvm/bin
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Cache Homebrew downloads
+        uses: actions/cache@v5
+        with:
+          path: ~/Library/Caches/Homebrew/downloads
+          key: brew-${{ runner.os }}-${{ runner.arch }}-${{ env.BREW_PKGS }}
+
+      - name: Install Homebrew packages
+        # shellcheck disable=SC2086 -- BREW_PKGS is a space-separated list.
+        # scan-build has no --version; piping --help into `head -1` makes
+        # perl take SIGPIPE on the closed stdout and exit non-zero, which
+        # under pipefail fails the step. Just confirm the binary exists.
+        run: |
+          set -euo pipefail
+          brew install --quiet $BREW_PKGS
+          test -x "$LLVM_BIN/scan-build"
+          "$LLVM_BIN/clang" --version | head -1
+
+      - name: scan-build (make analyze)
+        run: |
+          set -euo pipefail
+          export PATH="$LLVM_BIN:$PATH"
+          mkdir -p build/scan-build
+          scan-build -o build/scan-build --use-cc="$(command -v clang)" \
+            make -B elfuse
+
+      - name: Upload scan-build report
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: scan-build-${{ runner.os }}-${{ runner.arch }}
+          path: build/scan-build
+          retention-days: 7
+          if-no-files-found: ignore
