@@ -4,7 +4,9 @@
     "C_Cpp.default.configurationProvider": "ms-vscode.cmake-tools",
 
     "files.associations": {
-        "*.h": "c",
-        "*.c": "c"
+        "*.h": "cpp",
+        "*.c": "c",
+        "*.cpp": "cpp",
+        "*.hpp": "cpp"
     }
 }

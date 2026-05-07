@@ -14,7 +14,8 @@
                 "${workspaceFolder}/android/bionic/include/basic",
                 "${workspaceFolder}/android/bionic/include/sys",
                 "${workspaceFolder}/android/bionic/include/sys_compat",
-                "${workspaceFolder}/runtime/elf"
+                "${workspaceFolder}/runtime/elf",
+                "${workspaceFolder}/runtime/memory"
             ],
 
             "defines": [

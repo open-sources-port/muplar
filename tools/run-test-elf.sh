@@ -14,6 +14,10 @@ if [ ! -f "$ELF" ]; then
     exit 1
 fi
 
+echo "Building the source code..."
+echo
+cmake --build build
+
 echo "Running Muplar ELF loader..."
 echo
 
