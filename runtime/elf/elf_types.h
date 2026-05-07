@@ -2,6 +2,7 @@
 
 #include <cstdint>
 #include <vector>
+#include "virtual_memory.h"
 
 namespace muplar::runtime::elf {
 
@@ -19,6 +20,7 @@ namespace muplar::runtime::elf {
 
         uint64_t entrypoint = 0;
 
+        memory::VirtualMemory vm;
         std::vector<MemorySegment> segments;
 
     };
