@@ -1,0 +1,6 @@
+build/
+archive/
+externals/
+lib/modules/
+*.o
+*.bin
