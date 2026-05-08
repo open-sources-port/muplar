@@ -1,51 +1,61 @@
 #include "elf_loader.h"
-#include "elf_validator.h"
-#include "elf_program_headers.h"
-#include "elf_sections.h"
 
-#include <elf.h>
+#include <stdexcept>
 #include <fstream>
-#include <iostream>
+#include "../memory/virtual_memory.h"
 
-namespace muplar::runtime::elf
-{
+// elfuse headers
+extern "C" {
+    #include "core/elf.h"
+}
 
-    ElfBinary parse(const char* path)
-    {
-        ElfBinary binary {};
-        std::ifstream file(path, std::ios::binary);
+namespace muplar::runtime::elf {
 
-        if (!file) {
-            std::cerr << "Failed to open ELF file\n";
-            return binary;
+    ElfImage ElfLoader::load(const std::string& path) {
+        elf_info_t info {};
+
+        int rc = elf_load(path.c_str(), &info);
+
+        if (rc != 0) {
+            throw std::runtime_error("Failed to load ELF");
         }
 
-        Elf64_Ehdr ehdr {};
+        ElfImage image {};
 
-        if (!validate_elf(file, ehdr)) {
-            return binary;
+        image.entry    = info.entry;
+        image.type     = info.e_type;
+        image.machine  = info.e_machine;
+
+        image.load_min = info.load_min;
+        image.load_max = info.load_max;
+
+        for (int i = 0; i < info.num_segments; ++i) {
+            const auto& s = info.segments[i];
+
+            Segment seg {};
+
+            seg.vaddr  = s.gpa;
+            seg.memsz  = s.memsz;
+            seg.filesz = s.filesz;
+            seg.offset = s.offset;
+            seg.flags  = s.flags;
+
+            image.segments.push_back(seg);
         }
 
-        binary.valid = true;
-        binary.entrypoint = ehdr.e_entry;
+        std::ifstream file( path, std::ios::binary );
 
-        parse_program_headers(file, ehdr, binary);
-        binary.vm.dump();
+        file.seekg(0, std::ios::end);
 
-        const uint8_t* entry = binary.vm.translate(binary.entrypoint);
+        size_t size = static_cast<size_t>(file.tellg());
 
-        if (entry) {
-            std::cout << "Entrypoint host pointer: " << static_cast<const void*>(entry) << "\n";
-        } else {
-            std::cout << "Entrypoint translation failed\n";
-        }
+        file.seekg(0);
 
-        auto section_headers = parse_sections(file, ehdr);
-        print_sections( file, ehdr, section_headers );
-        parse_symbols( file, section_headers );
+        image.raw.resize(size);
 
-
-        return binary;
-
+        file.read( reinterpret_cast<char*>(image.raw.data()), size );
+        
+        return image;
     }
+
 }

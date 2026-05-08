@@ -1,9 +1,13 @@
 #pragma once
 
-#include "elf_types.h"
+#include <string>
+#include "elf_image.h"
 
 namespace muplar::runtime::elf {
 
-    ElfBinary parse(const char* path);
+    class ElfLoader {
+        public:
+            ElfImage load(const std::string& path);
+    };
 
 }

@@ -32,6 +32,14 @@ Mular aims to become a unified runtime layer where:
 
 ---
 
+## 🛠 Dependencies
+
+android-ndk
+
+aarch64-linux-gnu-binutils
+
+---
+
 ## 🏗 Architecture Overview
 ![Muplar Architecture](https://drive.google.com/uc?export=view&id=1NaxCQf9Gedzkexm8vMlpUI8O7F5fFFkG)
 

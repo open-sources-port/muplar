@@ -18,6 +18,7 @@ set(CMAKE_VERBOSE_MAKEFILE ON)
 # =========================================
 include_directories(
     ${CMAKE_SOURCE_DIR}/android/bionic/include
+    ${CMAKE_SOURCE_DIR}/third_party/elfuse/src
 )
 
 # =========================================
