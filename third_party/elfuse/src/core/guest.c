@@ -118,6 +118,36 @@ static void guest_region_clip_overlay(guest_region_t *r)
     r->overlay_end = overlay_end;
 }
 
+/* Compute infra reserve placement from guest_size and store derived fields in
+ * @g. Called from guest_init and guest_init_from_shm.
+ *
+ * Layout: a 4MiB region anchored at [interp_base - INFRA_RESERVE, interp_base)
+ * sits in the dead zone between mmap_limit and interp_base. PT pool, shim, and
+ * shim data fall at fixed offsets within the reserve (see guest.h).
+ *
+ * Returns 0 on success, -1 if the layout cannot be derived (interp_base too
+ * small to fit the reserve). Today guest_init enforces a 64GiB minimum so the
+ * underflow path is unreachable, but the explicit check guards future
+ * configurations and any IPC restore that bypasses size selection.
+ */
+static int compute_infra_layout(guest_t *g)
+{
+    if (g->interp_base < INFRA_RESERVE) {
+        log_error(
+            "guest: interp_base 0x%llx smaller than INFRA_RESERVE (0x%llx); "
+            "guest_size too small",
+            (unsigned long long) g->interp_base,
+            (unsigned long long) INFRA_RESERVE);
+        return -1;
+    }
+    uint64_t infra_base = g->interp_base - INFRA_RESERVE;
+    g->pt_pool_base = infra_base + INFRA_PT_POOL_OFF;
+    g->pt_pool_end = infra_base + INFRA_PT_POOL_END_OFF;
+    g->shim_base = infra_base + INFRA_SHIM_OFF;
+    g->shim_data_base = infra_base + INFRA_SHIM_DATA_OFF;
+    return 0;
+}
+
 /* Allocate a zeroed 4KiB page from the page table pool.
  * Returns GPA of the page, or 0 on pool exhaustion.
  * Acquires pt_lock internally. Caller typically holds mmap_lock.
@@ -125,12 +155,12 @@ static void guest_region_clip_overlay(guest_region_t *r)
 static uint64_t pt_alloc_page(guest_t *g)
 {
     pthread_mutex_lock(&pt_lock);
-    if (g->pt_pool_next + PAGE_SIZE > PT_POOL_END) {
+    if (g->pt_pool_next + PAGE_SIZE > g->pt_pool_end) {
         log_error(
             "guest: page table pool exhausted "
             "(used %llu / %llu bytes)",
-            (unsigned long long) (g->pt_pool_next - PT_POOL_BASE),
-            (unsigned long long) (PT_POOL_END - PT_POOL_BASE));
+            (unsigned long long) (g->pt_pool_next - g->pt_pool_base),
+            (unsigned long long) (g->pt_pool_end - g->pt_pool_base));
         pthread_mutex_unlock(&pt_lock);
         return 0;
     }
@@ -138,8 +168,8 @@ static uint64_t pt_alloc_page(guest_t *g)
     g->pt_pool_next += PAGE_SIZE;
 
     /* Warn at 80% pool usage so users can anticipate exhaustion */
-    uint64_t used = gpa + PAGE_SIZE - PT_POOL_BASE;
-    uint64_t total = PT_POOL_END - PT_POOL_BASE;
+    uint64_t used = gpa + PAGE_SIZE - g->pt_pool_base;
+    uint64_t total = g->pt_pool_end - g->pt_pool_base;
     if (!pt_pool_warned && used > (total * 4 / 5)) {
         log_debug(
             "guest: page table pool at %llu%% "
@@ -149,8 +179,8 @@ static uint64_t pt_alloc_page(guest_t *g)
         pt_pool_warned = true;
     }
 
-    /* Zero the page while still holding the lock so no other thread can
-     * observe a partially-zeroed page table page.
+    /* Zero the page while still holding the lock so no other thread can observe
+     * a partially-zeroed page table page.
      */
     memset((uint8_t *) g->host_base + gpa, 0, PAGE_SIZE);
     pthread_mutex_unlock(&pt_lock);
@@ -170,15 +200,15 @@ int guest_init(guest_t *g, uint64_t size, uint32_t ipa_bits)
     memset(g, 0, sizeof(*g));
     g->shm_fd = -1;
     g->ipa_base = GUEST_IPA_BASE;
-    g->pt_pool_next = PT_POOL_BASE;
+    g->elf_load_min = ELF_DEFAULT_BASE;
     g->brk_base = BRK_BASE_DEFAULT;
     g->brk_current = BRK_BASE_DEFAULT;
     g->mmap_next = MMAP_BASE;
     g->mmap_rx_next = MMAP_RX_BASE;
 
-    /* Query the maximum IPA size supported by the hardware/kernel. macOS 15+
-     * on Apple Silicon reports 40 bits (1TiB). Older versions or fallback
-     * yields 36 bits (64GiB).
+    /* Query the maximum IPA size supported by the hardware/kernel. macOS 15+ on
+     * Apple Silicon reports 40 bits (1TiB). Older versions or fallback yields
+     * 36 bits (64GiB).
      */
     uint32_t max_ipa = 0;
     hv_vm_config_get_max_ipa_size(&max_ipa);
@@ -216,6 +246,9 @@ int guest_init(guest_t *g, uint64_t size, uint32_t ipa_bits)
      */
     g->interp_base = g->guest_size - 0x100000000ULL;
     g->mmap_limit = g->guest_size - 0x200000000ULL;
+    if (compute_infra_layout(g) < 0)
+        return -1;
+    g->pt_pool_next = g->pt_pool_base;
 
     /* Reserve primary address space via mmap(MAP_ANON). macOS demand-pages
      * this: physical pages are allocated only on first touch, so reserving up
@@ -238,12 +271,12 @@ int guest_init(guest_t *g, uint64_t size, uint32_t ipa_bits)
      * The child maps it MAP_PRIVATE, giving it an instant copy-on-write
      * clone of all guest memory.
      *
-     * macOS rejects MAP_PRIVATE on shm_open objects (EINVAL), but regular
-     * file fds support MAP_SHARED, MAP_PRIVATE, and MAP_PRIVATE|MAP_FIXED
-     * correctly. The file is unlinked immediately; the fd keeps it alive.
-     * macOS demand-pages file mappings, so untouched pages cost nothing.
-     * If any step fails, guest memory silently keeps the MAP_ANON mapping and
-     * falls back to the IPC region-copy path on fork.
+     * macOS rejects MAP_PRIVATE on shm_open objects (EINVAL), but regular file
+     * fds support MAP_SHARED, MAP_PRIVATE, and MAP_PRIVATE|MAP_FIXED correctly.
+     * The file is unlinked immediately; the fd keeps it alive. macOS
+     * demand-pages file mappings, so untouched pages cost nothing. If any step
+     * fails, guest memory silently keeps the MAP_ANON mapping and falls back to
+     * the IPC region-copy path on fork.
      */
     {
         char tmppath[] = "/tmp/elfuse-XXXXXX";
@@ -322,6 +355,11 @@ int guest_init(guest_t *g, uint64_t size, uint32_t ipa_bits)
         g->guest_size = size;
         g->interp_base = size - 0x100000000ULL;
         g->mmap_limit = size - 0x200000000ULL;
+        if (compute_infra_layout(g) < 0) {
+            hv_vm_destroy();
+            return -1;
+        }
+        g->pt_pool_next = g->pt_pool_base;
         g->host_base = mmap(NULL, size, PROT_READ | PROT_WRITE,
                             MAP_ANON | MAP_PRIVATE, -1, 0);
         if (g->host_base == MAP_FAILED) {
@@ -362,7 +400,7 @@ int guest_init_from_shm(guest_t *g,
     memset(g, 0, sizeof(*g));
     g->shm_fd = -1; /* Child does not own the shm */
     g->ipa_base = GUEST_IPA_BASE;
-    g->pt_pool_next = PT_POOL_BASE;
+    g->elf_load_min = ELF_DEFAULT_BASE;
     g->brk_base = BRK_BASE_DEFAULT;
     g->brk_current = BRK_BASE_DEFAULT;
     g->mmap_next = MMAP_BASE;
@@ -373,6 +411,9 @@ int guest_init_from_shm(guest_t *g,
     /* Compute layout limits (same formula as guest_init) */
     g->interp_base = size - 0x100000000ULL;
     g->mmap_limit = size - 0x200000000ULL;
+    if (compute_infra_layout(g) < 0)
+        return -1;
+    g->pt_pool_next = g->pt_pool_base;
 
     /* Map the shm fd MAP_PRIVATE: copy-on-write semantics. Reads see
      * the parent's frozen snapshot; writes are private to this process.
@@ -836,21 +877,21 @@ void guest_reset(guest_t *g)
     }
 
     /* Zero page table pool (not tracked in region array) */
-    if (g->pt_pool_next > PT_POOL_BASE)
-        memset((uint8_t *) g->host_base + PT_POOL_BASE, 0,
-               g->pt_pool_next - PT_POOL_BASE);
+    if (g->pt_pool_next > g->pt_pool_base)
+        memset((uint8_t *) g->host_base + g->pt_pool_base, 0,
+               g->pt_pool_next - g->pt_pool_base);
 
     /* Zero shim code + data (not tracked in region array by guest_reset
      * callers; shim regions are added AFTER reset by the exec path)
      */
-    memset((uint8_t *) g->host_base + SHIM_BASE, 0,
-           SHIM_DATA_BASE + BLOCK_2MIB - SHIM_BASE);
+    memset((uint8_t *) g->host_base + g->shim_base, 0,
+           g->shim_data_base + BLOCK_2MIB - g->shim_base);
 
     /* Reset allocation state */
     guest_pt_gen_bump(g);
     guest_tlb_flush();
     __atomic_store_n(&pt_pool_warned, false, __ATOMIC_RELAXED);
-    g->pt_pool_next = PT_POOL_BASE;
+    g->pt_pool_next = g->pt_pool_base;
     g->brk_base = BRK_BASE_DEFAULT;
     g->brk_current = BRK_BASE_DEFAULT;
     g->mmap_next = MMAP_BASE;
@@ -861,6 +902,7 @@ void guest_reset(guest_t *g)
     g->mmap_rx_gap_hint = 0;
     g->ttbr0 = 0;
     g->need_tlbi = false;
+    g->elf_load_min = ELF_DEFAULT_BASE;
 
     /* Clear semantic region tracking (will be re-populated after exec) */
     guest_region_clear(g);
@@ -875,34 +917,36 @@ int guest_get_used_regions(const guest_t *g,
 {
     int n = 0;
 
-    /* Page table pool */
-    if (n < max && g->pt_pool_next > PT_POOL_BASE) {
-        out[n].offset = PT_POOL_BASE;
-        out[n].size = g->pt_pool_next - PT_POOL_BASE;
+    /* Page table pool (high IPA, just below interp_base) */
+    if (n < max && g->pt_pool_next > g->pt_pool_base) {
+        out[n].offset = g->pt_pool_base;
+        out[n].size = g->pt_pool_next - g->pt_pool_base;
         n++;
     }
 
-    /* Shim code */
+    /* Shim code (high IPA) */
     if (n < max && shim_size > 0) {
-        out[n].offset = SHIM_BASE;
+        out[n].offset = g->shim_base;
         out[n].size = shim_size;
         n++;
     }
 
-    /* Shim data/stack (full 2MiB block) */
+    /* Shim data/stack (full 2MiB block, high IPA) */
     if (n < max) {
-        out[n].offset = SHIM_DATA_BASE;
+        out[n].offset = g->shim_data_base;
         out[n].size = BLOCK_2MIB;
         n++;
     }
 
-    /* ELF + brk region: from ELF_DEFAULT_BASE to brk_current.
-     * guest memory does not track the exact ELF load range, but static musl
-     * binaries always load at or above ELF_DEFAULT_BASE (0x400000).
+    /* ELF + brk region: from elf_load_min (set by ELF loader) to brk_current.
+     * The lower bound is the actual ELF load address, not ELF_DEFAULT_BASE:
+     * ET_EXECs linked below 0x400000 (e.g. at 0x200000) have segments below the
+     * legacy default and would otherwise be silently dropped from the legacy
+     * fork-IPC copy.
      */
-    if (n < max && g->brk_current > ELF_DEFAULT_BASE) {
-        out[n].offset = ELF_DEFAULT_BASE;
-        out[n].size = g->brk_current - ELF_DEFAULT_BASE;
+    if (n < max && g->brk_current > g->elf_load_min) {
+        out[n].offset = g->elf_load_min;
+        out[n].size = g->brk_current - g->elf_load_min;
         n++;
     }
 
@@ -1167,9 +1211,9 @@ void guest_region_remove(guest_t *g, uint64_t start, uint64_t end)
             right->offset += (end - r->start);
             right->start = end;
             if (r->backing_fd >= 0) {
-                /* A dup failure leaves backing_fd=-1, silently converting
-                 * this half to anonymous semantics (msync and MADV_DONTNEED
-                 * skip regions with backing_fd<0). Propagating the error would
+                /* A dup failure leaves backing_fd=-1, silently converting this
+                 * half to anonymous semantics (msync and MADV_DONTNEED skip
+                 * regions with backing_fd<0). Propagating the error would
                  * require making all region split callers (mprotect, munmap)
                  * fallible.
                  */
@@ -1513,8 +1557,8 @@ uint64_t guest_build_page_tables(guest_t *g, const mem_region_t *regions, int n)
     uint64_t *l0 = pt_at(g, l0_gpa);
 
     /* For each region, determine which 2MiB blocks need mapping.
-     * Identity-mapped: VA == GPA, so L0/L1/L2 indices and the block
-     * descriptor output address are both derived from gpa_start + ipa_base.
+     * Identity-mapped: VA == GPA, so L0/L1/L2 indices and the block descriptor
+     * output address are both derived from gpa_start + ipa_base.
      */
     for (int r = 0; r < n; r++) {
         uint64_t gpa_start = ALIGN_2MIB_DOWN(regions[r].gpa_start);

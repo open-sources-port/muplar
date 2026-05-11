@@ -4,11 +4,12 @@
  * Copyright 2025 Moritz Angermann, zw3rk pte. ltd.
  * SPDX-License-Identifier: Apache-2.0
  *
- * Loaded at SHIM_BASE (0x100000). Runs at EL1.
- * All system registers (VBAR, MAIR, TCR, TTBR0, SCTLR, etc.) are
- * configured by the host before vCPU start. The shim entry point
- * transitions to EL0 via ERET. Exception vectors handle SVC #0
- * (Linux syscall) forwarding to the host via HVC #5.
+ * Loaded at g->shim_base (a 4MiB infra reserve placed just below g->interp_base;
+ * computed at guest_init time). Runs at EL1.
+ * All system registers (VBAR, MAIR, TCR, TTBR0, SCTLR, etc.) are configured by
+ * the host before vCPU start. The shim entry point transitions to EL0 via ERET.
+ * Exception vectors handle SVC #0 (Linux syscall) forwarding to the host via
+ * HVC #5.
  *
  * HVC protocol:
  *   #0  Normal exit       (x0 = exit code)
@@ -141,10 +142,10 @@
 .globl _start
 _start:
     /* Host has configured all system registers EXCEPT SCTLR.M (MMU enable).
-     * Apple's Hypervisor.framework requires the MMU to be enabled DURING
-     * vCPU execution (via HVC #4), not before hv_vcpu_run(). Setting
-     * SCTLR.M=1 via hv_vcpu_set_sys_reg before start causes permission
-     * faults on the first instruction fetch.
+     * Apple's Hypervisor.framework requires the MMU to be enabled DURING vCPU
+     * execution (via HVC #4), not before hv_vcpu_run(). Setting SCTLR.M=1 via
+     * hv_vcpu_set_sys_reg before start causes permission faults on the first
+     * instruction fetch.
      *
      * Host passes the final SCTLR value (with M=1) in X0 before start.
      */
@@ -173,8 +174,8 @@ _start:
  *
  * bad_exception vectors: mov x5, #offset + b bad_exception
  *   X5 carries the vector offset for host-side debugging.
- *   This is safe because bad_exception halts, so no register
- *   preservation needed.
+ *   This is safe because bad_exception halts, so no register preservation
+     needed.
  *
  * svc_handler vectors: b svc_handler (NO mov x5!)
  *   These MUST NOT clobber any GPR before svc_handler saves them. The Linux
@@ -327,14 +328,14 @@ handle_sysreg_trap:
     b 3f
 
 4:  /* System instruction: trapped cache/data operations.
-     * DC ZVA (Data Cache Zero by VA) is trapped when HCR_EL2.TDZ=1
-     * despite SCTLR.DZE=1. DC ZVA zeroes a cache-line-sized block (64 bytes on
-     * Apple Silicon). JIT translators and libc use it as fast memset(0).
+     * DC ZVA (Data Cache Zero by VA) is trapped when HCR_EL2.TDZ=1 despite
+     * SCTLR.DZE=1. DC ZVA zeroes a cache-line-sized block (64 bytes on Apple
+     * Silicon). JIT translators and libc use it as fast memset(0).
      * Failure to emulate leaves stale data.
      *
-     * DC CVAU, IC IVAU, and other cache maintenance instructions trap
-     * here despite SCTLR.UCI=1 (HVF sets HCR_EL2.TPU=1). The shim executes
-     * IC IALLU as safety net for I-cache coherency after any of these.
+     * DC CVAU, IC IVAU, and other cache maintenance instructions trap here
+     * despite SCTLR.UCI=1 (HVF sets HCR_EL2.TPU=1). The shim executes IC IALLU
+     * as safety net for I-cache coherency after any of these.
      *
      * ISS encoding for system instructions:
      *   Op0[21:20] Op2[19:17] Op1[16:14] CRn[13:10] Rt[9:5] CRm[4:1] Dir[0]
@@ -372,9 +373,9 @@ handle_sysreg_trap:
     stp xzr, xzr, [x11, #48]
 6:  /* Forward to host for counting, then I-cache maintenance */
 
-5:  /* Pass the source register value to the host.  Cache maintenance
-     * instructions ignore it, but MSR writes (notably TPIDR_EL0 for
-     * userspace TLS setup) need the original Xt value.
+5:  /* Pass the source register value to host. Cache maintenance instructions
+     * ignore it, but MSR writes (notably TPIDR_EL0 for userspace TLS setup)
+     * need the original Xt value.
      */
     ubfx x10, x9, #5, #5          /* Rt = ISS[9:5] */
     cmp x10, #31
@@ -400,7 +401,6 @@ handle_sysreg_trap:
  * 1. Permission fault (IFSC[5:2]=0x03): W^X demand toggle for JIT.
  *    Code pages are initially RW; execution triggers permission fault.
  *    Ask host to flip to RX via HVC #9, flush TLB, retry.
- *
  * 2. Translation fault (IFSC[5:2]=0x01) or other non-permission fault: Address
  *    not mapped in page tables. A real Linux kernel delivers SIGSEGV
  *    (si_code=SEGV_MAPERR) to the process. JIT translators may use SIGSEGV for
@@ -430,11 +430,9 @@ handle_inst_abort:
  * Three cases:
  * 1. Write permission fault (WnR=1, DFSC[5:2]=0x03): W^X toggle.
  *    Code page is RX; JIT write triggers permission fault. Flip to RW.
- *
  * 2. Read/write translation fault (DFSC[5:2]=0x01): Address not mapped.
  *    Deliver SIGSEGV (SEGV_MAPERR) via host. Programs may use SIGSEGV
  *    handlers for lazy allocation or guard pages.
- *
  * 3. Read permission fault (WnR=0, DFSC[5:2]=0x03): Permission denied.
  *    Deliver SIGSEGV (SEGV_ACCERR) via host.
  */

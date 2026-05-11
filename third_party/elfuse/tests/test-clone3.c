@@ -12,6 +12,7 @@
 #include <stdarg.h>
 #include <stdint.h>
 #include <string.h>
+#include <time.h>
 #include <unistd.h>
 #include <sys/mman.h>
 #include <sys/wait.h>
@@ -21,6 +22,8 @@
 #include "test-util.h"
 
 int passes = 0, fails = 0;
+extern char **environ;
+static const char *self_path = NULL;
 
 static void check(int cond, const char *fmt, ...)
 {
@@ -47,6 +50,7 @@ static void check(int cond, const char *fmt, ...)
 
 #define CLONE3_THREAD 0x00010000
 #define CLONE3_VM 0x00000100
+#define CLONE3_VFORK 0x00004000
 #define CLONE3_SIGHAND 0x00000800
 #define CLONE3_FILES 0x00000400
 #define CLONE3_FS 0x00000200
@@ -66,6 +70,8 @@ struct clone_args {
 static volatile int thread_done = 0;
 static volatile int thread_result = 0;
 static volatile int thread_tid = 0;
+static volatile int vfork_exec_guard = 0x13579bdf;
+static volatile int parked_thread_state = 0;
 
 /* Thread entry: sets thread_result and signals done via futex */
 static int thread_fn(void)
@@ -76,6 +82,28 @@ static int thread_fn(void)
                  FUTEX_WAKE | FUTEX_PRIVATE_FLAG, 1, 0, 0, 0);
     raw_exit(0);
     test_unreachable();
+}
+
+static int parked_thread_fn(void)
+{
+    __atomic_store_n(&parked_thread_state, 1, __ATOMIC_SEQ_CST);
+    raw_syscall6(__NR_futex, (long) &parked_thread_state,
+                 FUTEX_WAKE | FUTEX_PRIVATE_FLAG, 1, 0, 0, 0);
+
+    while (__atomic_load_n(&parked_thread_state, __ATOMIC_SEQ_CST) == 1) {
+        raw_syscall6(__NR_futex, (long) &parked_thread_state,
+                     FUTEX_WAIT | FUTEX_PRIVATE_FLAG, 1, 0, 0, 0);
+    }
+
+    raw_exit(0);
+    test_unreachable();
+}
+
+static uint64_t read_sp(void)
+{
+    uint64_t sp;
+    __asm__ volatile("mov %0, sp" : "=r"(sp));
+    return sp;
 }
 
 /* Test 1: clone3 basic fork */
@@ -339,8 +367,309 @@ static void test_stack_overflow(void)
           ret);
 }
 
-int main(void)
+/* Test 11: CLONE_VM|CLONE_VFORK must not reuse the in-process VM-clone path.
+ * The child execs this same binary with a marker argument and exits 23.
+ */
+static void test_vfork_exec(void)
 {
+    struct clone_args ca;
+    memset(&ca, 0, sizeof(ca));
+    ca.flags = CLONE3_VM | CLONE3_VFORK;
+    ca.exit_signal = 17; /* SIGCHLD */
+
+    vfork_exec_guard = 0x13579bdf;
+
+    long ret = raw_clone3(&ca, CLONE_ARGS_SIZE_VER0);
+    if (ret < 0) {
+        CHECK(0, "clone3 vfork failed with %ld", ret);
+        return;
+    }
+
+    if (ret == 0) {
+        char *child_argv[] = {(char *) self_path,
+                              (char *) "--clone3-vfork-child", NULL};
+        execve(self_path, child_argv, environ);
+        _exit(127);
+    }
+
+    int status = 0;
+    pid_t waited = waitpid((pid_t) ret, &status, 0);
+    CHECK(waited == (pid_t) ret, "vfork waitpid returned %d, expected %ld",
+          waited, ret);
+    CHECK(WIFEXITED(status) && WEXITSTATUS(status) == 23,
+          "vfork+exec child exit status: 0x%x (expected exit 23)", status);
+    CHECK(vfork_exec_guard == 0x13579bdf,
+          "vfork guard changed to 0x%x after child exec",
+          (unsigned int) vfork_exec_guard);
+}
+
+/* Test 12: CLONE_VM|CLONE_VFORK with an explicit child stack must resume the
+ * child on that stack before it executes guest code.
+ */
+static void test_vfork_child_stack(void)
+{
+    size_t stack_size = 65536;
+    void *stack = mmap(NULL, stack_size, PROT_READ | PROT_WRITE,
+                       MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    CHECK(stack != MAP_FAILED, "mmap for vfork child stack test failed");
+    if (stack == MAP_FAILED)
+        return;
+
+    struct clone_args ca;
+    memset(&ca, 0, sizeof(ca));
+    ca.flags = CLONE3_VM | CLONE3_VFORK;
+    ca.exit_signal = 17; /* SIGCHLD */
+    ca.stack = (uint64_t) stack;
+    ca.stack_size = stack_size;
+
+    long ret = raw_clone3(&ca, CLONE_ARGS_SIZE_VER0);
+    if (ret < 0) {
+        CHECK(0, "clone3 vfork with child stack failed with %ld", ret);
+        munmap(stack, stack_size);
+        return;
+    }
+
+    if (ret == 0) {
+        uint64_t sp = read_sp();
+        _exit((sp >= (uint64_t) stack && sp <= (uint64_t) stack + stack_size)
+                  ? 24
+                  : 125);
+    }
+
+    int status = 0;
+    pid_t waited = waitpid((pid_t) ret, &status, 0);
+    CHECK(waited == (pid_t) ret,
+          "vfork child-stack waitpid returned %d, expected %ld", waited, ret);
+    CHECK(WIFEXITED(status) && WEXITSTATUS(status) == 24,
+          "vfork child stack exit status: 0x%x (expected exit 24)", status);
+    munmap(stack, stack_size);
+}
+
+static void test_vfork_exec_unblocks_parent(void)
+{
+    struct clone_args ca;
+    memset(&ca, 0, sizeof(ca));
+    ca.flags = CLONE3_VM | CLONE3_VFORK;
+    ca.exit_signal = 17; /* SIGCHLD */
+
+    struct timespec start, end;
+    CHECK(clock_gettime(CLOCK_MONOTONIC, &start) == 0,
+          "clock_gettime(start) failed");
+
+    long ret = raw_clone3(&ca, CLONE_ARGS_SIZE_VER0);
+    if (ret < 0) {
+        CHECK(0, "clone3 vfork unblock test failed with %ld", ret);
+        return;
+    }
+
+    if (ret == 0) {
+        char *child_argv[] = {(char *) self_path,
+                              (char *) "--clone3-vfork-sleep-child", NULL};
+        execve(self_path, child_argv, environ);
+        _exit(127);
+    }
+
+    CHECK(clock_gettime(CLOCK_MONOTONIC, &end) == 0,
+          "clock_gettime(end) failed");
+    long elapsed_ms = (long) (end.tv_sec - start.tv_sec) * 1000L +
+                      (long) (end.tv_nsec - start.tv_nsec) / 1000000L;
+    CHECK(elapsed_ms < 500,
+          "vfork parent resumed after %ld ms (expected < 500 ms)", elapsed_ms);
+
+    int status = 0;
+    pid_t waited = waitpid((pid_t) ret, &status, 0);
+    CHECK(waited == (pid_t) ret,
+          "vfork unblock waitpid returned %d, expected %ld", waited, ret);
+    CHECK(WIFEXITED(status) && WEXITSTATUS(status) == 25,
+          "vfork unblock child exit status: 0x%x (expected exit 25)", status);
+}
+
+/* Test 13: munmap overlapping an active clone3 stack must be cleaned up after
+ * the thread exits so the same VA can be reused.
+ */
+static void test_deferred_stack_munmap(void)
+{
+    size_t stack_size = 65536;
+    void *stack = mmap(NULL, stack_size, PROT_READ | PROT_WRITE,
+                       MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    CHECK(stack != MAP_FAILED, "mmap for deferred stack test failed");
+    if (stack == MAP_FAILED)
+        return;
+
+    parked_thread_state = 0;
+    thread_tid = 0;
+
+    struct clone_args ca;
+    memset(&ca, 0, sizeof(ca));
+    ca.flags = CLONE3_THREAD | CLONE3_VM | CLONE3_SIGHAND | CLONE3_FILES |
+               CLONE3_FS | CLONE3_CHILD_CLEARTID | CLONE3_CHILD_SETTID;
+    ca.exit_signal = 0;
+    ca.stack = (uint64_t) stack;
+    ca.stack_size = stack_size;
+    ca.child_tid = (uint64_t) &thread_tid;
+
+    long ret = raw_clone3(&ca, CLONE_ARGS_SIZE_VER0);
+    if (ret == 0) {
+        parked_thread_fn();
+        __builtin_unreachable();
+    }
+
+    CHECK(ret > 0, "clone3 parked thread returned %ld", ret);
+    if (ret < 0) {
+        munmap(stack, stack_size);
+        return;
+    }
+
+    while (__atomic_load_n(&parked_thread_state, __ATOMIC_SEQ_CST) == 0) {
+        raw_syscall6(__NR_futex, (long) &parked_thread_state,
+                     FUTEX_WAIT | FUTEX_PRIVATE_FLAG, 0, 0, 0, 0);
+    }
+
+    CHECK(munmap(stack, stack_size) == 0,
+          "munmap of live child stack failed unexpectedly");
+
+    __atomic_store_n(&parked_thread_state, 2, __ATOMIC_SEQ_CST);
+    raw_syscall6(__NR_futex, (long) &parked_thread_state,
+                 FUTEX_WAKE | FUTEX_PRIVATE_FLAG, 1, 0, 0, 0);
+
+    while (__atomic_load_n(&thread_tid, __ATOMIC_SEQ_CST) != 0) {
+        int tid = __atomic_load_n(&thread_tid, __ATOMIC_SEQ_CST);
+        raw_syscall6(__NR_futex, (long) &thread_tid,
+                     FUTEX_WAIT | FUTEX_PRIVATE_FLAG, tid, 0, 0, 0);
+    }
+
+    void *reuse =
+        mmap(stack, stack_size, PROT_READ | PROT_WRITE,
+             MAP_PRIVATE | MAP_ANONYMOUS | MAP_FIXED_NOREPLACE, -1, 0);
+    CHECK(reuse == stack, "stack reuse mmap returned %p (expected %p)", reuse,
+          stack);
+    if (reuse != MAP_FAILED && reuse == stack)
+        munmap(reuse, stack_size);
+}
+
+/* Test 14: partial munmap overlap with a live clone3 stack must still unmap
+ * the non-overlapping portion immediately, then release the deferred slice once
+ * the thread exits.
+ */
+static void test_partial_deferred_stack_munmap(void)
+{
+    size_t stack_size = 65536;
+    size_t span_size = stack_size * 2;
+    void *span =
+        mmap(NULL, span_size, PROT_NONE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    CHECK(span != MAP_FAILED,
+          "mmap reserve for partial deferred stack test failed");
+    if (span == MAP_FAILED)
+        return;
+    CHECK(munmap(span, span_size) == 0,
+          "munmap reserve for partial deferred stack test failed");
+
+    void *other =
+        mmap(span, stack_size, PROT_READ | PROT_WRITE,
+             MAP_PRIVATE | MAP_ANONYMOUS | MAP_FIXED_NOREPLACE, -1, 0);
+    CHECK(other == span, "mmap non-stack half returned %p (expected %p)", other,
+          span);
+    if (other != span) {
+        if (other != MAP_FAILED)
+            munmap(other, stack_size);
+        return;
+    }
+
+    void *stack =
+        mmap((char *) span + stack_size, stack_size, PROT_READ | PROT_WRITE,
+             MAP_PRIVATE | MAP_ANONYMOUS | MAP_FIXED_NOREPLACE, -1, 0);
+    CHECK(stack == (char *) span + stack_size,
+          "mmap stack half returned %p (expected %p)", stack,
+          (char *) span + stack_size);
+    if (stack != (char *) span + stack_size) {
+        if (stack != MAP_FAILED)
+            munmap(stack, stack_size);
+        munmap(other, stack_size);
+        return;
+    }
+
+    parked_thread_state = 0;
+    thread_tid = 0;
+
+    struct clone_args ca;
+    memset(&ca, 0, sizeof(ca));
+    ca.flags = CLONE3_THREAD | CLONE3_VM | CLONE3_SIGHAND | CLONE3_FILES |
+               CLONE3_FS | CLONE3_CHILD_CLEARTID | CLONE3_CHILD_SETTID;
+    ca.exit_signal = 0;
+    ca.stack = (uint64_t) stack;
+    ca.stack_size = stack_size;
+    ca.child_tid = (uint64_t) &thread_tid;
+
+    long ret = raw_clone3(&ca, CLONE_ARGS_SIZE_VER0);
+    if (ret == 0) {
+        parked_thread_fn();
+        __builtin_unreachable();
+    }
+
+    CHECK(ret > 0, "clone3 parked thread for partial unmap returned %ld", ret);
+    if (ret < 0) {
+        munmap(other, stack_size);
+        munmap(stack, stack_size);
+        return;
+    }
+
+    while (__atomic_load_n(&parked_thread_state, __ATOMIC_SEQ_CST) == 0) {
+        raw_syscall6(__NR_futex, (long) &parked_thread_state,
+                     FUTEX_WAIT | FUTEX_PRIVATE_FLAG, 0, 0, 0, 0);
+    }
+
+    CHECK(munmap(span, span_size) == 0,
+          "partial munmap spanning live child stack failed unexpectedly");
+
+    void *reuse_other =
+        mmap(span, stack_size, PROT_READ | PROT_WRITE,
+             MAP_PRIVATE | MAP_ANONYMOUS | MAP_FIXED_NOREPLACE, -1, 0);
+    CHECK(reuse_other == span,
+          "non-overlapping half reuse mmap returned %p (expected %p)",
+          reuse_other, span);
+    if (reuse_other == span)
+        munmap(reuse_other, stack_size);
+
+    void *reuse_stack =
+        mmap((char *) span + stack_size, stack_size, PROT_READ | PROT_WRITE,
+             MAP_PRIVATE | MAP_ANONYMOUS | MAP_FIXED_NOREPLACE, -1, 0);
+    CHECK(reuse_stack == MAP_FAILED,
+          "live overlapping stack slice unexpectedly became reusable");
+    if (reuse_stack != MAP_FAILED)
+        munmap(reuse_stack, stack_size);
+
+    __atomic_store_n(&parked_thread_state, 2, __ATOMIC_SEQ_CST);
+    raw_syscall6(__NR_futex, (long) &parked_thread_state,
+                 FUTEX_WAKE | FUTEX_PRIVATE_FLAG, 1, 0, 0, 0);
+
+    while (__atomic_load_n(&thread_tid, __ATOMIC_SEQ_CST) != 0) {
+        int tid = __atomic_load_n(&thread_tid, __ATOMIC_SEQ_CST);
+        raw_syscall6(__NR_futex, (long) &thread_tid,
+                     FUTEX_WAIT | FUTEX_PRIVATE_FLAG, tid, 0, 0, 0);
+    }
+
+    reuse_stack =
+        mmap((char *) span + stack_size, stack_size, PROT_READ | PROT_WRITE,
+             MAP_PRIVATE | MAP_ANONYMOUS | MAP_FIXED_NOREPLACE, -1, 0);
+    CHECK(reuse_stack == (char *) span + stack_size,
+          "deferred overlapping half reuse mmap returned %p (expected %p)",
+          reuse_stack, (char *) span + stack_size);
+    if (reuse_stack == (char *) span + stack_size)
+        munmap(reuse_stack, stack_size);
+}
+
+int main(int argc, char **argv)
+{
+    if (argc > 1 && !strcmp(argv[1], "--clone3-vfork-child"))
+        return 23;
+    if (argc > 1 && !strcmp(argv[1], "--clone3-vfork-sleep-child")) {
+        struct timespec ts = {.tv_sec = 1, .tv_nsec = 0};
+        nanosleep(&ts, NULL);
+        return 25;
+    }
+
+    self_path = argv[0];
+
     printf("test-clone3: starting\n");
 
     test_fork();
@@ -353,6 +682,11 @@ int main(void)
     test_thread_with_signal();
     test_stack_mismatch();
     test_stack_overflow();
+    test_vfork_exec();
+    test_vfork_child_stack();
+    test_vfork_exec_unblocks_parent();
+    test_deferred_stack_munmap();
+    test_partial_deferred_stack_munmap();
 
     SUMMARY("test-clone3");
     return fails > 0 ? 1 : 0;

@@ -20,6 +20,10 @@
 
 int passes = 0, fails = 0;
 
+#ifndef MAP_FIXED_NOREPLACE
+#define MAP_FIXED_NOREPLACE 0x100000
+#endif
+
 /* Shared state */
 
 /* Shared variable written by child thread, read by parent */
@@ -32,6 +36,7 @@ static volatile int child_tid = 0;
 
 /* Synchronization flag: child sets to 1 when done, parent waits */
 static volatile int done_flag = 0;
+static volatile int parked_state = 0;
 
 /* Child thread function */
 
@@ -52,6 +57,17 @@ static void child_work(void)
     raw_futex_wake((int *) &done_flag, 1);
 
     /* Exit this thread (not the process) */
+    raw_exit(0);
+}
+
+static void parked_child_work(void)
+{
+    parked_state = 1;
+    raw_futex_wake((int *) &parked_state, 1);
+
+    while (parked_state == 1)
+        raw_futex_wait((int *) &parked_state, 1);
+
     raw_exit(0);
 }
 
@@ -200,6 +216,61 @@ static void test_multi_thread(void)
 
 #undef N_THREADS
 
+static void test_clone_stack_unmap_reuse(void)
+{
+    TEST("clone stack munmap reuse");
+
+    size_t stack_size = 65536;
+    void *stack = mmap(NULL, stack_size, PROT_READ | PROT_WRITE,
+                       MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    if (stack == MAP_FAILED) {
+        FAIL("mmap failed");
+        return;
+    }
+
+    parked_state = 0;
+    child_tid = 0;
+
+    unsigned long flags = 0x7d0f00;
+    void *stack_top = (char *) stack + stack_size;
+    long ret =
+        raw_clone(flags, stack_top, (int *) &child_tid, 0, (int *) &child_tid);
+
+    if (ret == 0) {
+        parked_child_work();
+        __builtin_unreachable();
+    }
+    if (ret < 0) {
+        munmap(stack, stack_size);
+        FAIL("clone returned error");
+        return;
+    }
+
+    while (parked_state == 0)
+        raw_futex_wait((int *) &parked_state, 0);
+
+    if (munmap(stack, stack_size) != 0) {
+        FAIL("munmap failed");
+        return;
+    }
+
+    parked_state = 2;
+    raw_futex_wake((int *) &parked_state, 1);
+
+    while (child_tid != 0)
+        raw_futex_wait((int *) &child_tid, child_tid);
+
+    void *reuse =
+        mmap(stack, stack_size, PROT_READ | PROT_WRITE,
+             MAP_PRIVATE | MAP_ANONYMOUS | MAP_FIXED_NOREPLACE, -1, 0);
+    if (reuse == stack) {
+        munmap(reuse, stack_size);
+        PASS();
+    } else {
+        FAIL("stack VA was not reusable");
+    }
+}
+
 /* Main */
 
 int main(void)
@@ -209,6 +280,7 @@ int main(void)
     test_clone_thread();
     test_parent_settid();
     test_multi_thread();
+    test_clone_stack_unmap_reuse();
 
     SUMMARY("test-thread");
     return fails > 0 ? 1 : 0;

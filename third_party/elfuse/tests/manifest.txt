@@ -57,6 +57,7 @@ test-large-io-boundary
 
 [section] /proc and /dev emulation tests
 test-proc
+test-sysfs-cpu
 
 [section] Network tests
 test-net
@@ -79,6 +80,7 @@ test-signal-thread
 [section] Fork edge cases
 test-clone3                    # diff=skip
 test-fork-exec $TESTDIR/echo-test
+test-fork-lowbase
 
 [section] COW fork isolation tests
 test-cow-fork
@@ -91,12 +93,16 @@ test-opath
 
 [section] Guard page / mmap edge cases
 test-guard-page
+test-mmap-hint
 
 [section] mremap tests
 test-mremap
 
 [section] msync MAP_SHARED tests
 test-msync
+
+[section] Cross-fork MAP_SHARED coherence tests
+test-cross-fork-mapshared          # diff=skip
 
 [section] madvise MADV_DONTNEED tests
 test-madvise
@@ -141,6 +147,9 @@ test-sysv-shm
 
 [section] Credential/identity emulation tests
 test-credentials                   # diff=skip
+
+[section] Scheduler policy stub tests
+test-sched-policy
 
 [section] membarrier tests
 test-membarrier

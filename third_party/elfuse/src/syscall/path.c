@@ -26,40 +26,106 @@
 
 #define PROC_PATH_COMPONENTS_MAX (LINUX_PATH_MAX / 2)
 
-int path_might_use_open_intercept(const char *path)
+/* True when path equals prefix exactly, or extends it with '/'. Avoids the
+ * surprise where "/sys/devices/system/cpufoo" would match a bare strncmp on
+ * "/sys/devices/system/cpu" and pull an unrelated path through the intercept
+ * layer.
+ */
+static bool path_prefix_match(const char *path, const char *prefix, size_t plen)
+{
+    if (strncmp(path, prefix, plen) != 0)
+        return false;
+    return path[plen] == '\0' || path[plen] == '/';
+}
+
+#define SYSFS_CPU_PREFIX "/sys/devices/system/cpu"
+
+bool path_might_use_open_intercept(const char *path)
 {
     if (!path || path[0] != '/')
-        return 0;
+        return false;
 
     if (!strncmp(path, "/proc", 5))
-        return 1;
+        return true;
     if (!strncmp(path, "/dev", 4))
-        return 1;
+        return true;
+    if (path_prefix_match(path, SYSFS_CPU_PREFIX, sizeof(SYSFS_CPU_PREFIX) - 1))
+        return true;
     if (!strcmp(path, "/etc/mtab") || !strcmp(path, "/etc/passwd") ||
         !strcmp(path, "/etc/group"))
-        return 1;
+        return true;
     if (!strcmp(path, "/var/run/utmp") || !strcmp(path, "/run/utmp"))
-        return 1;
+        return true;
 
-    return 0;
+    return false;
 }
 
-int path_might_use_stat_intercept(const char *path)
+bool path_might_use_stat_intercept(const char *path)
 {
     if (!path || path[0] != '/')
-        return 0;
+        return false;
 
     if (!strncmp(path, "/proc", 5))
-        return 1;
+        return true;
     if (!strncmp(path, "/dev/shm", 8))
-        return 1;
+        return true;
+    if (path_prefix_match(path, SYSFS_CPU_PREFIX, sizeof(SYSFS_CPU_PREFIX) - 1))
+        return true;
 
-    return 0;
+    return false;
 }
 
-static int path_next_component(const char **pathp,
-                               const char **comp,
-                               size_t *len)
+int path_check_intercept_access(const struct stat *st, int mode, int flags)
+{
+    if ((mode & ~(F_OK | R_OK | W_OK | X_OK)) != 0) {
+        errno = EINVAL;
+        return -1;
+    }
+    if (mode == F_OK)
+        return 0;
+
+    mode_t granted = 0;
+    uint32_t uid =
+        (flags & LINUX_AT_EACCESS) ? proc_get_euid() : proc_get_uid();
+    uint32_t gid =
+        (flags & LINUX_AT_EACCESS) ? proc_get_egid() : proc_get_gid();
+
+    if (uid == 0) {
+        /* CAP_DAC_OVERRIDE: root reads and writes any file regardless of mode
+         * bits. Execute still requires at least one x-bit set so non-executable
+         * files cannot be run as root. Matches Linux generic_permission() in
+         * fs/namei.c.
+         */
+        granted |= R_OK | W_OK;
+        if (st->st_mode & (S_IXUSR | S_IXGRP | S_IXOTH))
+            granted |= X_OK;
+    } else {
+        mode_t bits;
+        if (uid == st->st_uid)
+            bits = (st->st_mode >> 6) & 7;
+        else if (gid == st->st_gid)
+            bits = (st->st_mode >> 3) & 7;
+        else
+            bits = st->st_mode & 7;
+
+        if (bits & 4)
+            granted |= R_OK;
+        if (bits & 2)
+            granted |= W_OK;
+        if (bits & 1)
+            granted |= X_OK;
+    }
+
+    if ((mode & granted) == mode)
+        return 0;
+
+    errno = EACCES;
+    return -1;
+}
+
+static bool path_next_component(const char **pathp,
+                                const char **comp,
+                                size_t *len)
 {
     const char *p = *pathp;
 
@@ -67,7 +133,7 @@ static int path_next_component(const char **pathp,
         p++;
     if (*p == '\0') {
         *pathp = p;
-        return 0;
+        return false;
     }
 
     *comp = p;
@@ -75,10 +141,10 @@ static int path_next_component(const char **pathp,
         p++;
     *len = (size_t) (p - *comp);
     *pathp = p;
-    return 1;
+    return true;
 }
 
-static int path_component_is_dot(const char *comp, size_t len)
+static bool path_component_is_dot(const char *comp, size_t len)
 {
     return len == 1 && comp[0] == '.';
 }

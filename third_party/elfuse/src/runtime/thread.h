@@ -10,8 +10,8 @@
  * O(1) access to the current thread's entry from any syscall handler.
  *
  * SP_EL1 allocation: each thread gets a 4KiB EL1 exception stack carved from
- * the shim data region (SHIM_DATA_BASE + 2MiB). Thread 0 (main) gets the top,
- * thread N gets offset -(N * 4096).
+ * the shim data region (g->shim_data_base + 2MiB). Thread 0 (main) gets the
+ * top, thread N gets offset -(N * 4096).
  */
 
 #pragma once
@@ -20,10 +20,13 @@
 #include <pthread.h>
 #include <stdbool.h>
 #include <stdint.h>
+
+#include "core/guest.h"  /* guest_t (for thread_alloc_sp_el1) */
 #include "syscall/abi.h" /* linux_user_pt_regs_t */
 
 /* Maximum number of concurrent guest threads in one VM. */
 #define MAX_THREADS 64
+#define MAX_DEFERRED_STACK_UNMAPS 8
 
 /* Per-thread state. One entry per guest thread (main + workers). */
 typedef struct {
@@ -33,6 +36,11 @@ typedef struct {
     pthread_t host_thread;    /* macOS host thread running this vCPU */
     uint64_t clear_child_tid; /* GVA for CLONE_CHILD_CLEARTID (0=none) */
     uint64_t sp_el1;          /* Per-thread EL1 stack top (IPA) */
+    int sp_el1_slot;          /* Slot index in sp_el1_allocated (-1 = none).
+                               * Stored at alloc time so the free path does
+                               * not need to recompute (top - sp) / 4096; the
+                               * shim data block is now at high IPA and only
+                               * known via guest_t. */
     int active;               /* Non-zero while thread is running.
                                * Stays int (not bool) because lock-free paths in thread.c
                                * use __atomic_load_n on this field; the 32-bit width keeps
@@ -112,7 +120,29 @@ typedef struct {
     int exit_signal;    /* Signal on exit (usually SIGCHLD) */
     bool vm_exited;     /* Child has exited */
     int vm_exit_status; /* Wait-format exit status */
+
+    /* Guest stack range supplied by clone3(stack, stack_size).
+     * elfuse uses this to avoid tearing down a still-active child stack when
+     * another thread munmaps the backing range before the child is done with
+     * its bootstrap stack.
+     */
+    uint64_t stack_map_start;
+    uint64_t stack_map_end;
+    uint64_t deferred_stack_unmap_starts[MAX_DEFERRED_STACK_UNMAPS];
+    uint64_t deferred_stack_unmap_ends[MAX_DEFERRED_STACK_UNMAPS];
+    int deferred_stack_unmap_count;
+    int deferred_stack_unmap_busy;
 } thread_entry_t;
+
+typedef struct {
+    thread_entry_t *thread;
+    int64_t guest_tid;
+    uint64_t start;
+    uint64_t end;
+    uint64_t deferred_starts[MAX_DEFERRED_STACK_UNMAPS];
+    uint64_t deferred_ends[MAX_DEFERRED_STACK_UNMAPS];
+    int deferred_count;
+} thread_deferred_stack_unmap_txn_t;
 
 /* Current thread pointer, set once per host pthread at thread start.
  * All syscall handlers can access per-thread state through this.
@@ -134,7 +164,9 @@ void thread_register_main(hv_vcpu_t vcpu,
  * Returns a pointer to the entry, or NULL if the table is full.
  * The caller must fill in vcpu, vexit, host_thread, sp_el1.
  */
-thread_entry_t *thread_alloc(int64_t tid);
+thread_entry_t *thread_alloc(int64_t tid,
+                             uint64_t stack_start,
+                             uint64_t stack_end);
 
 /* Mark a thread as inactive and release its table slot. */
 void thread_deactivate(thread_entry_t *t);
@@ -156,12 +188,15 @@ int thread_active_count(void);
 /* Fast path: return non-zero when exactly one guest thread is active. */
 int thread_is_single_active(void);
 
-/* Allocate a per-thread SP_EL1 value. Thread N gets the Nth 4KiB slot counting
- * down from the top of the shim data region. The IPA base (GUEST_IPA_BASE +
- * SHIM_DATA_BASE + 2MiB) is the main thread's SP_EL1; each subsequent thread
- * subtracts 4KiB. Returns the IPA, or 0 on failure.
+/* Allocate a per-thread SP_EL1 stack and record both the IPA and the slot
+ * index into t. Thread N gets the Nth 4KiB slot counting down from the top
+ * of the shim data block (g->shim_data_base + 2MiB). The shim block lives
+ * at high IPA computed by guest_init, so callers must pass g; the slot
+ * index is stored in t->sp_el1_slot so the free path (which is reached
+ * from teardown contexts that lack g) can clear the bitmask directly.
+ * Returns the SP_EL1 IPA, or 0 on slot exhaustion.
  */
-uint64_t thread_alloc_sp_el1(void);
+uint64_t thread_alloc_sp_el1(const guest_t *g, thread_entry_t *t);
 
 /* Iterate over all active threads, calling fn(entry, ctx) for each.
  * Holds the thread table lock during iteration.
@@ -242,3 +277,61 @@ int64_t thread_ptrace_wait(int64_t tracer_tid,
 
 /* Get the thread table mutex (needed for ptrace wait blocking). */
 pthread_mutex_t *thread_get_lock(void);
+
+/* Snapshot every active guest stack range overlapping [start, end), then
+ * record a deferred-unmap entry on each one. While the transaction is live,
+ * cleanup of the affected thread's deferred stack entries will block so a
+ * later rollback cannot race with thread exit.
+ * On success, txns[0..nranges) contains both the overlapping ranges and the
+ * pre-update deferred-unmap state needed for rollback.
+ * Returns the number of overlapping stack ranges, or -1 if the caller's
+ * buffer is too small or any thread's deferred-unmap budget is exhausted.
+ */
+int thread_collect_and_defer_stack_ranges(
+    uint64_t start,
+    uint64_t end,
+    thread_deferred_stack_unmap_txn_t *txns,
+    int max_ranges);
+
+/* Release the in-flight marker set by thread_collect_and_defer_stack_ranges()
+ * after the caller has successfully completed the non-deferred munmap work.
+ */
+void thread_finish_deferred_stack_ranges(
+    const thread_deferred_stack_unmap_txn_t *txns,
+    int nranges);
+
+/* Restore the deferred-unmap state previously captured by
+ * thread_collect_and_defer_stack_ranges(), then release the in-flight marker.
+ */
+void thread_rollback_deferred_stack_ranges(
+    const thread_deferred_stack_unmap_txn_t *txns,
+    int nranges);
+
+/* For thread exit cleanup: wait for any in-flight deferred-stack munmap
+ * transaction affecting this thread to finish, then clear the live stack map
+ * and snapshot the current deferred unmaps. Returns the number of entries
+ * copied (capped at max_ranges).
+ */
+int thread_prepare_deferred_stack_unmaps_for_cleanup(thread_entry_t *t,
+                                                     uint64_t *starts,
+                                                     uint64_t *ends,
+                                                     int max_ranges);
+/* Snapshot the deferred unmap entries without modifying the thread record.
+ * Returns the number of entries copied (capped at max_ranges).
+ */
+int thread_peek_deferred_stack_unmaps(thread_entry_t *t,
+                                      uint64_t *starts,
+                                      uint64_t *ends,
+                                      int max_ranges);
+
+/* Drop a single completed deferred unmap entry by exact [start, end) match.
+ * Returns 1 if removed, 0 if no matching entry was found.
+ */
+int thread_drop_deferred_stack_unmap(thread_entry_t *t,
+                                     uint64_t start,
+                                     uint64_t end);
+
+/* Forget the thread's stack range so future munmap calls do not enqueue new
+ * deferred entries against this slot. Safe to call once the thread is dead.
+ */
+void thread_clear_stack_map(thread_entry_t *t);

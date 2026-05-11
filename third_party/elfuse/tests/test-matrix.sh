@@ -180,9 +180,12 @@ run_elfuse_sysroot()
 # Tests that either hang under qemu-system-aarch64 on Apple Silicon
 # (raw clone / PI futex / massive thread+mmap stress) or currently diverge
 # from the Alpine linux-virt reference kernel on the deprecated oom_adj
-# procfs compatibility path exercised by test-io-opt. They still run in
-# elfuse-aarch64 mode and in `make check`; the qemu reference run skips them.
-QEMU_SKIP="test-thread test-stress test-futex-pi test-io-opt"
+# procfs compatibility path exercised by test-io-opt. test-sysfs-cpu asserts
+# the elfuse stub contract (cache/topology subtree empty, possible == online,
+# cpuN count == online count) which a real kernel does not honor. All listed
+# tests still run in elfuse-aarch64 mode and in `make check`; the qemu
+# reference run skips them.
+QEMU_SKIP="test-thread test-stress test-futex-pi test-io-opt test-sysfs-cpu"
 
 is_qemu_skipped()
 {
@@ -355,6 +358,7 @@ run_unit_tests()
 
     printf "\n/proc and /dev\n"
     test_check "$runner" "test-proc" "0 failed" "$bindir/test-proc"
+    test_check "$runner" "test-sysfs-cpu" "0 failed" "$bindir/test-sysfs-cpu"
 
     printf "\nNetwork\n"
     test_check "$runner" "test-net" "0 failed" "$bindir/test-net"

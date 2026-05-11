@@ -87,9 +87,16 @@
 #define SYS_clock_gettime 113
 #define SYS_clock_getres 114
 #define SYS_clock_nanosleep 115
+#define SYS_sched_setparam 118
+#define SYS_sched_setscheduler 119
+#define SYS_sched_getscheduler 120
+#define SYS_sched_getparam 121
 #define SYS_sched_setaffinity 122
 #define SYS_sched_getaffinity 123
 #define SYS_sched_yield 124
+#define SYS_sched_get_priority_max 125
+#define SYS_sched_get_priority_min 126
+#define SYS_sched_rr_get_interval 127
 #define SYS_kill 129
 #define SYS_tgkill 131
 #define SYS_sigaltstack 132
@@ -188,6 +195,7 @@
 #define SYS_pwritev2 287
 /* misc */
 #define SYS_sethostname 161
+#define SYS_getcpu 168
 #define SYS_memfd_create 279
 #define SYS_membarrier 283
 #define SYS_mlock 228
@@ -477,6 +485,20 @@ typedef struct {
 typedef struct {
     int64_t tv_sec, tv_usec;
 } linux_timeval_t;
+
+/* Linux scheduling policies (asm-generic/sched.h). */
+#define LINUX_SCHED_NORMAL 0
+#define LINUX_SCHED_FIFO 1
+#define LINUX_SCHED_RR 2
+#define LINUX_SCHED_BATCH 3
+#define LINUX_SCHED_IDLE 5
+#define LINUX_SCHED_DEADLINE 6
+#define LINUX_SCHED_RESET_ON_FORK 0x40000000
+
+/* Linux struct sched_param (POSIX); only sched_priority is exposed. */
+typedef struct {
+    int32_t sched_priority;
+} linux_sched_param_t;
 
 /* Linux struct statfs (aarch64). */
 typedef struct {

@@ -6,6 +6,7 @@
         test-glibc-coreutils test-perf \
         test-matrix test-matrix-elfuse-aarch64 test-matrix-qemu-aarch64 \
         test-full test-multi-vcpu test-rwx test-sysroot-rename \
+        test-sysroot-procfs-exec test-timeout-disable \
         test-sysroot-nofollow perf
 
 ## Build and run the assembly hello world test
@@ -18,6 +19,10 @@ check: $(ELFUSE_BIN) $(TEST_DEPS)
 	@bash tests/driver.sh -e $(ELFUSE_BIN) -d $(TEST_DIR) -v
 	@printf "\n$(BLUE)━━━ busybox applet validation ━━━$(RESET)\n"
 	@$(MAKE) --no-print-directory test-busybox
+	@printf "\n$(BLUE)━━━ sysroot procfs exec validation ━━━$(RESET)\n"
+	@$(MAKE) --no-print-directory test-sysroot-procfs-exec
+	@printf "\n$(BLUE)━━━ timeout=0 validation ━━━$(RESET)\n"
+	@$(MAKE) --no-print-directory test-timeout-disable
 
 test-sysroot-rename: $(ELFUSE_BIN) $(BUILD_DIR)/test-sysroot-rename
 	@tmpdir=$$(mktemp -d); \
@@ -41,6 +46,16 @@ test-sysroot-nofollow: $(ELFUSE_BIN) $(BUILD_DIR)/test-sysroot-nofollow
 	mkdir -p "$$tmpdir/tmp"; \
 	ln -sf /outside-target "$$tmpdir/tmp/elfuse-sysroot-nofollow-link"; \
 	$(ELFUSE_BIN) --sysroot "$$tmpdir" $(BUILD_DIR)/test-sysroot-nofollow
+
+test-sysroot-procfs-exec: $(ELFUSE_BIN) $(BUILD_DIR)/test-procfs-exec
+	@tmpdir=$$(mktemp -d); \
+	trap 'rm -rf "$$tmpdir"' EXIT; \
+	mkdir -p "$$tmpdir/bin"; \
+	cp $(BUILD_DIR)/test-procfs-exec "$$tmpdir/bin/test-procfs-exec"; \
+	$(ELFUSE_BIN) --sysroot "$$tmpdir" "$$tmpdir/bin/test-procfs-exec"
+
+test-timeout-disable: $(ELFUSE_BIN) $(TEST_HELLO_DEP)
+	@$(ELFUSE_BIN) --timeout 0 $(TEST_DIR)/test-hello > /dev/null
 
 ## Run GDB stub integration tests (LLDB <-> elfuse gdbstub)
 test-gdbstub: $(ELFUSE_BIN) $(TEST_DIR)/test-hello

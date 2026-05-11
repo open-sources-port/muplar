@@ -1410,15 +1410,16 @@ int64_t sys_faccessat(guest_t *g,
     if (host_dirfd_ref_open(dirfd, &dir_ref) < 0)
         return -LINUX_EBADF;
 
-    /* Check /proc paths first since macOS has no /proc filesystem, so
-     * access("/proc/self/stat", R_OK) etc. must be intercepted.
-     * If proc_intercept_stat succeeds, the path is a known emulated
-     * entry and the code reports it as accessible.
+    /* Check intercepted stat paths first since macOS has no /proc filesystem
+     * and the sysfs CPU tree is synthetic. Access must reflect the synthetic
+     * mode bits, not just path existence.
      */
-    struct stat dummy_st;
+    struct stat intercepted_st;
     if (path_might_use_stat_intercept(access_path) &&
-        proc_intercept_stat(access_path, &dummy_st) == 0) {
+        proc_intercept_stat(access_path, &intercepted_st) == 0) {
         host_fd_ref_close(&dir_ref);
+        if (path_check_intercept_access(&intercepted_st, mode, flags) < 0)
+            return linux_errno();
         return 0;
     }
 

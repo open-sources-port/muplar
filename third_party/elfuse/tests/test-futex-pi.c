@@ -42,6 +42,7 @@ int passes = 0, fails = 0;
 /* Linux futex ops */
 #define FUTEX_LOCK_PI 6
 #define FUTEX_UNLOCK_PI 7
+#define FUTEX_TRYLOCK_PI 8
 #define FUTEX_PRIVATE 128
 
 /* PI lock word: shared between parent and child thread.
@@ -234,6 +235,54 @@ static void test_futex_eintr(void)
     }
 }
 
+static void test_futex_unaligned(void)
+{
+    TEST("futex rejects unaligned uaddr");
+
+    uint32_t words[2] = {0};
+    int *unaligned = (int *) (void *) (((unsigned char *) words) + 1);
+
+    long r = raw_futex_wait(unaligned, 0);
+    if (r != -22) {
+        printf("FAIL: WAIT expected -EINVAL(-22) got %ld\n", r);
+        fails++;
+        return;
+    }
+
+    r = raw_futex_wake(unaligned, 1);
+    if (r != -22) {
+        printf("FAIL: WAKE expected -EINVAL(-22) got %ld\n", r);
+        fails++;
+        return;
+    }
+
+    r = raw_syscall6(__NR_futex, (long) unaligned,
+                     FUTEX_LOCK_PI | FUTEX_PRIVATE, 0, 0, 0, 0);
+    if (r != -22) {
+        printf("FAIL: LOCK_PI expected -EINVAL(-22) got %ld\n", r);
+        fails++;
+        return;
+    }
+
+    r = raw_syscall6(__NR_futex, (long) unaligned,
+                     FUTEX_TRYLOCK_PI | FUTEX_PRIVATE, 0, 0, 0, 0);
+    if (r != -22) {
+        printf("FAIL: TRYLOCK_PI expected -EINVAL(-22) got %ld\n", r);
+        fails++;
+        return;
+    }
+
+    r = raw_syscall6(__NR_futex, (long) unaligned,
+                     FUTEX_UNLOCK_PI | FUTEX_PRIVATE, 0, 0, 0, 0);
+    if (r != -22) {
+        printf("FAIL: UNLOCK_PI expected -EINVAL(-22) got %ld\n", r);
+        fails++;
+        return;
+    }
+
+    PASS();
+}
+
 /* Main */
 
 int main(void)
@@ -242,6 +291,7 @@ int main(void)
 
     test_pi_lock_unlock();
     test_futex_eintr();
+    test_futex_unaligned();
     test_pi_dead_owner(); /* Last: uses CLONE_THREAD which may hang on x64 */
 
     SUMMARY("test-futex-pi");

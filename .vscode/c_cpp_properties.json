@@ -16,7 +16,10 @@
                 "${workspaceFolder}/android/bionic/include/sys_compat",
                 "${workspaceFolder}/runtime",
                 "${workspaceFolder}/runtime/elf",
-                "${workspaceFolder}/runtime/memory"
+                "${workspaceFolder}/runtime/memory",
+                "${workspaceFolder}/third_party/elfuse/src/core",
+                "${workspaceFolder}/third_party/elfuse/src/runtime",
+                "${workspaceFolder}/third_party/elfuse/src/syscell"
             ],
 
             "defines": [

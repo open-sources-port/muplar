@@ -77,6 +77,27 @@ static char proc_tmpdir[128];
 static bool proc_tmpdir_ok;
 static pthread_mutex_t proc_tmpdir_lock = PTHREAD_MUTEX_INITIALIZER;
 
+/* Synthetic /sys/devices/system/cpu directory backing store. Populated lazily
+ * on first access (Java GC, Go runtime, libnuma probe these to size thread
+ * pools). Layout matches the minimal subset Linux exposes:
+ *   <syscpu_dir>/online    text file: "0\n" or "0-N\n"
+ *   <syscpu_dir>/possible  same
+ *   <syscpu_dir>/present   same
+ *   <syscpu_dir>/cpuN/     one empty dir per CPU (cache/topology stays empty
+ *                          until a real consumer asks for those subtrees)
+ * Population is a one-shot snapshot taken at first call: the host CPU count
+ * does not change at runtime, so refresh is unnecessary.
+ *
+ * syscpu_owner_pid records the pid that ran mkdtemp so atexit-driven cleanup
+ * runs only in that process. clone(CLONE_VM) children inherit the host atexit
+ * list and the populated syscpu_dir_ok state, so without the guard a child exit
+ * would rmdir the parent's still-active scratch tree.
+ */
+static char syscpu_dir[128];
+static bool syscpu_dir_ok;
+static pid_t syscpu_owner_pid;
+static pthread_mutex_t syscpu_dir_lock = PTHREAD_MUTEX_INITIALIZER;
+
 /* OOM range constants from Linux include/uapi/linux/oom.h. */
 #define LINUX_OOM_SCORE_ADJ_MIN (-1000)
 #define LINUX_OOM_SCORE_ADJ_MAX 1000
@@ -578,12 +599,39 @@ static int dev_shm_resolve_path(const char *guest_suffix,
     return 0;
 }
 
+/* Give synthetic procfs nodes stable identities so directory walkers do not
+ * collapse distinct paths into one inode and falsely report filesystem loops.
+ */
+#define PROC_SYNTH_DEV ((dev_t) 0x504f)
+
+static ino_t proc_synth_ino(const char *path)
+{
+    /* 64-bit FNV-1a with Linux-looking nonzero output. */
+    uint64_t h = 1469598103934665603ULL;
+    for (const unsigned char *p = (const unsigned char *) path; *p; ++p) {
+        h ^= (uint64_t) *p;
+        h *= 1099511628211ULL;
+    }
+    h &= 0x7fffffffffffffffULL;
+    if (h == 0)
+        h = 1;
+    return (ino_t) h;
+}
+
 /* Populate *st for a synthetic /proc directory entry. */
-static void stat_fill_proc_dir(struct stat *st, mode_t mode, nlink_t nlink)
+static void stat_fill_proc_dir(struct stat *st,
+                               mode_t mode,
+                               nlink_t nlink,
+                               const char *path)
 {
     memset(st, 0, sizeof(*st));
     st->st_mode = S_IFDIR | mode;
     st->st_nlink = nlink;
+    st->st_dev = PROC_SYNTH_DEV;
+    st->st_ino = proc_synth_ino(path);
+    st->st_uid = proc_get_uid();
+    st->st_gid = proc_get_gid();
+    st->st_blksize = 4096;
 }
 
 /* Resolve a /dev/fd/<N> or /proc/self/fd/<N> path to a fresh dup() of the
@@ -642,11 +690,15 @@ static int proc_alias_self(const char *path, char *alias, size_t alias_sz)
  * st_size = 0 for proc nodes; mirroring that forces readers to drain to EOF
  * instead of pre-sizing buffers from a stale value.
  */
-static void stat_fill_proc_file(struct stat *st, mode_t mode)
+static void stat_fill_proc_file(struct stat *st, mode_t mode, const char *path)
 {
     memset(st, 0, sizeof(*st));
     st->st_mode = S_IFREG | mode;
     st->st_nlink = 1;
+    st->st_dev = PROC_SYNTH_DEV;
+    st->st_ino = proc_synth_ino(path);
+    st->st_uid = proc_get_uid();
+    st->st_gid = proc_get_gid();
     st->st_size = 0;
     st->st_blksize = 4096;
     st->st_blocks = 0;
@@ -1068,6 +1120,279 @@ static const char *ensure_proc_tmpdir(const guest_t *g)
     proc_tmpdir_ok = true;
     pthread_mutex_unlock(&proc_tmpdir_lock);
     return proc_tmpdir;
+}
+
+/* Online/possible/present format the kernel uses for cpumask range files:
+ *   single CPU -> "0\n"
+ *   N CPUs     -> "0-N-1\n"
+ * Mirrors Linux bitmap_print_to_pagebuf("%*pbl"), which is what every
+ * /sys/devices/system/cpu cpumask file emits.
+ */
+static int syscpu_format_range(char *buf, size_t bufsz, int ncpu)
+{
+    if (ncpu <= 1)
+        return snprintf(buf, bufsz, "0\n");
+    return snprintf(buf, bufsz, "0-%d\n", ncpu - 1);
+}
+
+static int syscpu_count(void)
+{
+    int n = (int) sysconf(_SC_NPROCESSORS_ONLN);
+    if (n < 1)
+        n = 1;
+    return n;
+}
+
+/* Walk syscpu_dir and remove every entry plus the dir itself. Caller is
+ * responsible for any owner/initialized checks; the partial-init recovery
+ * path needs to call this even when syscpu_dir_ok is still false.
+ */
+static void syscpu_dir_remove_tree(void)
+{
+    if (syscpu_dir[0] == '\0')
+        return;
+
+    DIR *d = opendir(syscpu_dir);
+    if (d) {
+        struct dirent *ent;
+        char path[256];
+        while ((ent = readdir(d))) {
+            if (ent->d_name[0] == '.' &&
+                (ent->d_name[1] == '\0' ||
+                 (ent->d_name[1] == '.' && ent->d_name[2] == '\0')))
+                continue;
+            int n =
+                snprintf(path, sizeof(path), "%s/%s", syscpu_dir, ent->d_name);
+            if (n <= 0 || (size_t) n >= sizeof(path))
+                continue;
+            /* cpuN entries are directories, range files are regular files.
+             * rmdir succeeds for the dirs, fails with ENOTDIR for files;
+             * unlink covers the latter without an extra stat.
+             */
+            if (rmdir(path) < 0)
+                unlink(path);
+        }
+        closedir(d);
+    }
+    rmdir(syscpu_dir);
+}
+
+static void syscpu_dir_cleanup(void)
+{
+    if (!syscpu_dir_ok)
+        return;
+    /* Only the process that ran mkdtemp may remove the tree. CLONE_VM children
+     * inherit this atexit handler and the populated state, but the scratch dir
+     * itself belongs to the parent.
+     */
+    if (getpid() != syscpu_owner_pid)
+        return;
+    syscpu_dir_remove_tree();
+}
+
+static int syscpu_write_file(const char *dir,
+                             const char *name,
+                             const char *data,
+                             size_t len)
+{
+    char path[160];
+    if (snprintf(path, sizeof(path), "%s/%s", dir, name) >= (int) sizeof(path))
+        return -1;
+    int fd = open(path, O_CREAT | O_TRUNC | O_WRONLY, 0444);
+    if (fd < 0)
+        return -1;
+    int rc = 0;
+    size_t off = 0;
+    while (off < len) {
+        ssize_t w = write(fd, (const char *) data + off, len - off);
+        if (w < 0) {
+            if (errno == EINTR)
+                continue;
+            rc = -1;
+            break;
+        }
+        off += (size_t) w;
+    }
+    close(fd);
+    return rc;
+}
+
+/* Lazily build /tmp/elfuse-syscpu-XXXXXX/ with the cpumask files and one
+ * empty cpuN directory per host CPU. Returns the temp dir path on success,
+ * or NULL on failure with errno set. Any failure mid-population tears down
+ * the partial tree so callers never observe a half-built directory.
+ * Thread-safe via syscpu_dir_lock.
+ */
+static const char *ensure_syscpu_dir(void)
+{
+    pthread_mutex_lock(&syscpu_dir_lock);
+    if (syscpu_dir_ok) {
+        pthread_mutex_unlock(&syscpu_dir_lock);
+        return syscpu_dir;
+    }
+
+    str_copy_trunc(syscpu_dir, "/tmp/elfuse-syscpu-XXXXXX", sizeof(syscpu_dir));
+    if (!mkdtemp(syscpu_dir)) {
+        syscpu_dir[0] = '\0';
+        pthread_mutex_unlock(&syscpu_dir_lock);
+        return NULL;
+    }
+
+    int ncpu = syscpu_count();
+    char range[32];
+    int range_len = syscpu_format_range(range, sizeof(range), ncpu);
+    if (range_len < 0)
+        range_len = 0;
+
+    int saved_errno = 0;
+    static const char *cpumask_files[] = {"online", "possible", "present",
+                                          NULL};
+    for (const char **f = cpumask_files; *f; f++) {
+        if (syscpu_write_file(syscpu_dir, *f, range, (size_t) range_len) < 0) {
+            saved_errno = errno;
+            goto fail;
+        }
+    }
+
+    char cpu_path[160];
+    for (int i = 0; i < ncpu; i++) {
+        if (snprintf(cpu_path, sizeof(cpu_path), "%s/cpu%d", syscpu_dir, i) >=
+            (int) sizeof(cpu_path)) {
+            saved_errno = ENAMETOOLONG;
+            goto fail;
+        }
+        if (mkdir(cpu_path, 0555) < 0) {
+            saved_errno = errno;
+            goto fail;
+        }
+    }
+
+    /* Record the owner before flipping syscpu_dir_ok so the cleanup hook,
+     * if it ever observes the populated state, also sees the right pid.
+     */
+    syscpu_owner_pid = getpid();
+    atexit(syscpu_dir_cleanup);
+    syscpu_dir_ok = true;
+    pthread_mutex_unlock(&syscpu_dir_lock);
+    return syscpu_dir;
+
+fail:
+    /* Tear down the partial tree so a later call can mkdtemp a fresh slot.
+     * Bypass the syscpu_dir_ok guard since this path runs before the flag
+     * is flipped.
+     */
+    syscpu_dir_remove_tree();
+    syscpu_dir[0] = '\0';
+    pthread_mutex_unlock(&syscpu_dir_lock);
+    errno = saved_errno;
+    return NULL;
+}
+
+/* Reject any '..' component in suffix so the joined host path cannot escape
+ * the scratch dir. The synthetic /sys/devices/system/cpu tree has no use
+ * case for parent-directory traversal, and accepting it would let a guest
+ * call like open("/sys/devices/system/cpu/../../etc/passwd") drive
+ * lstat/open on an arbitrary host path. Empty components and '.' are
+ * harmless and pass through unchanged.
+ */
+static bool syscpu_suffix_safe(const char *suffix)
+{
+    const char *p = suffix;
+    while (*p) {
+        const char *seg = p;
+        while (*p && *p != '/')
+            p++;
+        size_t len = (size_t) (p - seg);
+        if (len == 2 && seg[0] == '.' && seg[1] == '.')
+            return false;
+        if (*p == '/')
+            p++;
+    }
+    return true;
+}
+
+/* Translate a /sys/devices/system/cpu[/...] path into the path inside the
+ * scratch dir. Returns 0 on success (host_path filled), -1 with errno set
+ * for malformed inputs (ENOENT for missing init, EACCES for traversal,
+ * ENAMETOOLONG for overflow). When the suffix is empty (the root dir
+ * itself), host_path receives just the scratch dir.
+ */
+static int syscpu_resolve_path(const char *suffix,
+                               char *host_path,
+                               size_t host_path_sz)
+{
+    if (!syscpu_suffix_safe(suffix)) {
+        errno = EACCES;
+        return -1;
+    }
+    const char *dir = ensure_syscpu_dir();
+    if (!dir) {
+        errno = ENOENT;
+        return -1;
+    }
+    int n;
+    if (!*suffix)
+        n = snprintf(host_path, host_path_sz, "%s", dir);
+    else
+        n = snprintf(host_path, host_path_sz, "%s/%s", dir, suffix);
+    if (n < 0 || (size_t) n >= host_path_sz) {
+        errno = ENAMETOOLONG;
+        return -1;
+    }
+    return 0;
+}
+
+/* The synthetic sysfs CPU tree is read-only. Accept only descriptor flags
+ * that make sense for a read-only open and reject mutating flags up front
+ * so the guest cannot create, truncate, or request write access anywhere
+ * in the stub.
+ */
+static bool syscpu_open_is_readonly(int linux_flags)
+{
+    int accmode = translate_open_flags(linux_flags) & O_ACCMODE;
+    return accmode == O_RDONLY &&
+           !(linux_flags & (LINUX_O_CREAT | LINUX_O_TRUNC));
+}
+
+/* Classify a guest path against the synthetic sysfs CPU tree.
+ *   SYSCPU_NONE  - unrelated path; *suffix_out unset.
+ *   SYSCPU_ROOT  - matches "/sys/devices/system/cpu" or with a trailing '/'.
+ *                  *suffix_out is the empty string.
+ *   SYSCPU_CHILD - matches "/sys/devices/system/cpu/<rest>"; *suffix_out
+ *                  points at <rest> (never a leading '/'; may be empty if
+ *                  the caller passed the trailing-slash form, which the
+ *                  ROOT branch already absorbed).
+ * Centralizes the prefix arithmetic so proc_intercept_open and
+ * proc_intercept_stat share one source of truth for the SYSFS_CPU shape.
+ */
+#define SYSFS_CPU "/sys/devices/system/cpu"
+#define SYSFS_CPU_LEN (sizeof(SYSFS_CPU) - 1)
+/* Host scratch-dir path buffer size: scratch dir is /tmp/elfuse-syscpu-<6>
+ * (under 30 chars) plus a /sys/devices/system/cpu/<suffix> remainder bounded
+ * by LINUX_PATH_MAX. 256 is comfortable for the realistic suffixes the stub
+ * exposes (cpuN, cpumask range files).
+ */
+#define SYSCPU_HOST_PATH_MAX 256
+typedef enum {
+    SYSCPU_NONE,
+    SYSCPU_ROOT,
+    SYSCPU_CHILD,
+} syscpu_match_t;
+
+static syscpu_match_t syscpu_classify(const char *path, const char **suffix_out)
+{
+    if (strncmp(path, SYSFS_CPU, SYSFS_CPU_LEN) != 0)
+        return SYSCPU_NONE;
+    char tail = path[SYSFS_CPU_LEN];
+    if (tail == '\0' || (tail == '/' && path[SYSFS_CPU_LEN + 1] == '\0')) {
+        *suffix_out = "";
+        return SYSCPU_ROOT;
+    }
+    if (tail == '/') {
+        *suffix_out = path + SYSFS_CPU_LEN + 1;
+        return SYSCPU_CHILD;
+    }
+    return SYSCPU_NONE;
 }
 
 typedef struct {
@@ -1984,6 +2309,38 @@ int proc_intercept_open(const guest_t *g,
             "user:x:1000:\n");
     }
 
+    /* /sys/devices/system/cpu[/...] -> synthetic CPU topology stub.
+     * Backs the lazy scratch dir that holds the cpumask range files plus
+     * one empty cpuN directory per host CPU. The cache/topology subtrees
+     * stay empty so consumers that only need cpu count (Java GC, Go
+     * scheduler init, libnuma) succeed; deeper queries return ENOENT.
+     */
+    {
+        const char *suffix;
+        syscpu_match_t m = syscpu_classify(path, &suffix);
+        if (m != SYSCPU_NONE) {
+            if (!syscpu_open_is_readonly(linux_flags)) {
+                errno = EACCES;
+                return -1;
+            }
+            if (m == SYSCPU_ROOT) {
+                const char *dir = ensure_syscpu_dir();
+                if (!dir)
+                    return -1;
+                return proc_open_dir_fd(dir, linux_flags);
+            }
+            char host_path[SYSCPU_HOST_PATH_MAX];
+            if (syscpu_resolve_path(suffix, host_path, sizeof(host_path)) < 0)
+                return -1;
+            /* O_NOFOLLOW: the scratch dir contents are owned by elfuse, but
+             * a caller could still race a symlink into the tree before this
+             * open. Block any cross-tree escape attempt regardless.
+             */
+            int oflags = translate_open_flags(linux_flags);
+            return open(host_path, oflags | O_NOFOLLOW, mode);
+        }
+    }
+
     return PROC_NOT_INTERCEPTED;
 }
 
@@ -2000,7 +2357,8 @@ int proc_intercept_stat(const char *path, struct stat *st)
      */
     /* /dev/shm is a directory */
     if (!strcmp(path, "/dev/shm") || !strcmp(path, "/dev/shm/")) {
-        stat_fill_proc_dir(st, 01777, 2); /* sticky bit, like real /dev/shm */
+        stat_fill_proc_dir(st, 01777, 2,
+                           path); /* sticky bit, like real /dev/shm */
         return 0;
     }
     /* /dev/shm/<name> files: check the host temp dir */
@@ -2013,7 +2371,7 @@ int proc_intercept_stat(const char *path, struct stat *st)
 
     /* /proc and /proc/<our_pid> are directories */
     if (!strcmp(path, "/proc") || !strcmp(path, "/proc/")) {
-        stat_fill_proc_dir(st, 0555, 3);
+        stat_fill_proc_dir(st, 0555, 3, path);
         return 0;
     }
     {
@@ -2024,12 +2382,12 @@ int proc_intercept_stat(const char *path, struct stat *st)
                  (long long) proc_get_pid());
         if (!strcmp(path, pidbuf) || !strcmp(path, pidslash) ||
             !strcmp(path, "/proc/self") || !strcmp(path, "/proc/self/")) {
-            stat_fill_proc_dir(st, 0555, 3);
+            stat_fill_proc_dir(st, 0555, 3, path);
             return 0;
         }
     }
     if (!strcmp(path, "/proc/net") || !strcmp(path, "/proc/net/")) {
-        stat_fill_proc_dir(st, 0555, 2);
+        stat_fill_proc_dir(st, 0555, 2, path);
         return 0;
     }
 
@@ -2045,7 +2403,7 @@ int proc_intercept_stat(const char *path, struct stat *st)
 
     /* /proc/self/task and /proc/self/task/<tid> are directories */
     if (!strcmp(path, "/proc/self/task") || !strcmp(path, "/proc/self/task/")) {
-        stat_fill_proc_dir(st, 0555, 2 + (nlink_t) thread_active_count());
+        stat_fill_proc_dir(st, 0555, 2 + (nlink_t) thread_active_count(), path);
         return 0;
     }
     if (!strncmp(path, "/proc/self/task/", 16)) {
@@ -2057,11 +2415,11 @@ int proc_intercept_stat(const char *path, struct stat *st)
                 return -1;
             }
             if (*endp == '\0' || !strcmp(endp, "/")) {
-                stat_fill_proc_dir(st, 0555, 2);
+                stat_fill_proc_dir(st, 0555, 2, path);
                 return 0;
             }
             if (!strcmp(endp, "/stat") || !strcmp(endp, "/status")) {
-                stat_fill_proc_file(st, 0444);
+                stat_fill_proc_file(st, 0444, path);
                 return 0;
             }
         }
@@ -2070,7 +2428,8 @@ int proc_intercept_stat(const char *path, struct stat *st)
     {
         int kind = proc_oom_path_kind(path);
         if (kind != OOM_PATH_NONE) {
-            stat_fill_proc_file(st, (kind == OOM_PATH_SCORE) ? 0444 : 0644);
+            stat_fill_proc_file(st, (kind == OOM_PATH_SCORE) ? 0444 : 0644,
+                                path);
             return 0;
         }
     }
@@ -2078,7 +2437,7 @@ int proc_intercept_stat(const char *path, struct stat *st)
     if (!strcmp(path, "/proc/self/fdinfo") ||
         !strcmp(path, "/proc/self/fdinfo/") || !strcmp(path, "/proc/self/fd") ||
         !strcmp(path, "/proc/self/fd/")) {
-        stat_fill_proc_dir(st, 0555, 2);
+        stat_fill_proc_dir(st, 0555, 2, path);
         return 0;
     }
 
@@ -2091,7 +2450,7 @@ int proc_intercept_stat(const char *path, struct stat *st)
             errno = ENOENT;
             return -1;
         }
-        stat_fill_proc_file(st, 0444);
+        stat_fill_proc_file(st, 0444, path);
         return 0;
     }
 
@@ -2127,7 +2486,7 @@ int proc_intercept_stat(const char *path, struct stat *st)
 
     for (const char **p = known_proc_files; *p; p++) {
         if (!strcmp(path, *p)) {
-            stat_fill_proc_file(st, 0444);
+            stat_fill_proc_file(st, 0444, path);
             return 0;
         }
     }
@@ -2145,6 +2504,39 @@ int proc_intercept_stat(const char *path, struct stat *st)
         if (fstat(host_fd, st) < 0)
             return -1;
         return 0;
+    }
+
+    /* /sys/devices/system/cpu[/...]: synthesize stat from the lazy scratch
+     * dir. Anything not present in the scratch dir (e.g. cpuN/topology,
+     * cpuN/cache) returns ENOENT, which matches the "stub-empty" contract.
+     */
+    {
+        const char *suffix;
+        syscpu_match_t m = syscpu_classify(path, &suffix);
+        if (m == SYSCPU_ROOT) {
+            if (!ensure_syscpu_dir())
+                return -1;
+            stat_fill_proc_dir(st, 0555, 2, path);
+            return 0;
+        }
+        if (m == SYSCPU_CHILD) {
+            char host_path[SYSCPU_HOST_PATH_MAX];
+            if (syscpu_resolve_path(suffix, host_path, sizeof(host_path)) < 0)
+                return -1;
+            struct stat host_st;
+            if (lstat(host_path, &host_st) < 0)
+                return -1;
+            /* Replace host inode/dev with the synthetic-procfs convention so
+             * the guest sees a stable identity that does not collide with
+             * real host files (and so st_size reads as 0 for cpumask files,
+             * matching real sysfs).
+             */
+            if (S_ISDIR(host_st.st_mode))
+                stat_fill_proc_dir(st, 0555, 2, path);
+            else
+                stat_fill_proc_file(st, 0444, path);
+            return 0;
+        }
     }
 
     return PROC_NOT_INTERCEPTED;
