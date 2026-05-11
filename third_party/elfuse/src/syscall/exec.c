@@ -26,11 +26,13 @@
 #include "core/stack.h"
 #include "core/vdso.h"
 
+#include "runtime/forkipc.h"
 #include "runtime/futex.h"
 
 #include "syscall/abi.h"
 #include "syscall/exec.h"
 #include "syscall/internal.h"
+#include "syscall/path.h"
 #include "syscall/proc.h"
 #include "syscall/signal.h"
 
@@ -114,6 +116,9 @@ int64_t sys_execve(hv_vcpu_t vcpu,
 
     log_debug("execve(\"%s\")", path);
 
+    char path_host_buf[LINUX_PATH_MAX];
+    const char *path_host = path;
+
 #define MAX_ARGS 256
 #define MAX_ENVS 4096
 #define STR_BUF_SIZE ((size_t) 256 * 1024)
@@ -161,16 +166,24 @@ int64_t sys_execve(hv_vcpu_t vcpu,
         log_debug("execve resolved to \"%s\"", path);
     }
 
+    if (!host_path && path[0] == '/')
+        path_host = path_resolve_sysroot_path(path, path_host_buf,
+                                              sizeof(path_host_buf));
+    if (!path_host) {
+        err = -LINUX_ENAMETOOLONG;
+        goto fail;
+    }
+
     /* Try loading as ELF; if that fails, emulate Linux binfmt_script for
      * shebang files.
      * Linux kernel handles shebangs transparently in binfmt_script.
      */
     elf_info_t elf_info;
-    if (elf_load(path, &elf_info) < 0) {
+    if (elf_load(path_host, &elf_info) < 0) {
         /* Not a valid ELF. Check if it's a script with a shebang line.
          * Read the first 256 bytes and look for "#!" at the start.
          */
-        int script_fd = open(path, O_RDONLY);
+        int script_fd = open(path_host, O_RDONLY);
         if (script_fd < 0) {
             err = -LINUX_ENOENT;
             goto fail;
@@ -279,8 +292,16 @@ int64_t sys_execve(hv_vcpu_t vcpu,
 
         /* Continue the same exec transaction using the interpreter image. */
         str_copy_trunc(path, interp_start, sizeof(path));
+        path_host = path;
+        if (path[0] == '/')
+            path_host = path_resolve_sysroot_path(path, path_host_buf,
+                                                  sizeof(path_host_buf));
+        if (!path_host) {
+            err = -LINUX_ENAMETOOLONG;
+            goto fail;
+        }
 
-        if (elf_load(path, &elf_info) < 0) {
+        if (elf_load(path_host, &elf_info) < 0) {
             err = -LINUX_ENOENT;
             goto fail;
         }
@@ -446,6 +467,7 @@ int64_t sys_execve(hv_vcpu_t vcpu,
     /* Past this point the old image is gone; later failures are fatal like a
      * kernel exec failure after its point of no return.
      */
+    fork_notify_vfork_exec();
     guest_reset(g);
 
     /* The replacement image must not inherit process-wide shutdown requests
@@ -466,18 +488,23 @@ int64_t sys_execve(hv_vcpu_t vcpu,
     const unsigned char *shim_ptr = proc_get_shim_blob();
     unsigned int shim_size = proc_get_shim_size();
     if (shim_ptr && shim_size > 0) {
-        memcpy((uint8_t *) g->host_base + SHIM_BASE, shim_ptr, shim_size);
+        memcpy((uint8_t *) g->host_base + g->shim_base, shim_ptr, shim_size);
     }
 
     /* Load the executable image that was validated before guest_reset(). */
-    if (elf_map_segments(&elf_info, path, g->host_base, g->guest_size,
+    if (elf_map_segments(&elf_info, path_host, g->host_base, g->guest_size,
                          elf_load_base) < 0) {
         log_fatal(
             "execve failed after point of no return: "
             "failed to map ELF segments for %s",
-            path);
+            path_host);
         exit(128);
     }
+
+    /* Track lowest loaded ELF address for the legacy fork IPC path
+     * after exec replaces the previous image (see guest_get_used_regions).
+     */
+    g->elf_load_min = elf_info.load_min + elf_load_base;
 
     /* If PT_INTERP was present, map the already-validated interpreter at the
      * exec-time interp_base.
@@ -518,7 +545,7 @@ int64_t sys_execve(hv_vcpu_t vcpu,
             sys_icache_invalidate(host_addr, interp_info.segments[i].memsz);
         }
     }
-    sys_icache_invalidate((uint8_t *) g->host_base + SHIM_BASE, shim_size);
+    sys_icache_invalidate((uint8_t *) g->host_base + g->shim_base, shim_size);
 
     /* Reset brk to the first page after loaded executable data. */
     uint64_t brk_start = PAGE_ALIGN_UP(elf_info.load_max + elf_load_base);
@@ -552,16 +579,16 @@ int64_t sys_execve(hv_vcpu_t vcpu,
     /* Keep the shim executable-only; HVF faults on merged RWX mappings. */
     if (nregions >= MAX_REGIONS)
         goto too_many_regions;
-    regions[nregions++] = (mem_region_t) {.gpa_start = SHIM_BASE,
-                                          .gpa_end = SHIM_BASE + shim_size,
+    regions[nregions++] = (mem_region_t) {.gpa_start = g->shim_base,
+                                          .gpa_end = g->shim_base + shim_size,
                                           .perms = MEM_PERM_RX};
 
     /* EL1 exception handlers use this block for stack and scratch state. */
     if (nregions >= MAX_REGIONS)
         goto too_many_regions;
     regions[nregions++] =
-        (mem_region_t) {.gpa_start = SHIM_DATA_BASE,
-                        .gpa_end = SHIM_DATA_BASE + BLOCK_2MIB,
+        (mem_region_t) {.gpa_start = g->shim_data_base,
+                        .gpa_end = g->shim_data_base + BLOCK_2MIB,
                         .perms = MEM_PERM_RW};
 
     /* The vDSO sits in the same 2MiB block as the shim. The page-table builder
@@ -645,10 +672,10 @@ int64_t sys_execve(hv_vcpu_t vcpu,
     }
 
     /* Rebuild /proc/self/maps metadata in parallel with the new page tables. */
-    guest_region_add(g, SHIM_BASE, SHIM_BASE + shim_size,
+    guest_region_add(g, g->shim_base, g->shim_base + shim_size,
                      LINUX_PROT_READ | LINUX_PROT_EXEC, LINUX_MAP_PRIVATE, 0,
                      "[shim]");
-    guest_region_add(g, SHIM_DATA_BASE, SHIM_DATA_BASE + BLOCK_2MIB,
+    guest_region_add(g, g->shim_data_base, g->shim_data_base + BLOCK_2MIB,
                      LINUX_PROT_READ | LINUX_PROT_WRITE, LINUX_MAP_PRIVATE, 0,
                      "[shim-data]");
     for (int i = 0; i < elf_info.num_segments; i++) {
@@ -656,7 +683,8 @@ int64_t sys_execve(hv_vcpu_t vcpu,
                          elf_info.segments[i].gpa + elf_info.segments[i].memsz +
                              elf_load_base,
                          elf_pf_to_prot(elf_info.segments[i].flags),
-                         LINUX_MAP_PRIVATE, elf_info.segments[i].offset, path);
+                         LINUX_MAP_PRIVATE, elf_info.segments[i].offset,
+                         path_host);
     }
     /* interp_resolved was computed before guest_reset so no filesystem lookup
      * is needed after the point of no return.
@@ -704,7 +732,9 @@ int64_t sys_execve(hv_vcpu_t vcpu,
         entry_point = (interp_base != 0) ? (interp_info.entry + interp_base)
                                          : (elf_info.entry + elf_load_base);
 
-        /* Publish the new identity only after stack construction succeeds. */
+        /* Publish the guest-visible path so /proc/self/exe remains stable
+         * across sysroot translation and can be re-exec'd by the guest.
+         */
         proc_set_elf_path(path);
         proc_set_cmdline(argc, argv_const);
         proc_set_environ(envp_const);
@@ -759,7 +789,7 @@ int64_t sys_execve(hv_vcpu_t vcpu,
         (void) _sync;
     }
 
-    log_debug("execve: loaded %s, entry=0x%llx sp=0x%llx", path,
+    log_debug("execve: loaded %s, entry=0x%llx sp=0x%llx", path_host,
               (unsigned long long) entry_ipa, (unsigned long long) sp_ipa);
 
     free(argv_buf);

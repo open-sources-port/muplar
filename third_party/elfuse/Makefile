@@ -147,6 +147,11 @@ $(BUILD_DIR)/test-pthread: tests/test-pthread.c | $(BUILD_DIR)
 	@echo "  CROSS   $< (with -lpthread)"
 	$(Q)$(CROSS_COMPILE)gcc -D_GNU_SOURCE -static -O2 -o $@ $< -lpthread
 
+# test-sched-policy spawns a pthread to verify per-thread TID lookup
+$(BUILD_DIR)/test-sched-policy: tests/test-sched-policy.c | $(BUILD_DIR)
+	@echo "  CROSS   $< (with -lpthread)"
+	$(Q)$(CROSS_COMPILE)gcc -D_GNU_SOURCE -static -O2 -o $@ $< -lpthread
+
 # test-signalfd-hardening needs -lpthread for the worker-thread tid
 # regression case in test_rt_sigqueueinfo_rejects_thread_tid.
 $(BUILD_DIR)/test-signalfd-hardening: tests/test-signalfd-hardening.c | $(BUILD_DIR)
@@ -158,6 +163,13 @@ $(BUILD_DIR)/test-signalfd-hardening: tests/test-signalfd-hardening.c | $(BUILD_
 $(BUILD_DIR)/test-futex-waitv: tests/test-futex-waitv.c | $(BUILD_DIR)
 	@echo "  CROSS   $< (with -lpthread)"
 	$(Q)$(CROSS_COMPILE)gcc -D_GNU_SOURCE -static -O2 -o $@ $< -lpthread
+
+# test-fork-lowbase must be a non-PIE ET_EXEC linked below ELF_DEFAULT_BASE so
+# nested forks exercise elf_load_min preservation across fork IPC.
+$(BUILD_DIR)/test-fork-lowbase: tests/test-fork-lowbase.c | $(BUILD_DIR)
+	@echo "  CROSS   $< (low-base ET_EXEC)"
+	$(Q)$(CROSS_COMPILE)gcc -D_GNU_SOURCE -static -O2 -no-pie \
+		-Wl,-Ttext-segment=0x200000 -o $@ $<
 
 endif
 

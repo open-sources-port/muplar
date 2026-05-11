@@ -74,6 +74,12 @@ _Static_assert(offsetof(struct rusage, ru_maxrss) ==
                    offsetof(linux_rusage_t, ru_maxrss),
                "ru_maxrss offset must stay aligned for fast translation");
 
+/* Defined below in the scheduler-policy section; forward-declared so
+ * sys_sched_getaffinity (which sits above the policy stubs) can share the
+ * same per-thread TID gate.
+ */
+static bool sched_pid_alive(int pid);
+
 static void groups_init_cached_linux_groups(void)
 {
     gid_t groups[64];
@@ -222,15 +228,37 @@ int64_t sys_getcwd(guest_t *g, uint64_t buf_gva, uint64_t size)
     return (int64_t) write_len;
 }
 
+int64_t sys_getcpu(guest_t *g,
+                   uint64_t cpu_gva,
+                   uint64_t node_gva,
+                   uint64_t cache_gva)
+{
+    (void) cache_gva;
+
+    /* elfuse models one online CPU and one NUMA node. glibc and tools such as
+     * file(1) only need a successful query here; the kernel cache pointer is
+     * obsolete and may be ignored.
+     */
+    uint32_t zero = 0;
+    if (cpu_gva && guest_write_small(g, cpu_gva, &zero, sizeof(zero)) < 0)
+        return -LINUX_EFAULT;
+    if (node_gva && guest_write_small(g, node_gva, &zero, sizeof(zero)) < 0)
+        return -LINUX_EFAULT;
+    return 0;
+}
+
 int64_t sys_sched_getaffinity(guest_t *g,
                               int pid,
                               uint64_t size,
                               uint64_t mask_gva)
 {
-    (void) pid;
     /* Return a 1-CPU affinity mask for simplicity.
      * sched_setaffinity is not implemented; all threads see CPU 0.
      */
+    if (pid < 0)
+        return -LINUX_EINVAL;
+    if (!sched_pid_alive(pid))
+        return -LINUX_ESRCH;
     if (size < 8)
         return -LINUX_EINVAL;
 
@@ -262,6 +290,179 @@ int64_t sys_sched_getaffinity(guest_t *g,
     }
 
     return 8; /* Returns size of written mask */
+}
+
+/* Scheduler policy stubs.
+ *
+ * elfuse models a single SCHED_OTHER thread group. Linux scheduler syscalls
+ * are per-thread: the pid argument is actually a TID, and a worker calling
+ * sched_getscheduler(gettid()) must reach its own thread entry, not just the
+ * thread-group leader. Live TIDs are matched via thread_tid_alive(); pid 0
+ * means "the calling thread" and is always accepted.
+ *
+ * Any policy transition away from SCHED_OTHER is rejected unless the stub can
+ * model it faithfully. Callers branch on the apparent policy, and silently
+ * accepting BATCH/IDLE/RT classes while still reporting SCHED_OTHER would
+ * hide guest bugs. SCHED_DEADLINE through legacy sched_setscheduler is
+ * -EINVAL because the legacy syscall cannot supply the deadline attributes
+ * (real Linux requires sched_setattr).
+ *
+ * Errno ordering follows Linux 6.x kernel/sched/syscalls.c:
+ *   1. pid < 0 or NULL param pointer -> EINVAL
+ *   2. copy_from_user (setters) -> EFAULT before pid lookup
+ *   3. find_process_by_pid -> ESRCH
+ *   4. policy/priority validation -> EINVAL or EPERM
+ * Getters that only write back leave EFAULT for the final copy_to_user step,
+ * matching the kernel's order.
+ */
+static bool sched_pid_alive(int pid)
+{
+    if (pid == 0)
+        return true;
+    if (pid == (int) proc_get_pid())
+        return true;
+    return thread_tid_alive((int64_t) pid) != 0;
+}
+
+/* Validate a sched_param for the named policy. Returns 0 if accepted by the
+ * stub, or a negative Linux errno. EPERM is reserved for "request would be
+ * valid on Linux but the stub refuses to honor it" -- RT priority elevation
+ * and BATCH/IDLE class transitions away from SCHED_OTHER. EINVAL covers
+ * every other out-of-spec input (bad priority range, SCHED_DEADLINE through
+ * the legacy entry point, unknown policy bits).
+ */
+static int sched_check_policy_param(int policy, int prio)
+{
+    int base_policy = policy & ~LINUX_SCHED_RESET_ON_FORK;
+
+    /* Reject any unknown high bit. The mask 0x7 covers every base policy
+     * id we recognize (NORMAL=0, FIFO=1, RR=2, BATCH=3, IDLE=5, DEADLINE=6);
+     * the unused 4 and 7 fall through to the default switch arm below.
+     */
+    if (policy & ~(LINUX_SCHED_RESET_ON_FORK | 0x7))
+        return -LINUX_EINVAL;
+
+    switch (base_policy) {
+    case LINUX_SCHED_NORMAL:
+        return prio == 0 ? 0 : -LINUX_EINVAL;
+    case LINUX_SCHED_BATCH:
+    case LINUX_SCHED_IDLE:
+        return prio == 0 ? -LINUX_EPERM : -LINUX_EINVAL;
+    case LINUX_SCHED_FIFO:
+    case LINUX_SCHED_RR:
+        if (prio < 1 || prio > 99)
+            return -LINUX_EINVAL;
+        return -LINUX_EPERM;
+    case LINUX_SCHED_DEADLINE:
+        return -LINUX_EINVAL;
+    default:
+        return -LINUX_EINVAL;
+    }
+}
+
+int64_t sys_sched_getscheduler(int pid)
+{
+    if (pid < 0)
+        return -LINUX_EINVAL;
+    if (!sched_pid_alive(pid))
+        return -LINUX_ESRCH;
+    return LINUX_SCHED_NORMAL;
+}
+
+int64_t sys_sched_getparam(guest_t *g, int pid, uint64_t param_gva)
+{
+    if (pid < 0 || param_gva == 0)
+        return -LINUX_EINVAL;
+    if (!sched_pid_alive(pid))
+        return -LINUX_ESRCH;
+    linux_sched_param_t param = {0};
+    if (guest_write_small(g, param_gva, &param, sizeof(param)) < 0)
+        return -LINUX_EFAULT;
+    return 0;
+}
+
+int64_t sys_sched_setscheduler(guest_t *g,
+                               int pid,
+                               int policy,
+                               uint64_t param_gva)
+{
+    if (pid < 0 || param_gva == 0)
+        return -LINUX_EINVAL;
+    linux_sched_param_t param;
+    if (guest_read_small(g, param_gva, &param, sizeof(param)) < 0)
+        return -LINUX_EFAULT;
+    if (!sched_pid_alive(pid))
+        return -LINUX_ESRCH;
+    return sched_check_policy_param(policy, param.sched_priority);
+}
+
+int64_t sys_sched_setparam(guest_t *g, int pid, uint64_t param_gva)
+{
+    if (pid < 0 || param_gva == 0)
+        return -LINUX_EINVAL;
+    linux_sched_param_t param;
+    if (guest_read_small(g, param_gva, &param, sizeof(param)) < 0)
+        return -LINUX_EFAULT;
+    if (!sched_pid_alive(pid))
+        return -LINUX_ESRCH;
+    /* Current policy is SCHED_OTHER, so only priority 0 is valid. Any other
+     * value mirrors the kernel's EINVAL for non-RT priority changes.
+     */
+    if (param.sched_priority != 0)
+        return -LINUX_EINVAL;
+    return 0;
+}
+
+int64_t sys_sched_get_priority_min(int policy)
+{
+    switch (policy) {
+    case LINUX_SCHED_NORMAL:
+    case LINUX_SCHED_BATCH:
+    case LINUX_SCHED_IDLE:
+    case LINUX_SCHED_DEADLINE:
+        return 0;
+    case LINUX_SCHED_FIFO:
+    case LINUX_SCHED_RR:
+        return 1;
+    default:
+        return -LINUX_EINVAL;
+    }
+}
+
+int64_t sys_sched_get_priority_max(int policy)
+{
+    switch (policy) {
+    case LINUX_SCHED_NORMAL:
+    case LINUX_SCHED_BATCH:
+    case LINUX_SCHED_IDLE:
+    case LINUX_SCHED_DEADLINE:
+        return 0;
+    case LINUX_SCHED_FIFO:
+    case LINUX_SCHED_RR:
+        return 99;
+    default:
+        return -LINUX_EINVAL;
+    }
+}
+
+int64_t sys_sched_rr_get_interval(guest_t *g, int pid, uint64_t ts_gva)
+{
+    if (pid < 0)
+        return -LINUX_EINVAL;
+    if (!sched_pid_alive(pid))
+        return -LINUX_ESRCH;
+    if (ts_gva == 0)
+        return -LINUX_EFAULT;
+    /* Linux's fair_sched_class.get_rr_interval returns a CFS-derived slice
+     * for SCHED_OTHER tasks whenever the runqueue carries load. Reporting
+     * 100 ms (the sched_rr_timeslice default and a typical CFS quantum)
+     * gives querying tools a plausible non-zero value without pretending
+     * the guest is actually under SCHED_RR.
+     */
+    linux_timespec_t ts = {.tv_sec = 0, .tv_nsec = 100 * 1000 * 1000L};
+    if (guest_write_small(g, ts_gva, &ts, sizeof(ts)) < 0)
+        return -LINUX_EFAULT;
+    return 0;
 }
 
 int64_t sys_getgroups(guest_t *g, int size, uint64_t list_gva)

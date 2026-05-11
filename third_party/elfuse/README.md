@@ -33,6 +33,12 @@ toolchain. The default paths in `mk/toolchain.mk` target the toolchain layout
 used by the repository test harness, but `CROSS_COMPILE` and
 `BAREMETAL_CROSS` are overridable.
 
+To run `make check`, install the Homebrew AArch64 embedded toolchain first:
+
+```sh
+brew install --cask gcc-aarch64-embedded
+```
+
 ## Quick Start
 
 ```sh

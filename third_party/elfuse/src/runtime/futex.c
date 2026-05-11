@@ -18,6 +18,7 @@
  * an absolute deadline. FUTEX_WAIT_BITSET always uses absolute time.
  */
 
+#include <errno.h>
 #include <pthread.h>
 #include <stdatomic.h>
 #include <stdbool.h>
@@ -33,6 +34,25 @@
 
 #include "syscall/abi.h"
 #include "syscall/proc.h"
+
+#include "debug/log.h"
+
+/* macOS 14.4+ ships os_sync_{wait_on_address_with_timeout,wake_by_address_any}
+ * with futex-style compare-and-wait semantics on process-private addresses.
+ * elfuse still keeps plain FUTEX_WAIT on the bucket path because Darwin reports
+ * the Linux -EAGAIN pre-block race as a successful wait, and that semantic gap
+ * is observable to user space. FUTEX_WAIT_BITSET, PI variants, and futex_waitv
+ * also stay on the bucket path: they need state the kernel API does not expose.
+ *
+ * SDK gate: probe the header via __has_include so older SDKs build clean.
+ * Runtime gate: __builtin_available cached in futex_init().
+ */
+#if __has_include(<os/os_sync_wait_on_address.h>)
+#include <os/os_sync_wait_on_address.h>
+#define ELFUSE_HAVE_OS_SYNC_WAIT_ON_ADDRESS 1
+#else
+#define ELFUSE_HAVE_OS_SYNC_WAIT_ON_ADDRESS 0
+#endif
 
 /* Interrupt flag: when set, futex_wait returns -EINTR. Used to simulate SIGCHLD
  * delivery when all CLONE_THREAD workers exit: wakes the main thread from
@@ -73,7 +93,28 @@ static _Atomic int futex_interrupt_requested = 0;
 #define FUTEX_OWNER_DIED 0x40000000U
 #define FUTEX_WAITERS 0x80000000U
 
-/* Hash table. */
+/* Address-wait helper state.
+ *
+ * os_sync_available is set in futex_init() when the runtime supports the
+ * os_sync_wait_on_address family (macOS 14.4+). Plain FUTEX_WAIT remains on
+ * the bucket path until Darwin can preserve Linux's -EAGAIN race semantics,
+ * so os_sync_wait_enabled stays false for now and the wake-side helper stays
+ * dormant too.
+ *
+ * The wait quantum is capped at 100 ms so proc_exit_group_requested() and
+ * futex_interrupt_pending() get noticed promptly without a process-wide
+ * broadcast channel. The 1-second EINTR simulation that the bucket path uses
+ * for shutdown-stalled multi-threaded runtimes is preserved here.
+ */
+#if ELFUSE_HAVE_OS_SYNC_WAIT_ON_ADDRESS
+static bool os_sync_available;
+static bool os_sync_wait_enabled;
+#endif
+
+#define FUTEX_OS_SYNC_POLL_CAP_NS (100ULL * 1000 * 1000)
+#define FUTEX_OS_SYNC_EINTR_SIM_MS 1000
+
+/* Hash table */
 
 #define FUTEX_BUCKETS 64
 
@@ -126,6 +167,11 @@ static inline unsigned futex_hash(uint64_t uaddr)
     return (unsigned) ((uaddr >> 2) ^ (uaddr >> 14)) % FUTEX_BUCKETS;
 }
 
+static inline bool futex_uaddr_is_aligned(uint64_t uaddr)
+{
+    return (uaddr & 0x3) == 0;
+}
+
 /* Unlink a waiter from its bucket's singly-linked list. Caller must hold
  * b->lock. Silently returns if the waiter is not in the list (already
  * unlinked by a wake/requeue).
@@ -148,6 +194,10 @@ void futex_init(void)
         pthread_mutex_init(&buckets[i].lock, NULL);
         buckets[i].head = NULL;
     }
+#if ELFUSE_HAVE_OS_SYNC_WAIT_ON_ADDRESS
+    if (__builtin_available(macOS 14.4, *))
+        os_sync_available = true;
+#endif
 }
 
 void futex_interrupt_request(void)
@@ -216,6 +266,202 @@ static int futex_make_deadline(guest_t *g,
     return 0;
 }
 
+/* Compute the relative wait quantum until an absolute CLOCK_REALTIME deadline,
+ * capped at cap_ns. Operates on (sec, nsec) pairs to avoid overflowing
+ * int64_t when delta_sec * NSEC_PER_SEC could exceed INT64_MAX:
+ * linux_timespec_is_valid() accepts tv_sec up to FUTEX_TIMESPEC_SEC_MAX
+ * (== INT64_MAX/4), and the absolute-deadline path forwards that value
+ * unchanged into the host timespec. Multiplying tv_sec * 1e9 first would
+ * overflow signed arithmetic for adversarial guest inputs.
+ *
+ * Borrow-normalize the (delta_sec, delta_nsec) pair before comparing so a
+ * caller who hits delta_sec == 1 with delta_nsec < 0 (e.g., deadline tv_nsec
+ * just past now tv_nsec when now is near a second boundary) does not get
+ * billed the full cap when only a few nanoseconds remain. After the borrow
+ * delta_nsec lives in [0, NSEC_PER_SEC); a single borrow always suffices
+ * because both inputs are normalized.
+ *
+ * Once delta_sec >= 1 (post-borrow) the cap (~100 ms) dominates regardless
+ * of delta_nsec, so the function returns cap_ns. delta_sec == 0 falls
+ * through to min(delta_nsec, cap_ns). delta_sec < 0 (or delta_sec == 0 and
+ * delta_nsec == 0) means the deadline has elapsed; return 0 so the caller
+ * surfaces ETIMEDOUT without re-arming.
+ */
+static uint64_t futex_remaining_ns(const struct timespec *deadline,
+                                   uint64_t cap_ns)
+{
+    struct timespec now;
+    clock_gettime(CLOCK_REALTIME, &now);
+    int64_t delta_sec = (int64_t) deadline->tv_sec - (int64_t) now.tv_sec;
+    long delta_nsec = deadline->tv_nsec - now.tv_nsec;
+    if (delta_nsec < 0) {
+        delta_sec -= 1;
+        delta_nsec += (long) NSEC_PER_SEC;
+    }
+    if (delta_sec < 0 || (delta_sec == 0 && delta_nsec == 0))
+        return 0;
+    if (delta_sec >= 1)
+        return cap_ns;
+    /* delta_sec == 0 and delta_nsec > 0; the borrow above guarantees
+     * delta_nsec < NSEC_PER_SEC.
+     */
+    uint64_t rem = (uint64_t) delta_nsec;
+    return rem < cap_ns ? rem : cap_ns;
+}
+
+#if ELFUSE_HAVE_OS_SYNC_WAIT_ON_ADDRESS
+
+/* Wake up to budget kernel-side waiters at uaddr via
+ * os_sync_wake_by_address_any. Loops until the cap is hit or the API stops
+ * finding waiters; ENOENT (no more waiters) and any other error break out. _all
+ * overshoots the syscall return -- the count must be exact -- so this function
+ * intentionally calls _any in a loop instead.
+ *
+ * budget is uint64_t to accommodate FUTEX_REQUEUE's wake + requeue sum after
+ * the bucket walk; the loop counter is clamped to UINT32_MAX, which still
+ * preserves the INT_MAX "wake all" sentinel without overflow.
+ */
+static uint32_t futex_os_sync_wake_n(const guest_t *g,
+                                     uint64_t uaddr,
+                                     uint64_t budget)
+{
+    if (!os_sync_available || !os_sync_wait_enabled || budget == 0)
+        return 0;
+    void *host_addr = guest_ptr(g, uaddr);
+    if (!host_addr)
+        return 0;
+    if (budget > UINT32_MAX)
+        budget = UINT32_MAX;
+
+    uint32_t woken = 0;
+    while (woken < (uint32_t) budget) {
+        int rc = os_sync_wake_by_address_any(host_addr, 4,
+                                             OS_SYNC_WAKE_BY_ADDRESS_NONE);
+        if (rc < 0)
+            break;
+        woken++;
+    }
+    return woken;
+}
+
+/* Plain FUTEX_WAIT routed through os_sync_wait_on_address_with_timeout.
+ *
+ * The pre-check is required: the kernel API silently returns rc>=0 when the
+ * value already differs at entry, indistinguishable from a real wakeup. Linux
+ * returns -EAGAIN in that case, so an explicit __atomic_load_n bridges the
+ * contract gap.
+ *
+ * Quantum is bounded by FUTEX_OS_SYNC_POLL_CAP_NS so proc_exit_group_requested,
+ * futex_interrupt_pending, and the 1-second EINTR simulation get observed
+ * without a global wake-everyone broadcast channel. ETIMEDOUT, EINTR, EFAULT,
+ * and ENOMEM are all transient per Apple's docs; each must run the flag check
+ * before re-arming. EINVAL would indicate a programmer error here (size != 4/8
+ * or bad flags), so it surfaces directly rather than spinning.
+ */
+static int64_t futex_os_sync_wait(guest_t *g,
+                                  uint64_t uaddr,
+                                  uint32_t expected,
+                                  uint64_t timeout_gva)
+{
+    if (!futex_uaddr_is_aligned(uaddr))
+        return -LINUX_EINVAL;
+
+    bool has_timeout = (timeout_gva != 0);
+    struct timespec deadline;
+    if (has_timeout) {
+        int rc =
+            futex_make_deadline(g, timeout_gva, /*is_absolute=*/0, &deadline);
+        if (rc == -1)
+            return -LINUX_EFAULT;
+        if (rc == -2)
+            return -LINUX_EINVAL;
+    }
+
+    uint32_t *host_addr = (uint32_t *) guest_ptr(g, uaddr);
+    if (!host_addr)
+        return -LINUX_EFAULT;
+
+    uint32_t current = __atomic_load_n(host_addr, __ATOMIC_SEQ_CST);
+    if (current != expected)
+        return -LINUX_EAGAIN;
+
+    struct timeval wait_start;
+    if (!has_timeout)
+        gettimeofday(&wait_start, NULL);
+
+    /* Bound consecutive EFAULT retries. Apple documents EFAULT as transient
+     * (kernel copyin failure under memory pressure), so a few retries are fine;
+     * but a genuinely bad page would otherwise cause the loop to spin with no
+     * real sleep -- timeout_ns is supplied to syscall that returns immediately
+     * -- until either the user deadline or the 1-second EINTR simulation
+     *  finally bails out. Surface EFAULT to the guest after this many
+     *  back-to-back failures so the host CPU does not burn for ~1 s.
+     */
+    int efault_retries = 0;
+
+    for (;;) {
+        uint64_t timeout_ns;
+        if (has_timeout) {
+            timeout_ns =
+                futex_remaining_ns(&deadline, FUTEX_OS_SYNC_POLL_CAP_NS);
+            if (timeout_ns == 0)
+                return -LINUX_ETIMEDOUT;
+        } else {
+            timeout_ns = FUTEX_OS_SYNC_POLL_CAP_NS;
+        }
+
+        int rc = os_sync_wait_on_address_with_timeout(
+            host_addr, (uint64_t) expected, 4, OS_SYNC_WAIT_ON_ADDRESS_NONE,
+            OS_CLOCK_MACH_ABSOLUTE_TIME, timeout_ns);
+        if (rc >= 0)
+            return 0;
+
+        int err = errno;
+        if (err != ETIMEDOUT && err != EINTR && err != EFAULT && err != ENOMEM)
+            return -LINUX_EINVAL;
+
+        if (err == EFAULT) {
+            if (++efault_retries >= 8)
+                return -LINUX_EFAULT;
+        } else {
+            efault_retries = 0;
+        }
+
+        if (proc_exit_group_requested() || futex_interrupt_pending())
+            return -LINUX_EINTR;
+
+        if (!has_timeout) {
+            struct timeval now;
+            gettimeofday(&now, NULL);
+            long elapsed_ms = (now.tv_sec - wait_start.tv_sec) * 1000 +
+                              (now.tv_usec - wait_start.tv_usec) / 1000;
+            if (elapsed_ms >= FUTEX_OS_SYNC_EINTR_SIM_MS)
+                return -LINUX_EINTR;
+        }
+        /* For has_timeout: futex_remaining_ns returns 0 next iteration once
+         * the user deadline elapses, so the loop exits with -ETIMEDOUT.
+         */
+    }
+}
+
+#else /* !ELFUSE_HAVE_OS_SYNC_WAIT_ON_ADDRESS */
+
+/* Stub fallback: dead branch on builds whose SDK lacks the header. The
+ * dispatch sites guard on os_sync_available, so this stub is unreachable
+ * at runtime, but it keeps the link clean.
+ */
+static uint32_t futex_os_sync_wake_n(const guest_t *g,
+                                     uint64_t uaddr,
+                                     uint64_t budget)
+{
+    (void) g;
+    (void) uaddr;
+    (void) budget;
+    return 0;
+}
+
+#endif /* ELFUSE_HAVE_OS_SYNC_WAIT_ON_ADDRESS */
+
 /* FUTEX_WAIT / FUTEX_WAIT_BITSET: atomically check word == val, then sleep. */
 static int64_t futex_wait(guest_t *g,
                           uint64_t uaddr,
@@ -225,6 +471,8 @@ static int64_t futex_wait(guest_t *g,
                           int is_absolute)
 {
     if (bitset == 0)
+        return -LINUX_EINVAL;
+    if (!futex_uaddr_is_aligned(uaddr))
         return -LINUX_EINVAL;
 
     unsigned idx = futex_hash(uaddr);
@@ -370,10 +618,22 @@ static int64_t futex_wait(guest_t *g,
 /* FUTEX_WAKE / FUTEX_WAKE_BITSET: wake up to val waiters at uaddr.
  * Woken waiters are unlinked from the bucket list so subsequent operations do
  * not count them as still-sleeping entries.
+ *
+ * If the Darwin address-wait path is ever enabled again, drain any kernel-side
+ * waiters at the same address up to the remaining budget so a wake site that
+ * walked only the bucket would not strand them. Plain FUTEX_WAIT enqueues with
+ * implicit FUTEX_BITSET_MATCH_ANY, which matches every legal FUTEX_WAKE_BITSET
+ * mask (mask must be non-zero by Linux contract), so those waiters remain valid
+ * wake targets.
  */
-static int64_t futex_wake(uint64_t uaddr, uint32_t val, uint32_t bitset)
+static int64_t futex_wake(const guest_t *g,
+                          uint64_t uaddr,
+                          uint32_t val,
+                          uint32_t bitset)
 {
     if (bitset == 0)
+        return -LINUX_EINVAL;
+    if (!futex_uaddr_is_aligned(uaddr))
         return -LINUX_EINVAL;
 
     unsigned idx = futex_hash(uaddr);
@@ -397,6 +657,11 @@ static int64_t futex_wake(uint64_t uaddr, uint32_t val, uint32_t bitset)
     }
 
     pthread_mutex_unlock(&b->lock);
+
+    if ((uint32_t) woken < val) {
+        uint64_t budget = (uint64_t) val - (uint64_t) woken;
+        woken += (int) futex_os_sync_wake_n(g, uaddr, budget);
+    }
 
     return woken;
 }
@@ -422,6 +687,9 @@ static int64_t futex_requeue(guest_t *g,
                              int do_cmp,
                              uint32_t expected)
 {
+    if (!futex_uaddr_is_aligned(uaddr) || !futex_uaddr_is_aligned(uaddr2))
+        return -LINUX_EINVAL;
+
     unsigned idx_src = futex_hash(uaddr);
     unsigned idx_dst = futex_hash(uaddr2);
     futex_bucket_t *b_src = &buckets[idx_src];
@@ -498,6 +766,22 @@ static int64_t futex_requeue(guest_t *g,
         pthread_mutex_unlock(&b_dst->lock);
     }
 
+    /* If the Darwin address-wait path is enabled again, drain the remaining
+     * wake + requeue budget against kernel-side waiters at uaddr. The kernel
+     * API has no facility for migrating waiters between addresses, so the
+     * requeue portion degrades into a wake at uaddr: waiters return to
+     * userland and either re-acquire what they actually need (typically the
+     * mutex pthread_cond_broadcast wanted to requeue onto) or re-wait.
+     * Widen the cap to uint64_t before adding so INT_MAX + INT_MAX fits,
+     * then clamp to UINT32_MAX inside futex_os_sync_wake_n; this preserves
+     * the INT_MAX "wake all" sentinel without overflowing the syscall return
+     * contract (woken + requeued must not exceed wake_count + requeue_count).
+     */
+    uint64_t remaining_wake = (uint64_t) wake_count - (uint64_t) woken;
+    uint64_t remaining_requeue = (uint64_t) requeue_count - (uint64_t) requeued;
+    uint64_t budget = remaining_wake + remaining_requeue;
+    woken += (int) futex_os_sync_wake_n(g, uaddr, budget);
+
     return woken + requeued;
 }
 
@@ -521,6 +805,9 @@ static int64_t futex_wake_op(guest_t *g,
                              uint32_t val2,
                              uint32_t val3)
 {
+    if (!futex_uaddr_is_aligned(uaddr) || !futex_uaddr_is_aligned(uaddr2))
+        return -LINUX_EINVAL;
+
     unsigned idx1 = futex_hash(uaddr);
     unsigned idx2 = futex_hash(uaddr2);
     futex_bucket_t *b1 = &buckets[idx1];
@@ -599,16 +886,16 @@ static int64_t futex_wake_op(guest_t *g,
                                           __ATOMIC_SEQ_CST));
 
     /* Wake up to val waiters at uaddr (unlink woken entries) */
-    int woken = 0;
+    int woken1 = 0;
     futex_waiter_t **pp1 = &b1->head;
-    while (*pp1 && (uint32_t) woken < val) {
+    while (*pp1 && (uint32_t) woken1 < val) {
         futex_waiter_t *w = *pp1;
         if (w->uaddr == uaddr) {
             *pp1 = w->next;
             __atomic_store_n(&w->woken, 1, __ATOMIC_RELEASE);
             pthread_cond_signal(&w->cond);
             futex_waiter_notify_group(w);
-            woken++;
+            woken1++;
         } else {
             pp1 = &w->next;
         }
@@ -642,9 +929,9 @@ static int64_t futex_wake_op(guest_t *g,
     }
 
     /* Conditionally wake up to val2 waiters at uaddr2 (unlink woken) */
+    int woken2 = 0;
     if (cond_met) {
         futex_waiter_t **pp2 = &b2->head;
-        int woken2 = 0;
         while (*pp2 && (uint32_t) woken2 < val2) {
             futex_waiter_t *w2 = *pp2;
             if (w2->uaddr == uaddr2) {
@@ -657,7 +944,6 @@ static int64_t futex_wake_op(guest_t *g,
                 pp2 = &w2->next;
             }
         }
-        woken += woken2;
     }
 
     /* Unlock reverse order */
@@ -671,7 +957,20 @@ static int64_t futex_wake_op(guest_t *g,
         pthread_mutex_unlock(&b2->lock);
     }
 
-    return woken;
+    /* If the Darwin address-wait path is enabled again, drain the remaining
+     * bucket budget against kernel-side waiters at each address. The uaddr2
+     * wake only fires when the predicate matched the old value of *uaddr2.
+     */
+    if ((uint32_t) woken1 < val) {
+        uint64_t budget1 = (uint64_t) val - (uint64_t) woken1;
+        woken1 += (int) futex_os_sync_wake_n(g, uaddr, budget1);
+    }
+    if (cond_met && (uint32_t) woken2 < val2) {
+        uint64_t budget2 = (uint64_t) val2 - (uint64_t) woken2;
+        woken2 += (int) futex_os_sync_wake_n(g, uaddr2, budget2);
+    }
+
+    return woken1 + woken2;
 }
 
 /* PI (Priority-Inheritance) futex.
@@ -699,6 +998,9 @@ static int64_t futex_wake_op(guest_t *g,
  */
 static int64_t futex_lock_pi(guest_t *g, uint64_t uaddr, uint64_t timeout_gva)
 {
+    if (!futex_uaddr_is_aligned(uaddr))
+        return -LINUX_EINVAL;
+
     uint32_t *word = (uint32_t *) guest_ptr_w(g, uaddr);
     if (!word)
         return -LINUX_EFAULT;
@@ -891,6 +1193,9 @@ static int64_t futex_lock_pi(guest_t *g, uint64_t uaddr, uint64_t timeout_gva)
  */
 static int64_t futex_trylock_pi(guest_t *g, uint64_t uaddr)
 {
+    if (!futex_uaddr_is_aligned(uaddr))
+        return -LINUX_EINVAL;
+
     uint32_t *word = (uint32_t *) guest_ptr_w(g, uaddr);
     if (!word)
         return -LINUX_EFAULT;
@@ -916,6 +1221,9 @@ static int64_t futex_trylock_pi(guest_t *g, uint64_t uaddr)
  */
 static int64_t futex_unlock_pi(guest_t *g, uint64_t uaddr)
 {
+    if (!futex_uaddr_is_aligned(uaddr))
+        return -LINUX_EINVAL;
+
     uint32_t *word = (uint32_t *) guest_ptr_w(g, uaddr);
     if (!word)
         return -LINUX_EFAULT;
@@ -975,11 +1283,15 @@ int64_t sys_futex(guest_t *g,
 
     switch (cmd) {
     case FUTEX_WAIT:
+#if ELFUSE_HAVE_OS_SYNC_WAIT_ON_ADDRESS
+        if (os_sync_available && os_sync_wait_enabled)
+            return futex_os_sync_wait(g, uaddr, val, timeout_gva);
+#endif
         return futex_wait(g, uaddr, val, timeout_gva, FUTEX_BITSET_MATCH_ANY,
                           /*is_absolute=*/0);
 
     case FUTEX_WAKE:
-        return futex_wake(uaddr, val, FUTEX_BITSET_MATCH_ANY);
+        return futex_wake(g, uaddr, val, FUTEX_BITSET_MATCH_ANY);
 
     case FUTEX_REQUEUE:
         /* For REQUEUE, the timeout arg is repurposed as val2 (requeue count) */
@@ -1000,7 +1312,7 @@ int64_t sys_futex(guest_t *g,
         return futex_wait(g, uaddr, val, timeout_gva, val3, /*is_absolute=*/1);
 
     case FUTEX_WAKE_BITSET:
-        return futex_wake(uaddr, val, val3);
+        return futex_wake(g, uaddr, val, val3);
 
     case FUTEX_LOCK_PI:
         return futex_lock_pi(g, uaddr, timeout_gva);
@@ -1021,8 +1333,7 @@ int64_t sys_futex(guest_t *g,
 
 int futex_wake_one(guest_t *g, uint64_t uaddr)
 {
-    (void) g;
-    return (int) futex_wake(uaddr, 1, FUTEX_BITSET_MATCH_ANY);
+    return (int) futex_wake(g, uaddr, 1, FUTEX_BITSET_MATCH_ANY);
 }
 
 /* Unlink a waiter from whichever bucket it currently sits in, with retry on
@@ -1210,7 +1521,7 @@ int64_t sys_futex_waitv(guest_t *g,
          * FUTEX2_SIZE_U32 that is 4-byte alignment; an unaligned futex word
          * loses atomicity on aarch64 and matches no kernel-side behavior.
          */
-        if (elts[i].uaddr & 0x3)
+        if (!futex_uaddr_is_aligned(elts[i].uaddr))
             return -LINUX_EINVAL;
     }
 
@@ -1402,8 +1713,12 @@ void robust_list_walk(guest_t *g, thread_entry_t *t)
             futex_gva = list_ptr + (uint64_t) futex_offset;
         else
             futex_gva = list_ptr - (uint64_t) (-futex_offset);
-        if (futex_gva >= g->ipa_base + g->guest_size) {
-            /* Address out of guest range; skip this entry */
+        if (futex_gva >= g->ipa_base + g->guest_size ||
+            !futex_uaddr_is_aligned(futex_gva)) {
+            /* Out of range or unaligned: skip. Linux's unaligned_p() rejects
+             * these; emulating the same avoids partial cross-page writes
+             * leaving the futex word corrupted while the wake is suppressed.
+             */
             uint64_t next;
             if (guest_read_small(g, list_ptr, &next, sizeof(next)) < 0)
                 break;
@@ -1422,8 +1737,14 @@ void robust_list_walk(guest_t *g, thread_entry_t *t)
                 /* Set FUTEX_OWNER_DIED and clear TID */
                 uint32_t new_val =
                     (futex_val & ~FUTEX_TID_MASK) | FUTEX_OWNER_DIED;
-                guest_write_small(g, futex_gva, &new_val, sizeof(new_val));
-                futex_wake(futex_gva, 1, FUTEX_BITSET_MATCH_ANY);
+                if (guest_write_small(g, futex_gva, &new_val, sizeof(new_val)) <
+                    0)
+                    log_debug(
+                        "futex: robust list OWNER_DIED write to 0x%llx "
+                        "failed; waiters on this lock may hang",
+                        (unsigned long long) futex_gva);
+                else
+                    futex_wake(g, futex_gva, 1, FUTEX_BITSET_MATCH_ANY);
             }
         }
 
@@ -1444,6 +1765,9 @@ void robust_list_walk(guest_t *g, thread_entry_t *t)
             futex_gva = pending + (uint64_t) futex_offset;
         else
             futex_gva = pending - (uint64_t) (-futex_offset);
+        if (futex_gva >= g->ipa_base + g->guest_size ||
+            !futex_uaddr_is_aligned(futex_gva))
+            return;
         uint32_t futex_val;
         if (guest_read_small(g, futex_gva, &futex_val, sizeof(futex_val)) ==
             0) {
@@ -1451,8 +1775,14 @@ void robust_list_walk(guest_t *g, thread_entry_t *t)
             if (owner == (uint32_t) t->guest_tid) {
                 uint32_t new_val =
                     (futex_val & ~FUTEX_TID_MASK) | FUTEX_OWNER_DIED;
-                guest_write_small(g, futex_gva, &new_val, sizeof(new_val));
-                futex_wake(futex_gva, 1, FUTEX_BITSET_MATCH_ANY);
+                if (guest_write_small(g, futex_gva, &new_val, sizeof(new_val)) <
+                    0)
+                    log_debug(
+                        "futex: robust list pending OWNER_DIED write to "
+                        "0x%llx failed; waiters on this lock may hang",
+                        (unsigned long long) futex_gva);
+                else
+                    futex_wake(g, futex_gva, 1, FUTEX_BITSET_MATCH_ANY);
             }
         }
     }

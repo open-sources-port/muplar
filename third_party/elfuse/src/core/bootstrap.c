@@ -134,10 +134,10 @@ static bool build_boot_regions(mem_region_t *regions,
      * to the vDSO page when splitting the block; otherwise vdso_build cannot
      * write into it through guest_ptr.
      */
-    if (!append_boot_region(regions, nregions, SHIM_BASE,
-                            SHIM_BASE + shim_bin_len, MEM_PERM_RX) ||
-        !append_boot_region(regions, nregions, SHIM_DATA_BASE,
-                            SHIM_DATA_BASE + BLOCK_2MIB, MEM_PERM_RW) ||
+    if (!append_boot_region(regions, nregions, g->shim_base,
+                            g->shim_base + shim_bin_len, MEM_PERM_RX) ||
+        !append_boot_region(regions, nregions, g->shim_data_base,
+                            g->shim_data_base + BLOCK_2MIB, MEM_PERM_RW) ||
         !append_boot_region(regions, nregions, VDSO_BASE, VDSO_BASE + VDSO_SIZE,
                             MEM_PERM_RX)) {
         return false;
@@ -234,6 +234,11 @@ int guest_bootstrap_prepare(guest_t *g,
         return -1;
     }
 
+    /* Track the lowest loaded ELF address so the legacy fork IPC path
+     * copies low-linked ET_EXECs (e.g. linked at 0x200000) in full.
+     */
+    g->elf_load_min = boot->elf_info.load_min + boot->elf_load_base;
+
     g->brk_base = PAGE_ALIGN_UP(boot->elf_info.load_max + boot->elf_load_base);
     if (g->brk_base < BRK_BASE_DEFAULT)
         g->brk_base = BRK_BASE_DEFAULT;
@@ -252,15 +257,16 @@ int guest_bootstrap_prepare(guest_t *g,
         return -1;
     }
 
-    memcpy((uint8_t *) g->host_base + SHIM_BASE, shim_bin, shim_bin_len);
+    memcpy((uint8_t *) g->host_base + g->shim_base, shim_bin, shim_bin_len);
     log_debug("shim loaded at offset 0x%llx (%zu bytes)",
-              (unsigned long long) SHIM_BASE, shim_bin_len);
+              (unsigned long long) g->shim_base, shim_bin_len);
 
     invalidate_exec_segments(&boot->elf_info, g->host_base,
                              boot->elf_load_base);
     invalidate_exec_segments(&boot->interp_info, g->host_base,
                              boot->interp_base);
-    sys_icache_invalidate((uint8_t *) g->host_base + SHIM_BASE, shim_bin_len);
+    sys_icache_invalidate((uint8_t *) g->host_base + g->shim_base,
+                          shim_bin_len);
 
     if (!build_boot_regions(regions, &nregions, g, boot, shim_bin_len)) {
         log_error("too many memory regions (%d >= %d)", nregions,
@@ -275,10 +281,10 @@ int guest_bootstrap_prepare(guest_t *g,
     }
     g->need_tlbi = true;
 
-    guest_region_add(g, SHIM_BASE, SHIM_BASE + shim_bin_len,
+    guest_region_add(g, g->shim_base, g->shim_base + shim_bin_len,
                      LINUX_PROT_READ | LINUX_PROT_EXEC, LINUX_MAP_PRIVATE, 0,
                      "[shim]");
-    guest_region_add(g, SHIM_DATA_BASE, SHIM_DATA_BASE + BLOCK_2MIB,
+    guest_region_add(g, g->shim_data_base, g->shim_data_base + BLOCK_2MIB,
                      LINUX_PROT_READ | LINUX_PROT_WRITE, LINUX_MAP_PRIVATE, 0,
                      "[shim-data]");
 
@@ -380,10 +386,10 @@ int guest_bootstrap_create_vcpu(guest_t *g,
     uint64_t sctlr;
     uint64_t sctlr_with_mmu;
     uint64_t tcr_value = TCR_EL1_VALUE;
-    uint64_t shim_ipa = guest_ipa(g, SHIM_BASE);
+    uint64_t shim_ipa = guest_ipa(g, g->shim_base);
     uint64_t entry_ipa = guest_ipa(g, boot->entry_point);
     uint64_t sp_ipa = guest_ipa(g, boot->stack_pointer);
-    uint64_t el1_sp = guest_ipa(g, SHIM_DATA_BASE + BLOCK_2MIB);
+    uint64_t el1_sp = guest_ipa(g, g->shim_data_base + BLOCK_2MIB);
     hv_vcpu_t vcpu;
     hv_vcpu_exit_t *vexit;
 

@@ -1,3 +1,3 @@
-int _start() {
+int main() {
     return 42;
 }

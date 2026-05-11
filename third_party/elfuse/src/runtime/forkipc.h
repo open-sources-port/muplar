@@ -21,7 +21,12 @@
  * vCPU run loop. Called from main.c when --fork-child is specified.
  * Returns the process exit code.
  */
-int fork_child_main(int ipc_fd, bool verbose, int timeout_sec);
+int fork_child_main(int ipc_fd,
+                    int vfork_notify_fd,
+                    bool verbose,
+                    int timeout_sec);
+
+void fork_notify_vfork_exec(void);
 
 /* Clone syscall: spawn a new host elfuse process with IPC state transfer.
  * Returns child guest PID to parent, or negative Linux errno.
@@ -30,6 +35,8 @@ int64_t sys_clone(hv_vcpu_t vcpu,
                   guest_t *g,
                   uint64_t flags,
                   uint64_t child_stack,
+                  uint64_t stack_map_start,
+                  uint64_t stack_map_end,
                   uint64_t ptid_gva,
                   uint64_t tls,
                   uint64_t ctid_gva,

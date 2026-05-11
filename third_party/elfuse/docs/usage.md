@@ -16,7 +16,7 @@ Supported user-facing options:
 | `-h`, `--help` | Print built-in usage help |
 | `-V`, `--version` | Print the build version and exit |
 | `-v`, `--verbose` | Enable syscall-level and loader diagnostics |
-| `-t`, `--timeout N` | Per-iteration vCPU watchdog, in seconds (default `10`) |
+| `-t`, `--timeout N` | Per-iteration vCPU watchdog, in seconds (default `10`, `0` disables) |
 | `--sysroot PATH` | Resolve guest absolute paths under `PATH` first |
 | `--gdb PORT` | Listen for a GDB RSP client on `PORT` |
 | `--gdb-stop-on-entry` | Stop before the first guest instruction |
@@ -25,6 +25,7 @@ Supported user-facing options:
 `--timeout` is a run-loop watchdog. It does not cap total process runtime. It
 only bounds a single `hv_vcpu_run()` iteration before the host regains control,
 which is what allows host-side timers and signals to be observed promptly.
+Setting `--timeout 0` disables this watchdog for long-running CPU-bound guests.
 
 ## Common Launch Patterns
 

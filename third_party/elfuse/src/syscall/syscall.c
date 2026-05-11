@@ -213,7 +213,11 @@ SC_FORWARD(sc_fchmodat2,   sys_fchmodat(g, (int) x0, x1, (uint32_t) x2, (int) x3
 SC_FORWARD(sc_fchownat,    sys_fchownat(g, (int) x0, x1, (uint32_t) x2, (uint32_t) x3, (int) x4))
 SC_FORWARD(sc_fchown,      sys_fchown((int) x0, (uint32_t) x1, (uint32_t) x2))
 SC_FORWARD(sc_utimensat,   sys_utimensat(g, (int) x0, x1, x2, (int) x3))
-SC_FORWARD(sc_faccessat,   sys_faccessat(g, (int) x0, x1, (int) x2, (int) x3))
+/* Linux faccessat (SYS 48) is 3-arg: dirfd, path, mode.
+ * The flags parameter was added in faccessat2 (SYS 439).
+ * x3 contains garbage from the caller's register state.
+ */
+SC_FORWARD(sc_faccessat,   sys_faccessat(g, (int) x0, x1, (int) x2, 0))
 SC_FORWARD(sc_faccessat2,  sys_faccessat(g, (int) x0, x1, (int) x2, (int) x3))
 SC_FORWARD(sc_ftruncate,   sys_ftruncate((int) x0, (int64_t) x1))
 SC_FORWARD(sc_truncate,    sys_truncate(g, x0, (int64_t) x1))
@@ -302,13 +306,21 @@ SC_FORWARD(sc_rt_sigpending,  signal_rt_sigpending(g, x0, x1))
 /* System info */
 SC_FORWARD(sc_uname,     sys_uname(g, x0))
 SC_FORWARD(sc_getrandom, sys_getrandom(g, x0, x1, (unsigned int) x2))
+SC_FORWARD(sc_getcpu,    sys_getcpu(g, x0, x1, x2))
 SC_FORWARD(sc_sysinfo,   sys_sysinfo(g, x0))
 SC_FORWARD(sc_prlimit64, sys_prlimit64(g, (int) x0, (int) x1, x2, x3))
 SC_FORWARD(sc_getrlimit, sys_prlimit64(g, 0, (int) x0, 0, x1))
 SC_FORWARD(sc_setrlimit, sys_prlimit64(g, 0, (int) x0, x1, 0))
 SC_FORWARD(sc_getgroups, sys_getgroups(g, (int) x0, x1))
 SC_FORWARD(sc_getrusage, sys_getrusage(g, (int) x0, x1))
-SC_FORWARD(sc_sched_getaffinity, sys_sched_getaffinity(g, (int) x0, x1, x2))
+SC_FORWARD(sc_sched_getaffinity,    sys_sched_getaffinity(g, (int) x0, x1, x2))
+SC_FORWARD(sc_sched_getscheduler,   sys_sched_getscheduler((int) x0))
+SC_FORWARD(sc_sched_getparam,       sys_sched_getparam(g, (int) x0, x1))
+SC_FORWARD(sc_sched_setscheduler,   sys_sched_setscheduler(g, (int) x0, (int) x1, x2))
+SC_FORWARD(sc_sched_setparam,       sys_sched_setparam(g, (int) x0, x1))
+SC_FORWARD(sc_sched_get_priority_min, sys_sched_get_priority_min((int) x0))
+SC_FORWARD(sc_sched_get_priority_max, sys_sched_get_priority_max((int) x0))
+SC_FORWARD(sc_sched_rr_get_interval,  sys_sched_rr_get_interval(g, (int) x0, x1))
 
 /* Process identity is modeled as one Linux process inside this elfuse instance. */
 SC_FORWARD(sc_exit,    SC_EXIT_SENTINEL | ((int) x0 & 0xFF))
@@ -1518,7 +1530,8 @@ static int64_t sc_clone(guest_t *g,
         (unsigned long long) x0, (unsigned long long) x1,
         (unsigned long long) x2, (unsigned long long) x3,
         (unsigned long long) x4);
-    return sys_clone(current_thread->vcpu, g, x0, x1, x2, x3, x4, verbose);
+    return sys_clone(current_thread->vcpu, g, x0, x1, 0, 0, x2, x3, x4,
+                     verbose);
 }
 
 static int64_t sc_clone3(guest_t *g,

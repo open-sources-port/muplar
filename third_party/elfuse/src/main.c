@@ -80,7 +80,7 @@ int main(int argc, char **argv)
     log_init();
 
     bool verbose = false;
-    int timeout_sec = 10, fork_child_fd = -1;
+    int timeout_sec = 10, fork_child_fd = -1, vfork_notify_fd = -1;
     const char *sysroot = NULL;
     int gdb_port = 0;
     bool gdb_stop_on_entry = false;
@@ -103,7 +103,7 @@ int main(int argc, char **argv)
                 "  -V, --version           Show version and exit\n"
                 "  -v, --verbose           Trace each guest syscall\n"
                 "  --timeout N             Per-iteration vCPU run timeout "
-                "(seconds, default 10)\n"
+                "(seconds, default 10; 0 disables)\n"
                 "  --sysroot PATH          Resolve absolute guest paths under "
                 "PATH first\n"
                 "  --gdb PORT              Listen for GDB Remote Serial "
@@ -124,7 +124,7 @@ int main(int argc, char **argv)
         } else if ((!strcmp(argv[arg_start], "--timeout") ||
                     !strcmp(argv[arg_start], "-t")) &&
                    arg_start + 1 < argc) {
-            if (parse_int_arg(argv[arg_start + 1], 1, INT_MAX, &timeout_sec) <
+            if (parse_int_arg(argv[arg_start + 1], 0, INT_MAX, &timeout_sec) <
                 0)
                 timeout_sec = 10;
             arg_start += 2;
@@ -133,6 +133,14 @@ int main(int argc, char **argv)
             if (parse_int_arg(argv[arg_start + 1], 0, INT_MAX, &fork_child_fd) <
                 0) {
                 log_error("invalid fork child fd: %s", argv[arg_start + 1]);
+                return 1;
+            }
+            arg_start += 2;
+        } else if (!strcmp(argv[arg_start], "--vfork-notify-fd") &&
+                   arg_start + 1 < argc) {
+            if (parse_int_arg(argv[arg_start + 1], 0, INT_MAX,
+                              &vfork_notify_fd) < 0) {
+                log_error("invalid vfork notify fd: %s", argv[arg_start + 1]);
                 return 1;
             }
             arg_start += 2;
@@ -166,7 +174,8 @@ int main(int argc, char **argv)
 
     /* Fork-child mode: receive VM state over IPC and run */
     if (fork_child_fd >= 0)
-        return fork_child_main(fork_child_fd, verbose, timeout_sec);
+        return fork_child_main(fork_child_fd, vfork_notify_fd, verbose,
+                               timeout_sec);
 
     if (arg_start >= argc) {
         log_error(

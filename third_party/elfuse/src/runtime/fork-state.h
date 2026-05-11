@@ -18,7 +18,7 @@
 /* Magic values for IPC frame delimiters */
 #define IPC_MAGIC_HEADER 0x454C464BU   /* "ELFK" */
 #define IPC_MAGIC_SENTINEL 0x454C4F4BU /* "ELOK" */
-#define IPC_VERSION 8                  /* v8: session / process group state */
+#define IPC_VERSION 9                  /* v9: preserve elf_load_min */
 
 typedef struct {
     uint32_t magic;
@@ -27,6 +27,7 @@ typedef struct {
     uint32_t has_shm;
     int64_t child_pid, parent_pid;
     uint64_t guest_size;
+    uint64_t elf_load_min;
     uint64_t brk_base, brk_current;
     uint64_t stack_base;
     uint64_t stack_top;

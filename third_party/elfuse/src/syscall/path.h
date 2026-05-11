@@ -9,11 +9,13 @@
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
+#include <sys/stat.h>
 
 #include "syscall/internal.h"
 
-int path_might_use_open_intercept(const char *path);
-int path_might_use_stat_intercept(const char *path);
+bool path_might_use_open_intercept(const char *path);
+bool path_might_use_stat_intercept(const char *path);
+int path_check_intercept_access(const struct stat *st, int mode, int flags);
 int resolve_proc_at_path(guest_fd_t dirfd,
                          const char *path,
                          char *out,

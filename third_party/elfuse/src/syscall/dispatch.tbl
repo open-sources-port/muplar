@@ -163,9 +163,16 @@ SYS_setsid sc_setsid 0
 SYS_getgroups sc_getgroups 1
 SYS_setpriority sc_setpriority 0
 SYS_getpriority sc_getpriority 0
+SYS_sched_setparam sc_sched_setparam 0
+SYS_sched_setscheduler sc_sched_setscheduler 0
+SYS_sched_getscheduler sc_sched_getscheduler 0
+SYS_sched_getparam sc_sched_getparam 0
 SYS_sched_setaffinity sc_sched_setaffinity 1
 SYS_sched_getaffinity sc_sched_getaffinity 1
 SYS_sched_yield sc_sched_yield 0
+SYS_sched_get_priority_max sc_sched_get_priority_max 0
+SYS_sched_get_priority_min sc_sched_get_priority_min 0
+SYS_sched_rr_get_interval sc_sched_rr_get_interval 0
 SYS_set_tid_address sc_set_tid_address 0
 SYS_capget sc_capget 1
 SYS_capset sc_capset 0
@@ -175,6 +182,7 @@ SYS_prctl sc_prctl 1
 # System info
 SYS_uname sc_uname 0
 SYS_sethostname sc_sethostname 0
+SYS_getcpu sc_getcpu 0
 SYS_sysinfo sc_sysinfo 1
 SYS_getrlimit sc_getrlimit 1
 SYS_setrlimit sc_setrlimit 1

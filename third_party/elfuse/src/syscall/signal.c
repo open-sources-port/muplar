@@ -1457,9 +1457,11 @@ int signal_rt_sigreturn(hv_vcpu_t vcpu, guest_t *g)
      * signal frame could redirect execution into EL1 code.
      * Must happen before GPR/SP/PSTATE restore so that a failed check
      * does not leave the vCPU with partially-attacker-controlled state.
+     * The infra reserve sits at high IPA (just below g->interp_base);
+     * use the runtime check rather than compile-time constants.
      */
     uint64_t restored_pc = frame.uc.uc_mcontext.pc;
-    if (restored_pc >= PT_POOL_BASE && restored_pc < ELF_DEFAULT_BASE)
+    if (guest_addr_in_infra(g, restored_pc))
         return -LINUX_EFAULT;
 
     /* Restore all 31 GPRs */

@@ -31,12 +31,20 @@
 
 #include "test-harness.h"
 
+#ifndef MAP_FIXED_NOREPLACE
+#define MAP_FIXED_NOREPLACE 0x100000
+#endif
+
 int passes = 0, fails = 0;
 
 /* fchmodat2 (SYS 452). */
 
 #ifndef SYS_fchmodat2
 #define SYS_fchmodat2 452
+#endif
+
+#ifndef SYS_getcpu
+#define SYS_getcpu 168
 #endif
 
 static void test_fchmodat2_basic(void)
@@ -60,6 +68,19 @@ static void test_fchmodat2_basic(void)
     stat(path, &st);
     unlink(path);
     EXPECT_TRUE((st.st_mode & 0777) == 0644, "mode mismatch");
+}
+
+static void test_getcpu_basic(void)
+{
+    TEST("getcpu basic");
+    unsigned cpu = 99, node = 99;
+    long rc = syscall(SYS_getcpu, &cpu, &node, 0);
+    if (rc < 0) {
+        FAIL("getcpu");
+        return;
+    }
+    EXPECT_TRUE(cpu == 0, "cpu should be 0");
+    EXPECT_TRUE(node == 0, "node should be 0");
 }
 
 static void test_fchmodat2_symlink_nofollow(void)
@@ -1378,6 +1399,41 @@ static void test_proc_cpuinfo_all_cpus(void)
     }
 }
 
+static void test_mmap_low_hint_exact(void)
+{
+    TEST("mmap low hint preserves ET_EXEC-style address");
+    size_t len = 0x21000;
+    static const uintptr_t candidates[] = {
+        0x00400000ULL, 0x00800000ULL, 0x01000000ULL,
+        0x02000000ULL, 0x04000000ULL, 0x06000000ULL,
+    };
+    void *hint = MAP_FAILED;
+    for (size_t i = 0; i < sizeof(candidates) / sizeof(candidates[0]); i++) {
+        hint = mmap((void *) candidates[i], len, PROT_NONE,
+                    MAP_PRIVATE | MAP_ANONYMOUS | MAP_FIXED_NOREPLACE, -1, 0);
+        if (hint != MAP_FAILED)
+            break;
+        if (errno != EEXIST && errno != EINVAL) {
+            FAIL("probe mmap");
+            return;
+        }
+    }
+    if (hint == MAP_FAILED) {
+        FAIL("no free low hint candidate");
+        return;
+    }
+    munmap(hint, len);
+
+    void *p = mmap(hint, len, PROT_NONE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    if (p == MAP_FAILED) {
+        FAIL("mmap");
+        return;
+    }
+    EXPECT_TRUE((uintptr_t) p == (uintptr_t) hint,
+                "low mmap hint should be honored when range is free");
+    munmap(p, len);
+}
+
 int main(void)
 {
     printf("Tier B correctness tests:\n");
@@ -1385,6 +1441,7 @@ int main(void)
     /* fchmodat2 */
     test_fchmodat2_basic();
     test_fchmodat2_symlink_nofollow();
+    test_getcpu_basic();
 
     /* openat2 RESOLVE_* */
     test_openat2_basic();
@@ -1428,6 +1485,7 @@ int main(void)
     test_proc_net_tcp_sl_dense();
     test_proc_net_dirfd_openat_uses_virtual_entries();
     test_proc_cpuinfo_all_cpus();
+    test_mmap_low_hint_exact();
 
     /* signalfd */
     test_signalfd_efault_preserves_pending();

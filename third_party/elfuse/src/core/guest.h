@@ -26,16 +26,35 @@
 
 /* Memory layout constants.
  *
- * Guest memory size is determined dynamically from the VM's IPA width
- * (36-bit = 64GiB on M2, 40-bit = 1TiB on M3+). See guest.c for the
- * runtime probe that selects the correct size.
+ * Guest memory size is determined dynamically from the VM's IPA width (36-bit
+ * = 64GiB on M2, 40-bit = 1TiB on M3+). See guest.c for the runtime probe that
+ * selects the correct size.
+ *
+ * Infrastructure layout (page-table pool, shim code, shim data): a 4MiB reserve
+ * placed just below g->interp_base, in the dead zone between g->mmap_limit and
+ * g->interp_base. The exact base is computed at guest_init time and stored in
+ * guest_t.pt_pool_base / pt_pool_end / shim_base / shim_data_base. EL0 user
+ * binaries are therefore free to load at low addresses (down to 64KiB) without
+ * colliding with the runtime.
+ *
+ * Internal layout within the 4MiB reserve:
+ *   +0x000000 .. +0x010000  unused (64KiB null guard)
+ *   +0x010000 .. +0x100000  page-table pool (960KiB, RW)
+ *   +0x100000 .. +0x200000  shim code slot (1MiB, RX). Sits in the same
+ *                           2MiB L2 block as the PT pool, so that block
+ *                           is split into 4KiB L3 pages (mixed RX/RW).
+ *   +0x200000 .. +0x400000  shim data + EL1 stack (full 2MiB L2 block, RW)
  */
 
-#define PT_POOL_BASE 0x00010000ULL     /* Page table pool start */
-#define PT_POOL_END 0x00100000ULL      /* Page table pool end (960KiB) */
-#define SHIM_BASE 0x00100000ULL        /* Shim code (2MiB block, RX) */
-#define SHIM_DATA_BASE 0x00200000ULL   /* Shim stack/data (2MiB block, RW) */
-#define ELF_DEFAULT_BASE 0x00400000ULL /* Typical ELF load base */
+/* Total size of the runtime infrastructure reserve. Shifted to
+ * [g->interp_base - INFRA_RESERVE, g->interp_base) at guest_init.
+ */
+#define INFRA_RESERVE 0x00400000ULL         /* 4MiB */
+#define INFRA_PT_POOL_OFF 0x00010000ULL     /* offset of PT pool */
+#define INFRA_PT_POOL_END_OFF 0x00100000ULL /* PT pool end (960KiB) */
+#define INFRA_SHIM_OFF 0x00100000ULL        /* offset of shim code slot */
+#define INFRA_SHIM_DATA_OFF 0x00200000ULL   /* offset of shim data slot */
+#define ELF_DEFAULT_BASE 0x00400000ULL      /* Typical ELF load base */
 #define PIE_LOAD_BASE 0x00400000ULL    /* PIE (ET_DYN) executable base (4MiB) */
 #define BRK_BASE_DEFAULT 0x01000000ULL /* Default brk start (16MiB) */
 
@@ -46,36 +65,36 @@
 #define STACK_TOP_DEFAULT 0x08000000ULL
 #define STACK_GUARD_SIZE 0x00001000ULL /* 4KiB guard at stack bottom */
 
-/* mmap RX region for PROT_EXEC; placed below 8GiB to leave the high mmap
- * region clear for runtimes that demand a specific minimum heap address.
+/* mmap RX region for PROT_EXEC; placed below 8GiB to leave the high mmap region
+ * clear for runtimes that demand a specific minimum heap address.
  */
 #define MMAP_RX_BASE 0x10000000ULL
 
-/* Initial pre-mapped mmap RX end. Only covers the first 2MiB block;
- * additional pages are mapped lazily by guest_extend_page_tables()
- * when sys_mmap needs more PROT_EXEC space. Reduces startup time
- * and memory pressure for small binaries that never call mmap.
+/* Initial pre-mapped mmap RX end. Only covers the first 2MiB block; additional
+ * pages are mapped lazily by guest_extend_page_tables() when sys_mmap needs
+ * more PROT_EXEC space. Reduces startup time and memory pressure for small
+ * binaries that never call mmap.
  */
 #define MMAP_RX_INITIAL_END (MMAP_RX_BASE + 0x200000ULL) /* +2MiB */
 
 /* mmap RW region starts at 8GiB to match real Linux address layouts. */
 #define MMAP_BASE 0x200000000ULL
 
-/* Initial pre-mapped mmap RW end. Only covers the first 2MiB block;
- * additional pages are mapped lazily by guest_extend_page_tables().
+/* Initial pre-mapped mmap RW end. Only covers the first 2MiB block; additional
+ * pages are mapped lazily by guest_extend_page_tables().
  */
 #define MMAP_INITIAL_END (MMAP_BASE + 0x200000ULL) /* +2MiB */
 
-/* mmap_limit and interp_base are computed dynamically from guest_size
- * in main.c and stored in guest_t.
+/* mmap_limit and interp_base are computed dynamically from guest_size in main.c
+ * and stored in guest_t.
  */
 #define BLOCK_2MIB (2ULL * 1024 * 1024)
 
 /* IPA base: guest memory is mapped at this IPA in the hypervisor.
  * All guest physical addresses = GUEST_IPA_BASE + offset.
- * Must be 0 so that guest virtual addresses match ELF link addresses
- * (e.g. 0x400000). A non-zero IPA base would require all ELF binaries
- * to be linked at IPA_BASE+vaddr, which is impractical.
+ * Must be 0 so that guest virtual addresses match ELF link addresses (e.g.
+ * 0x400000). A non-zero IPA base would require all ELF binaries to be linked at
+ * IPA_BASE+vaddr, which is impractical.
  */
 #define GUEST_IPA_BASE 0x0ULL
 
@@ -100,10 +119,10 @@ typedef struct {
 
 /* Maximum number of tracked memory regions (heap/stack/mmap/ELF/etc.).
  * Adjacent anonymous regions with matching permissions are automatically
- * coalesced (see regions_mergeable in core/guest.c). Threaded runtimes
- * create many thread stacks with guard pages; with coalescing, typical
- * workloads use ~50 regions. 4096 provides ample headroom for edge cases
- * (many interleaved guard pages, file-backed mappings, etc.).
+ * coalesced (see regions_mergeable in core/guest.c). Threaded runtimes create
+ * many thread stacks with guard pages; with coalescing, typical workloads use
+ * ~50 regions. 4096 provides ample headroom for edge cases (many interleaved
+ * guard pages, file-backed mappings, etc.).
  */
 #define GUEST_MAX_REGIONS 4096
 
@@ -141,14 +160,16 @@ typedef struct {
     bool shared;     /* MAP_SHARED (writes should propagate) */
     bool noreserve;  /* MAP_NORESERVE: PTEs deferred until fault */
     bool overlay_active; /* Region has a live host MAP_FIXED|MAP_SHARED overlay
-                          * of backing_fd at host_base+start. The kernel's
-                          * page cache keeps it coherent with the file and
-                          * with peer overlays of the same file, so msync
-                          * skips the snapshot-style pwrite-the-diff and
-                          * refresh-from-file paths for these regions. */
+                          * of backing_fd at host_base+start. The kernel's page
+                          * cache keeps it coherent with the file and with peer
+                          * overlays of the same file, so msync skips the
+                          * snapshot-style pwrite-the-diff and refresh-from-file
+                          * paths for these regions.
+                          */
     uint64_t overlay_start; /* Host-page-aligned overlay start. May extend
                              * outside [start, end) when only part of a host
-                             * page is guest-visible. */
+                             * page is guest-visible.
+                             */
     uint64_t overlay_end;   /* Host-page-aligned overlay end (exclusive). */
     char name[64];          /* Label: "[heap]", "[stack]", ELF path, etc. */
 } guest_region_t;
@@ -162,12 +183,30 @@ typedef struct {
     uint64_t ipa_base;   /* IPA base for hv_vm_map (GUEST_IPA_BASE) */
     uint64_t mmap_limit; /* Max mmap address (computed from guest_size) */
 
-    uint64_t interp_base;  /* Dynamic linker load base (from guest_size) */
+    uint64_t interp_base; /* Dynamic linker load base (from guest_size) */
+
+    /* Runtime-infrastructure reserve. Computed at guest_init time and placed at
+     * [interp_base - INFRA_RESERVE, interp_base). All four values are derived
+     * from the same base, so the inequalities
+     *   pt_pool_base < pt_pool_end <= shim_base < shim_data_base
+     * always hold, and shim_data_base + BLOCK_2MIB == interp_base.
+     */
+    uint64_t pt_pool_base;   /* Page-table pool start (high IPA) */
+    uint64_t pt_pool_end;    /* Page-table pool end (exclusive) */
+    uint64_t shim_base;      /* Shim code (2MiB block, RX) */
+    uint64_t shim_data_base; /* Shim stack/data (2MiB block, RW) */
+
     uint64_t pt_pool_next; /* Next free page table page in pool */
-    uint64_t brk_base;     /* Initial brk (set after ELF load) */
-    uint64_t brk_current;  /* Current brk position */
-    uint64_t stack_base;   /* Bottom of stack region (dynamic, above brk) */
-    uint64_t stack_top;    /* Top of stack (stack grows down from here) */
+    /* Lowest virtual address of the loaded ELF (executable image, not the
+     * dynamic linker). Set by bootstrap and re-set by execve. Used by the
+     * legacy fork IPC path to bound the ELF + brk copy chunk; it must cover
+     * ET_EXECs linked below ELF_DEFAULT_BASE (e.g. 0x200000).
+     */
+    uint64_t elf_load_min;
+    uint64_t brk_base;    /* Initial brk (set after ELF load) */
+    uint64_t brk_current; /* Current brk position */
+    uint64_t stack_base;  /* Bottom of stack region (dynamic, above brk) */
+    uint64_t stack_top;   /* Top of stack (stack grows down from here) */
 
     uint64_t mmap_next; /* RW mmap high-water mark for fork IPC snapshots */
     uint64_t mmap_end;  /* Current page-table-covered RW mmap limit */
@@ -218,6 +257,35 @@ static inline void guest_pt_gen_bump(guest_t *g)
 static inline uint64_t guest_ipa(const guest_t *g, uint64_t offset)
 {
     return g->ipa_base + offset;
+}
+
+/* True iff [start, end) overlaps the runtime infra reserve
+ * [interp_base - INFRA_RESERVE, interp_base). Covers the full 4 MiB
+ * reserve including the 64 KiB null-guard slot at the bottom (which
+ * has no PT entries but must not become semantically reachable from
+ * guest mmap state). Used by sys_mmap (MAP_FIXED), sys_munmap, and
+ * sys_mprotect to reject guest attempts to touch page tables, shim
+ * code, or shim data through the syscall surface.
+ */
+static inline bool guest_range_hits_infra(const guest_t *g,
+                                          uint64_t start,
+                                          uint64_t end)
+{
+    uint64_t infra_lo = g->interp_base - INFRA_RESERVE;
+    uint64_t infra_hi = g->interp_base;
+    return start < infra_hi && end > infra_lo;
+}
+
+/* True iff a single address (PC, hint, etc.) falls inside the infra reserve.
+ * Used by rt_sigreturn to reject forged frames that would redirect EL0 PC into
+ * EL1 shim or page-table memory. Covers the full 4 MiB reserve, matching
+ * guest_range_hits_infra.
+ */
+static inline bool guest_addr_in_infra(const guest_t *g, uint64_t addr)
+{
+    uint64_t infra_lo = g->interp_base - INFRA_RESERVE;
+    uint64_t infra_hi = g->interp_base;
+    return addr >= infra_lo && addr < infra_hi;
 }
 
 /* API */
