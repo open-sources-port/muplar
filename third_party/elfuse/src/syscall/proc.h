@@ -184,18 +184,31 @@ int rseq_try_abort(guest_t *g,
 /* Allocate next guest PID (called from sys_clone). */
 int64_t proc_alloc_pid(void);
 
-/* Store the sysroot path for dynamic linker library resolution.
- * When set, absolute library paths (e.g. /lib/libc.so) are prefixed
- * with this path. Pass NULL to clear.
+/* Store the sysroot path for absolute guest path resolution. Pass NULL to
+ * clear.
  */
 void proc_set_sysroot(const char *path);
 
-/* Get the stored sysroot path. Returns NULL if not set. */
+/* Get the stored sysroot path. Returns NULL if not set.
+ *
+ * The returned pointer aliases a static buffer mutated by proc_set_sysroot()
+ * under a private lock; callers that only test for NULL are safe, but any
+ * caller that reads the string content must use proc_sysroot_snapshot()
+ * instead to avoid a torn read against a concurrent chroot.
+ */
 const char *proc_get_sysroot(void);
 
+/* Copy the current sysroot into out (NUL-terminated) under the same lock that
+ * serializes proc_set_sysroot(). Returns true if a sysroot is configured and
+ * fits in outsz; false if unset, truncating, or out/outsz is invalid (in which
+ * case out[0] is set to '\0' when possible).
+ */
+bool proc_sysroot_snapshot(char *out, size_t outsz);
+
 /* Resolve an absolute guest path through the stored sysroot. Returns path
- * unchanged when no sysroot applies, buf when a sysroot-backed file exists,
- * or NULL if sysroot path construction would truncate.
+ * unchanged when no sysroot applies or when the sysroot-backed path does not
+ * exist, buf when a sysroot-backed file exists, or NULL if sysroot path
+ * construction would truncate or escape containment checks.
  */
 const char *proc_resolve_sysroot_path(const char *path,
                                       char *buf,

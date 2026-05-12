@@ -1432,8 +1432,13 @@ int vcpu_run_loop(hv_vcpu_t vcpu,
                             "%s: W^X toggle FAILED "
                             "(split=%d update=%d) far=0x%llx",
                             prefix, sr, ur, (unsigned long long) far);
-                    /* TLB flush is done by the shim (tlbi_restore_eret) */
-                    g->need_tlbi = false;
+                    /* TLB flush is done by the shim (tlbi_restore_eret) for
+                     * the single faulting page. Clear this thread's pending
+                     * request so the next syscall epilogue does not re-flush
+                     * the W^X page. cpu_tlbi_req is per-vCPU, so this only
+                     * touches our own slot -- concurrent vCPUs are unaffected.
+                     */
+                    tlbi_request_clear();
                     break;
                 }
 

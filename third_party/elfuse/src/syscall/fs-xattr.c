@@ -14,6 +14,7 @@
 #include "syscall/abi.h"
 #include "syscall/fs.h"
 #include "syscall/internal.h"
+#include "syscall/path.h"
 
 /* macOS xattr API has extra position and options parameters vs Linux.
  * Linux: getxattr(path, name, value, size)
@@ -73,15 +74,23 @@ int64_t sys_getxattr(guest_t *g,
                      int nofollow)
 {
     char path[LINUX_PATH_MAX], name[LINUX_XATTR_NAME_MAX + 1];
+    char sysroot_buf[LINUX_PATH_MAX];
     if (guest_read_str(g, path_gva, path, sizeof(path)) < 0)
         return -LINUX_EFAULT;
     if (guest_read_str(g, name_gva, name, sizeof(name)) < 0)
         return -LINUX_EFAULT;
 
+    const char *target = nofollow ? path_resolve_sysroot_nofollow_path(
+                                        path, sysroot_buf, sizeof(sysroot_buf))
+                                  : path_resolve_sysroot_path(
+                                        path, sysroot_buf, sizeof(sysroot_buf));
+    if (!target)
+        return -LINUX_ENAMETOOLONG;
+
     int opts = nofollow ? XATTR_NOFOLLOW : 0;
 
     if (size == 0) {
-        ssize_t ret = getxattr(path, name, NULL, 0, 0, opts);
+        ssize_t ret = getxattr(target, name, NULL, 0, 0, opts);
         return ret < 0 ? linux_errno() : ret;
     }
 
@@ -90,7 +99,7 @@ int64_t sys_getxattr(guest_t *g,
     if (err < 0)
         return err;
 
-    ssize_t ret = getxattr(path, name, buf, (size_t) size, 0, opts);
+    ssize_t ret = getxattr(target, name, buf, (size_t) size, 0, opts);
     int64_t result = xattr_copy_out_result(g, value_gva, buf, ret);
     free(buf);
     return result;
@@ -105,10 +114,18 @@ int64_t sys_setxattr(guest_t *g,
                      int nofollow)
 {
     char path[LINUX_PATH_MAX], name[LINUX_XATTR_NAME_MAX + 1];
+    char sysroot_buf[LINUX_PATH_MAX];
     if (guest_read_str(g, path_gva, path, sizeof(path)) < 0)
         return -LINUX_EFAULT;
     if (guest_read_str(g, name_gva, name, sizeof(name)) < 0)
         return -LINUX_EFAULT;
+
+    const char *target = nofollow ? path_resolve_sysroot_nofollow_path(
+                                        path, sysroot_buf, sizeof(sysroot_buf))
+                                  : path_resolve_sysroot_path(
+                                        path, sysroot_buf, sizeof(sysroot_buf));
+    if (!target)
+        return -LINUX_ENAMETOOLONG;
 
     void *buf;
     int64_t err = xattr_alloc_buf(size, &buf);
@@ -126,7 +143,7 @@ int64_t sys_setxattr(guest_t *g,
         return err;
     }
 
-    int ret = setxattr(path, name, buf, (size_t) size, 0, opts);
+    int ret = setxattr(target, name, buf, (size_t) size, 0, opts);
     free(buf);
     return ret < 0 ? linux_errno() : 0;
 }
@@ -138,13 +155,21 @@ int64_t sys_listxattr(guest_t *g,
                       int nofollow)
 {
     char path[LINUX_PATH_MAX];
+    char sysroot_buf[LINUX_PATH_MAX];
     if (guest_read_str(g, path_gva, path, sizeof(path)) < 0)
         return -LINUX_EFAULT;
+
+    const char *target = nofollow ? path_resolve_sysroot_nofollow_path(
+                                        path, sysroot_buf, sizeof(sysroot_buf))
+                                  : path_resolve_sysroot_path(
+                                        path, sysroot_buf, sizeof(sysroot_buf));
+    if (!target)
+        return -LINUX_ENAMETOOLONG;
 
     int opts = nofollow ? XATTR_NOFOLLOW : 0;
 
     if (size == 0) {
-        ssize_t ret = listxattr(path, NULL, 0, opts);
+        ssize_t ret = listxattr(target, NULL, 0, opts);
         return ret < 0 ? linux_errno() : ret;
     }
 
@@ -153,7 +178,7 @@ int64_t sys_listxattr(guest_t *g,
     if (err < 0)
         return err;
 
-    ssize_t ret = listxattr(path, buf, (size_t) size, opts);
+    ssize_t ret = listxattr(target, buf, (size_t) size, opts);
     int64_t result = xattr_copy_out_result(g, list_gva, buf, ret);
     free(buf);
     return result;
@@ -165,13 +190,21 @@ int64_t sys_removexattr(guest_t *g,
                         int nofollow)
 {
     char path[LINUX_PATH_MAX], name[LINUX_XATTR_NAME_MAX + 1];
+    char sysroot_buf[LINUX_PATH_MAX];
     if (guest_read_str(g, path_gva, path, sizeof(path)) < 0)
         return -LINUX_EFAULT;
     if (guest_read_str(g, name_gva, name, sizeof(name)) < 0)
         return -LINUX_EFAULT;
 
+    const char *target = nofollow ? path_resolve_sysroot_nofollow_path(
+                                        path, sysroot_buf, sizeof(sysroot_buf))
+                                  : path_resolve_sysroot_path(
+                                        path, sysroot_buf, sizeof(sysroot_buf));
+    if (!target)
+        return -LINUX_ENAMETOOLONG;
+
     int opts = nofollow ? XATTR_NOFOLLOW : 0;
-    int ret = removexattr(path, name, opts);
+    int ret = removexattr(target, name, opts);
     return ret < 0 ? linux_errno() : 0;
 }
 

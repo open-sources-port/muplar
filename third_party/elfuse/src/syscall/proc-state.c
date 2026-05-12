@@ -40,6 +40,12 @@ static uint8_t auxv_buf[1024] = {0};
 static size_t auxv_len = 0;
 static char sysroot_path[LINUX_PATH_MAX] = {0};
 
+/* Serializes proc_set_sysroot against path-helper snapshots. Without this,
+ * a sibling vCPU running chroot during another vCPU's path resolution can tear
+ * the snprintf input buffer underneath that thread.
+ */
+static pthread_mutex_t sysroot_lock = PTHREAD_MUTEX_INITIALIZER;
+
 /* Cached current working directory for getcwd() and /proc/self/cwd. */
 static pthread_mutex_t cwd_lock = PTHREAD_MUTEX_INITIALIZER;
 static char cwd_path[LINUX_PATH_MAX] = {0};
@@ -67,12 +73,24 @@ void proc_state_init(void)
 int proc_cwd_refresh(void)
 {
     char cwd[LINUX_PATH_MAX];
+    const char *guest_cwd = cwd;
     if (!getcwd(cwd, sizeof(cwd)))
         return -1;
 
-    size_t len = strlen(cwd);
+    char sr[LINUX_PATH_MAX];
+    if (proc_sysroot_snapshot(sr, sizeof(sr))) {
+        size_t sr_len = strlen(sr);
+        if (strncmp(cwd, sr, sr_len) == 0 &&
+            (cwd[sr_len] == '\0' || cwd[sr_len] == '/')) {
+            guest_cwd = cwd + sr_len;
+            if (*guest_cwd == '\0')
+                guest_cwd = "/";
+        }
+    }
+
+    size_t len = strlen(guest_cwd);
     pthread_mutex_lock(&cwd_lock);
-    memcpy(cwd_path, cwd, len + 1);
+    memcpy(cwd_path, guest_cwd, len + 1);
     cwd_len = len;
     cwd_valid = true;
     pthread_mutex_unlock(&cwd_lock);
@@ -328,21 +346,57 @@ const void *proc_get_auxv(size_t *len_out)
 
 void proc_set_sysroot(const char *path)
 {
+    pthread_mutex_lock(&sysroot_lock);
     if (path && path[0]) {
         str_copy_trunc(sysroot_path, path, sizeof(sysroot_path));
         size_t len = strlen(sysroot_path);
         while (len > 1 && sysroot_path[len - 1] == '/')
             sysroot_path[--len] = '\0';
+        char resolved[LINUX_PATH_MAX];
+        if (realpath(sysroot_path, resolved))
+            str_copy_trunc(sysroot_path, resolved, sizeof(sysroot_path));
     } else {
         sysroot_path[0] = '\0';
     }
+    pthread_mutex_unlock(&sysroot_lock);
 }
 
 const char *proc_get_sysroot(void)
 {
+    /* Boolean-test callers (path[0] != '/' fast paths) tolerate the racy read:
+     * the first byte transitions atomically and a missed update only causes one
+     * extra resolution attempt. Callers that consume the string content must
+     * use proc_sysroot_snapshot() instead.
+     */
     return sysroot_path[0] ? sysroot_path : NULL;
 }
 
+bool proc_sysroot_snapshot(char *out, size_t outsz)
+{
+    if (!out || outsz == 0)
+        return false;
+    pthread_mutex_lock(&sysroot_lock);
+    bool ok = false;
+    if (sysroot_path[0]) {
+        size_t need = strlen(sysroot_path) + 1;
+        if (need <= outsz) {
+            memcpy(out, sysroot_path, need);
+            ok = true;
+        }
+    }
+    pthread_mutex_unlock(&sysroot_lock);
+    if (!ok)
+        out[0] = '\0';
+    return ok;
+}
+
+/* Confirm resolved_path canonicalizes inside sysroot. This is a check-then-use
+ * sequence: callers issue the actual syscall after this returns, so a symlink
+ * swapped in between will not be re-validated. openat2
+ * RESOLVE_{BENEATH,IN_ROOT} close that race for callers willing to opt in. For
+ * the legacy *at() surface this is best-effort defense at the boundary; the
+ * guest is in the host user's trust domain.
+ */
 static bool sysroot_path_is_contained(const char *resolved_path,
                                       const char *sysroot,
                                       bool follow_final)
@@ -361,30 +415,23 @@ static bool sysroot_path_is_contained(const char *resolved_path,
 
         str_copy_trunc(parent, resolved_path, sizeof(parent));
         slash = strrchr(parent, '/');
-        if (!slash)
+        /* resolved_path is always ${sysroot}${guest_path} where sysroot is
+         * non-empty (caller short-circuits otherwise) and guest_path starts
+         * with '/'. The result therefore contains at least two '/' bytes, so
+         * the basename slash is never at parent[0]. Reject anything that
+         * violates the invariant rather than carrying dead code for it.
+         */
+        if (!slash || slash == parent)
             return false;
 
-        if (slash == parent) {
-            parent[1] = '\0';
-            if (!realpath(parent, real_path))
-                return false;
-            size_t rp_len = strlen(real_path);
-            const char *tail = resolved_path + 1;
-            size_t tail_len = strlen(tail);
-            if (rp_len + 1 + tail_len >= sizeof(real_path))
-                return false;
-            real_path[rp_len] = '/';
-            memcpy(real_path + rp_len + 1, tail, tail_len + 1);
-        } else {
-            *slash = '\0';
-            if (!realpath(parent, real_path))
-                return false;
-            size_t parent_len = strlen(real_path);
-            if (snprintf(real_path + parent_len, sizeof(real_path) - parent_len,
-                         "/%s",
-                         slash + 1) >= (int) (sizeof(real_path) - parent_len)) {
-                return false;
-            }
+        *slash = '\0';
+        if (!realpath(parent, real_path))
+            return false;
+        size_t parent_len = strlen(real_path);
+        if (snprintf(real_path + parent_len, sizeof(real_path) - parent_len,
+                     "/%s",
+                     slash + 1) >= (int) (sizeof(real_path) - parent_len)) {
+            return false;
         }
     }
 
@@ -405,13 +452,20 @@ static bool sysroot_path_exists(const char *resolved_path, bool follow_final)
     return lstat(resolved_path, &st) == 0;
 }
 
+/* Resolve an absolute guest path against --sysroot. This keeps absolute guest
+ * filesystem syscalls inside the sysroot when the target exists there, and
+ * otherwise falls back to the literal host path so apps can still reach host
+ * resources such as /tmp or /etc/resolv.conf. Containment via realpath() is
+ * enforced only when the path actually resolves under sysroot, to prevent
+ * symlink escape from a tree the caller intended to stay inside.
+ */
 static const char *proc_resolve_sysroot_path_flags(const char *path,
                                                    char *buf,
                                                    size_t bufsz,
                                                    bool follow_final)
 {
-    const char *sr = proc_get_sysroot();
-    if (!sr || !path || path[0] != '/')
+    char sr[LINUX_PATH_MAX];
+    if (!proc_sysroot_snapshot(sr, sizeof(sr)) || !path || path[0] != '/')
         return path;
     if (bufsz == 0)
         return NULL;
@@ -424,17 +478,6 @@ static const char *proc_resolve_sysroot_path_flags(const char *path,
         if (!sysroot_path_is_contained(buf, sr, follow_final))
             return NULL;
         return buf;
-    }
-
-    const char *base = strrchr(path, '/');
-    if (base) {
-        n = snprintf(buf, bufsz, "%s/lib/%s", sr, base + 1);
-        if (n >= 0 && (size_t) n < bufsz &&
-            sysroot_path_exists(buf, follow_final)) {
-            if (!sysroot_path_is_contained(buf, sr, follow_final))
-                return NULL;
-            return buf;
-        }
     }
 
     return full_path_truncated ? NULL : path;
@@ -456,8 +499,8 @@ const char *proc_resolve_sysroot_create_path(const char *path,
                                              char *buf,
                                              size_t bufsz)
 {
-    const char *sr = proc_get_sysroot();
-    if (!sr || !path || path[0] != '/')
+    char sr[LINUX_PATH_MAX];
+    if (!proc_sysroot_snapshot(sr, sizeof(sr)) || !path || path[0] != '/')
         return path;
     if (bufsz == 0)
         return NULL;

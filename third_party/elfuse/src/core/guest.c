@@ -42,6 +42,11 @@
 #include "utils.h"
 #include "runtime/thread.h" /* thread_destroy_all_vcpus */
 
+/* Per-vCPU pending TLBI request. Zero-initialized in every host pthread
+ * by virtue of TLS default-zeroing, which maps to TLBI_NONE.
+ */
+_Thread_local tlbi_request_t cpu_tlbi_req;
+
 static void guest_region_clear(guest_t *g);
 
 /* Page table descriptor bits. */
@@ -901,7 +906,7 @@ void guest_reset(guest_t *g)
     g->mmap_rw_gap_hint = 0;
     g->mmap_rx_gap_hint = 0;
     g->ttbr0 = 0;
-    g->need_tlbi = false;
+    tlbi_request_clear();
     g->elf_load_min = ELF_DEFAULT_BASE;
 
     /* Clear semantic region tracking (will be re-populated after exec) */
@@ -1650,8 +1655,8 @@ uint64_t guest_build_page_tables(guest_t *g, const mem_region_t *regions, int n)
 /* Extend page tables to cover [start, end) with 2MiB block descriptors.
  * Walks the existing L0->L1 structure (from g->ttbr0) and allocates new
  * L2 tables as needed. This is safe to call while the vCPU is paused
- * (during HVC #5 handling). Sets g->need_tlbi so the shim flushes the
- * TLB before returning to EL0.
+ * (during HVC #5 handling). Records a TLBI request covering the new range
+ * so the shim flushes the matching TLB entries before returning to EL0.
  */
 int guest_extend_page_tables(guest_t *g,
                              uint64_t start,
@@ -1717,7 +1722,12 @@ int guest_extend_page_tables(guest_t *g,
         }
     }
 
-    g->need_tlbi = true;
+    /* Use the page-aligned bounds the loop actually covered. Extend grows
+     * the mapped range; existing VAs may carry negative TLB entries from
+     * prior translation faults at this address, so a flush is still needed.
+     * Large extends will exceed the selective cap and become broadcast.
+     */
+    tlbi_request_range(addr_start + base, addr_end + base);
     guest_pt_gen_bump(g);
     return 0;
 }
@@ -1822,7 +1832,6 @@ static int split_l2_block(guest_t *g, uint64_t *l2_entry)
         l3[i] = make_page_desc(block_ipa + (uint64_t) i * PAGE_SIZE, old_perms);
 
     *l2_entry = (g->ipa_base + l3_gpa) | PT_VALID | PT_TABLE;
-    g->need_tlbi = true;
     return 0;
 }
 
@@ -1830,7 +1839,10 @@ int guest_split_block(guest_t *g, uint64_t block_gpa)
 {
     uint64_t block_start = ALIGN_2MIB_DOWN(block_gpa);
     uint64_t *l2_entry = find_l2_entry(g, block_start);
-    return split_l2_block(g, l2_entry);
+    int rc = split_l2_block(g, l2_entry);
+    if (rc < 0)
+        return rc;
+    return 0;
 }
 
 int guest_invalidate_ptes(guest_t *g, uint64_t start, uint64_t end)
@@ -1862,9 +1874,12 @@ int guest_invalidate_ptes(guest_t *g, uint64_t start, uint64_t end)
         if ((*l2_entry & 3) == 1) {
             /* 2MiB block descriptor */
             if (start <= block_start && end >= block_end) {
-                /* Invalidating the entire 2MiB block: clear the L2 entry */
+                /* Invalidating the entire 2MiB block: clear the L2 entry.
+                 * The 2 MiB range exceeds the selective cap and upgrades
+                 * to broadcast.
+                 */
                 *l2_entry = 0;
-                g->need_tlbi = true;
+                tlbi_request_range(base + block_start, base + block_end);
                 addr = block_end;
                 continue;
             }
@@ -1889,7 +1904,7 @@ int guest_invalidate_ptes(guest_t *g, uint64_t start, uint64_t end)
             l3[l3_idx] = 0; /* Invalid descriptor */
         }
 
-        g->need_tlbi = true;
+        tlbi_request_range(base + page_start, base + page_end);
         addr = page_end;
     }
 
@@ -1936,7 +1951,7 @@ int guest_update_perms(guest_t *g, uint64_t start, uint64_t end, int perms)
                 if (old_perms != perms) {
                     uint64_t ipa = *l2_entry & L2_BLOCK_ADDR_MASK;
                     *l2_entry = make_block_desc(ipa, perms);
-                    g->need_tlbi = true;
+                    tlbi_request_range(base + block_start, base + block_end);
                 }
                 addr = block_end;
                 continue;
@@ -1959,9 +1974,13 @@ int guest_update_perms(guest_t *g, uint64_t start, uint64_t end, int perms)
         uint64_t l3_ipa = *l2_entry & 0xFFFFFFFFF000ULL;
         uint64_t *l3 = pt_at(g, l3_ipa - base);
 
-        /* Update pages within this 2MiB block that fall in [start, end) */
+        /* Update pages within this 2MiB block that fall in [start, end). Track
+         * the smallest sub-range that actually changed so the TLBI request only
+         * covers descriptors whose value changed (false-positive elimination).
+         */
         uint64_t page_start = (addr > block_start) ? addr : block_start;
         uint64_t page_end = (end < block_end) ? end : block_end;
+        uint64_t changed_lo = UINT64_MAX, changed_hi = 0;
 
         for (uint64_t pa = page_start; pa < page_end; pa += PAGE_SIZE) {
             unsigned l3_idx =
@@ -1981,10 +2000,18 @@ int guest_update_perms(guest_t *g, uint64_t start, uint64_t end, int perms)
                 page_ipa = l3[l3_idx] & 0xFFFFFFFFF000ULL;
             else
                 page_ipa = base + (pa & ~(PAGE_SIZE - 1));
-            l3[l3_idx] = make_page_desc(page_ipa, perms);
+            uint64_t new_desc = make_page_desc(page_ipa, perms);
+            if (l3[l3_idx] != new_desc) {
+                l3[l3_idx] = new_desc;
+                if (pa < changed_lo)
+                    changed_lo = pa;
+                if (pa + PAGE_SIZE > changed_hi)
+                    changed_hi = pa + PAGE_SIZE;
+            }
         }
 
-        g->need_tlbi = true;
+        if (changed_hi > changed_lo)
+            tlbi_request_range(base + changed_lo, base + changed_hi);
         addr = page_end;
     }
 
@@ -2079,6 +2106,8 @@ int guest_materialize_lazy(guest_t *g, uint64_t fault_offset)
         memset((uint8_t *) g->host_base + materialize_start, 0,
                materialize_end - materialize_start);
 
-    g->need_tlbi = true;
+    /* The page-table helpers above already requested the matching TLBI;
+     * no additional flush is needed here.
+     */
     return 0;
 }

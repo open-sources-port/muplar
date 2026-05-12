@@ -76,3 +76,13 @@ int proc_intercept_readv(int guest_fd,
  * Used by sys_unlinkat to rewrite /dev/shm/<name> paths.
  */
 const char *proc_get_shm_dir(void);
+
+/* Resolve a /dev/shm/<suffix> guest-path suffix to a host path inside the
+ * per-UID /dev/shm emulation directory. Rejects empty, ".."-bearing, or
+ * compound suffixes with errno = EACCES. Returns 0 on success and writes the
+ * full host path to host_path; returns -1 with errno set (EACCES on invalid
+ * suffix, ENAMETOOLONG on overflow, or as set by shm_dir_path()).
+ */
+int proc_dev_shm_resolve(const char *guest_suffix,
+                         char *host_path,
+                         size_t host_path_sz);

@@ -1831,18 +1831,34 @@ fast_done:
         /* Write result back to X0 */
         hv_vcpu_set_reg(vcpu, HV_REG_X0, (uint64_t) result);
 
-        /* Signal the shim to flush TLB if page tables were modified.
-         * The shim checks X8 after HVC #5: non-zero triggers TLBI.
-         * Must explicitly write X8=0 when no TLBI is needed, because the
-         * shim sees X8's pre-syscall value (the syscall number, always
-         * non-zero) and would spuriously TLBI on every return.
+        /* Signal the shim to flush TLB if this vCPU modified page tables.
+         * Protocol after HVC #5 (X8 carries the request):
+         *   0 -> skip
+         *   1 -> broadcast TLBI VMALLE1IS
+         *   2 -> reserved for execve (set by sys_execve, never reached here)
+         *   3 -> selective TLBI VAE1IS over X10 pages starting at X9
+         * Must explicitly write X8 because the shim reads its post-HVC value;
+         * the pre-syscall X8 is the syscall number (always non-zero) and would
+         * spuriously TLBI on every return.
+         *
+         * cpu_tlbi_req is a per-vCPU TLS slot, so this read needs no lock and
+         * cannot be drained or torn by another vCPU's epilogue.
          */
-        if (g->need_tlbi) {
+        switch ((tlbi_kind_t) cpu_tlbi_req.kind) {
+        case TLBI_BROADCAST:
             hv_vcpu_set_reg(vcpu, HV_REG_X8, 1);
-            g->need_tlbi = false;
-        } else {
+            break;
+        case TLBI_RANGE:
+            hv_vcpu_set_reg(vcpu, HV_REG_X8, 3);
+            hv_vcpu_set_reg(vcpu, HV_REG_X9, cpu_tlbi_req.start);
+            hv_vcpu_set_reg(vcpu, HV_REG_X10, cpu_tlbi_req.pages);
+            break;
+        case TLBI_NONE:
+        default:
             hv_vcpu_set_reg(vcpu, HV_REG_X8, 0);
+            break;
         }
+        tlbi_request_clear();
     }
 
     return should_exit;

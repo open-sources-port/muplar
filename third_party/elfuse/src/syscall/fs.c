@@ -814,7 +814,12 @@ int64_t sys_chdir(guest_t *g, uint64_t path_gva)
         return 0;
     }
 
-    if (chdir(chdir_path) < 0)
+    char sysroot_buf[LINUX_PATH_MAX];
+    const char *target =
+        path_resolve_sysroot_path(chdir_path, sysroot_buf, sizeof(sysroot_buf));
+    if (!target)
+        return -LINUX_ENAMETOOLONG;
+    if (chdir(target) < 0)
         return linux_errno();
 
     if (proc_cwd_refresh() < 0)
@@ -849,23 +854,17 @@ int64_t sys_chroot(guest_t *g, uint64_t path_gva)
     char path[LINUX_PATH_MAX];
     if (guest_read_str(g, path_gva, path, sizeof(path)) < 0)
         return -LINUX_EFAULT;
-    /* Emulate chroot by updating the sysroot prefix.  All path resolution
-     * already redirects through sysroot.  chroot("/") is a no-op because the
-     * guest already sees "/" as root, and resetting sysroot to "/" would
-     * break dynamic linker resolution.  Real chroot() requires root and
-     * does not make sense in elfuse's single-process VM.  This enables
-     * coreutils stdbuf (which does fork -> chroot("/") -> exec) and the
-     * chroot coreutil itself.
+    /* Only accept chroot("/") as a no-op. The original motivation was
+     * coreutils stdbuf (fork -> chroot("/") -> exec) which never changes
+     * roots in practice. Accepting an arbitrary path was a containment
+     * escape: a guest already running under --sysroot=/opt/sr could call
+     * chroot("/etc") and pivot to the host's /etc with no boundary check.
+     * Real chroot() requires CAP_SYS_CHROOT, which the guest does not have
+     * in elfuse's single-process VM model.
      */
-    if (strcmp(path, "/") != 0) {
-        struct stat st;
-        if (stat(path, &st) < 0)
-            return linux_errno();
-        if (!S_ISDIR(st.st_mode))
-            return -LINUX_ENOTDIR;
-        proc_set_sysroot(path);
-    }
-    return 0;
+    if (strcmp(path, "/") == 0)
+        return 0;
+    return -LINUX_EPERM;
 }
 
 /* pipe/seek. */
@@ -977,8 +976,10 @@ int64_t sys_readlinkat(guest_t *g,
     char sysroot_buf[LINUX_PATH_MAX];
     const char *read_path = path_resolve_sysroot_nofollow_path(
         path, sysroot_buf, sizeof(sysroot_buf));
-    if (!read_path)
+    if (!read_path) {
+        host_fd_ref_close(&dir_ref);
         return -LINUX_ENAMETOOLONG;
+    }
     ssize_t len = readlinkat(dir_ref.fd, read_path, link, sizeof(link) - 1);
     host_fd_ref_close(&dir_ref);
     if (len < 0)
@@ -1014,22 +1015,12 @@ int64_t sys_unlinkat(guest_t *g, int dirfd, uint64_t path_gva, int flags)
 
     /* Rewrite /dev/shm/<name> to the host temp directory so shm_unlink works */
     const char *unlink_path;
-    char shm_host[512];
+    char shm_host[LINUX_PATH_MAX];
     if (!strncmp(unlink_guest_path, "/dev/shm/", 9)) {
-        const char *shm = proc_get_shm_dir();
-        if (!shm) {
+        if (proc_dev_shm_resolve(unlink_guest_path + 9, shm_host,
+                                 sizeof(shm_host)) < 0) {
             host_fd_ref_close(&dir_ref);
             return linux_errno();
-        }
-        const char *suffix = unlink_guest_path + 9;
-        if (strstr(suffix, "..") || strchr(suffix, '/') || suffix[0] == '\0') {
-            host_fd_ref_close(&dir_ref);
-            return -LINUX_EACCES;
-        }
-        int n = snprintf(shm_host, sizeof(shm_host), "%s/%s", shm, suffix);
-        if (n < 0 || (size_t) n >= sizeof(shm_host)) {
-            host_fd_ref_close(&dir_ref);
-            return -LINUX_ENAMETOOLONG;
         }
         unlink_path = shm_host;
         host_fd_ref_close(&dir_ref);
@@ -1237,9 +1228,17 @@ int64_t sys_mknodat(guest_t *g, int dirfd, uint64_t path_gva, int mode, int dev)
     if (host_dirfd_ref_open(dirfd, &dir_ref) < 0)
         return -LINUX_EBADF;
 
+    char sysroot_buf[LINUX_PATH_MAX];
+    const char *target = path_resolve_sysroot_create_path(
+        node_path, sysroot_buf, sizeof(sysroot_buf));
+    if (!target) {
+        host_fd_ref_close(&dir_ref);
+        return -LINUX_ENAMETOOLONG;
+    }
+
     /* Only support FIFO creation; other node types need root */
     if (S_ISFIFO(mode)) {
-        if (mkfifoat(dir_ref.fd, node_path, mode & 0777) < 0) {
+        if (mkfifoat(dir_ref.fd, target, mode & 0777) < 0) {
             host_fd_ref_close(&dir_ref);
             return linux_errno();
         }
@@ -1249,7 +1248,7 @@ int64_t sys_mknodat(guest_t *g, int dirfd, uint64_t path_gva, int mode, int dev)
 
     /* Regular files: create an empty file */
     if (S_ISREG(mode) || (mode & S_IFMT) == 0) {
-        int fd = openat(dir_ref.fd, node_path, O_CREAT | O_WRONLY | O_EXCL,
+        int fd = openat(dir_ref.fd, target, O_CREAT | O_WRONLY | O_EXCL,
                         mode & 0777);
         host_fd_ref_close(&dir_ref);
         if (fd < 0)
@@ -1556,8 +1555,20 @@ int64_t sys_fchmodat(guest_t *g,
     if (host_dirfd_ref_open(dirfd, &dir_ref) < 0)
         return -LINUX_EBADF;
 
+    char sysroot_buf[LINUX_PATH_MAX];
+    const char *target =
+        (flags & LINUX_AT_SYMLINK_NOFOLLOW)
+            ? path_resolve_sysroot_nofollow_path(chmod_path, sysroot_buf,
+                                                 sizeof(sysroot_buf))
+            : path_resolve_sysroot_path(chmod_path, sysroot_buf,
+                                        sizeof(sysroot_buf));
+    if (!target) {
+        host_fd_ref_close(&dir_ref);
+        return -LINUX_ENAMETOOLONG;
+    }
+
     int mac_flags = translate_at_flags(flags);
-    if (fchmodat(dir_ref.fd, chmod_path, mode, mac_flags) < 0) {
+    if (fchmodat(dir_ref.fd, target, mode, mac_flags) < 0) {
         host_fd_ref_close(&dir_ref);
         return linux_errno();
     }
@@ -1592,8 +1603,20 @@ int64_t sys_fchownat(guest_t *g,
     if (host_dirfd_ref_open(dirfd, &dir_ref) < 0)
         return -LINUX_EBADF;
 
+    char sysroot_buf[LINUX_PATH_MAX];
+    const char *target =
+        (flags & LINUX_AT_SYMLINK_NOFOLLOW)
+            ? path_resolve_sysroot_nofollow_path(chown_path, sysroot_buf,
+                                                 sizeof(sysroot_buf))
+            : path_resolve_sysroot_path(chown_path, sysroot_buf,
+                                        sizeof(sysroot_buf));
+    if (!target) {
+        host_fd_ref_close(&dir_ref);
+        return -LINUX_ENAMETOOLONG;
+    }
+
     int mac_flags = translate_at_flags(flags);
-    if (fchownat(dir_ref.fd, chown_path, owner, group, mac_flags) < 0) {
+    if (fchownat(dir_ref.fd, target, owner, group, mac_flags) < 0) {
         host_fd_ref_close(&dir_ref);
         return linux_errno();
     }
@@ -1637,6 +1660,7 @@ int64_t sys_utimensat(guest_t *g,
     const char *path_arg = NULL;
     char path[LINUX_PATH_MAX];
     char proc_path[LINUX_PATH_MAX];
+    char sysroot_buf[LINUX_PATH_MAX];
     if (path_gva != 0) {
         if (guest_read_str(g, path_gva, path, sizeof(path)) < 0) {
             host_fd_ref_close(&dir_ref);
@@ -1648,7 +1672,16 @@ int64_t sys_utimensat(guest_t *g,
             host_fd_ref_close(&dir_ref);
             return -LINUX_ENAMETOOLONG;
         }
-        path_arg = proc_resolved > 0 ? proc_path : path;
+        const char *src = proc_resolved > 0 ? proc_path : path;
+        path_arg = (flags & LINUX_AT_SYMLINK_NOFOLLOW)
+                       ? path_resolve_sysroot_nofollow_path(src, sysroot_buf,
+                                                            sizeof(sysroot_buf))
+                       : path_resolve_sysroot_path(src, sysroot_buf,
+                                                   sizeof(sysroot_buf));
+        if (!path_arg) {
+            host_fd_ref_close(&dir_ref);
+            return -LINUX_ENAMETOOLONG;
+        }
     }
 
     struct timespec ts[2];

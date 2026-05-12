@@ -123,7 +123,11 @@ run_check()
         rc=$?
     fi
 
-    if printf "%s\n" "$output" | grep -qE "$pattern"; then
+    if [ "$rc" -ne 0 ]; then
+        test_report fail "$tool" " (exit rc=$rc)"
+        test_excerpt "$output"
+        fail=$((fail + 1))
+    elif printf "%s\n" "$output" | grep -qE "$pattern"; then
         test_report ok "$tool"
         pass=$((pass + 1))
     else
@@ -172,7 +176,11 @@ run_pipe()
         rc=$?
     fi
 
-    if printf "%s\n" "$output" | grep -qE "$pattern"; then
+    if [ "$rc" -ne 0 ]; then
+        test_report fail "$tool" " (exit rc=$rc)"
+        test_excerpt "$output"
+        fail=$((fail + 1))
+    elif printf "%s\n" "$output" | grep -qE "$pattern"; then
         test_report ok "$tool"
         pass=$((pass + 1))
     else

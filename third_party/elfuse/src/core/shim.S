@@ -16,7 +16,13 @@
  *   #2  Bad exception     (x0=ESR, x1=FAR, x2=ELR, x3=SPSR, x5=vector)
  *   #4  Set sysreg        (x0 = reg ID (0-8), x1 = value)
  *   #5  Syscall forward   (X0-X5=args, X8=syscall nr;
- *                          on return X8=TLBI flag, 2=execve)
+ *                          on return X8 carries the post-syscall request:
+ *                            0 = no TLB flush
+ *                            1 = broadcast TLBI VMALLE1IS
+ *                            2 = execve replaced register state (full flush
+ *                                + drop frame + ERET without GPR restore)
+ *                            3 = selective: TLBI VAE1IS over X10 pages
+ *                                starting at page-aligned VA in X9)
  *   #7  MRS trap          (host reads reg from ESR ISS; returns value in x0)
  *   #9  W^X toggle        (x0=FAR, x1=type: 0=exec->RX, 1=write->RW)
  *   #10 BRK from EL0      (SIGTRAP delivery / ptrace-stop; GPRs in frame)
@@ -481,8 +487,17 @@ handle_el0_fault:
 /* Shared exit paths for exception handlers
  */
 tlbi_restore_eret:
-    /* Flush TLB after page permission toggle (W^X or page table change) */
-    tlbi vmalle1is
+    /* Single-page TLB flush after a W^X permission toggle. Only one page
+     * (the one that triggered the HVC #9 fault, FAR_EL1 still in scope)
+     * changed permissions, so per-VA TLBI VAE1IS is sufficient and avoids
+     * blowing away unrelated TLB entries. The HVC #9 host handler does not
+     * raise further exceptions, so FAR_EL1 is preserved.
+     */
+    mrs x0, far_el1
+    lsr x0, x0, #12          /* TLBI VAE1IS operand: VA[55:12] */
+    tlbi vae1is, x0
+    dsb ish
+    ic iallu
     dsb ish
     isb
     /* Fall through to restore_eret */
@@ -550,30 +565,68 @@ handle_svc_0:
      *   1. Read X8 (syscall nr) and X0-X5 (args)
      *   2. Execute the syscall
      *   3. Write result to X0
-     *   4. Set X8 to 1 if page tables were modified (TLBI needed),
-     *      or 2 if execve replaced the full register state
+     *   4. Set X8 to indicate the post-syscall request:
+     *        0 = no TLB flush
+     *        1 = broadcast TLBI VMALLE1IS
+     *        2 = execve replaced register state (drop frame + flush)
+     *        3 = selective TLBI VAE1IS over X10 pages starting at X9
      *   5. Resume vCPU (execution continues below)
      */
     hvc #5
 
-    /* Execve rebuilt the guest register state.  Drop the old saved frame,
-     * flush stale translations, and return without restoring old GPRs.
-     */
-    cmp x8, #2
-    b.eq 2f
-
-    /* If the host modified page tables (X8 != 0), flush the TLB and I-cache.
-     * Normal syscalls skip this path: read/write/open/stat hot loops do not
-     * modify executable mappings, and the full IC IALLU+barrier sequence is
-     * measurable in syscall-heavy workloads. JIT/signal/exec paths use the
-     * drop-frame marker above, which still performs the full flush.
+    /* Dispatch on X8. Encoded so the common case (X8 == 0, no flush) hits
+     * the cbz fast path; the other branches sort by frequency thereafter.
      */
     cbz x8, 1f
+    cmp x8, #1
+    b.eq tlbi_full
+    cmp x8, #3
+    b.eq tlbi_selective
+    cmp x8, #2
+    b.eq exec_drop_frame
+    /* Unknown X8: be conservative, broadcast and continue. */
+
+tlbi_full:
+    /* Broadcast TLB + I-cache flush. Used for page-table edits whose
+     * affected range exceeds the selective cap, or any time the host could
+     * not bound the change.
+     */
     tlbi vmalle1is
     dsb ish
     ic iallu
     dsb ish
     isb
+    b 1f
+
+tlbi_selective:
+    /* Selective TLBI VAE1IS loop.
+     *   x9  = page-aligned VA of the first page to invalidate
+     *   x10 = page count (1..TLBI_SELECTIVE_MAX_PAGES, see core/guest.h)
+     * TLBI VAE1IS takes a Xt operand of (VA[55:12] | (ASID << 48)). The
+     * guest runs single-ASID at EL0, so just shift the VA right by 12.
+     * Issue all TLBI ops, then a single DSB ISH + IC IALLU + DSB + ISB
+     * matches broadcast semantics (preserves I-cache invalidation behaviour
+     * for callers like file-backed mmap of executable pages).
+     *
+     * Defensive: if x10 == 0, skip the loop. The per-vCPU host-side
+     * accumulator (cpu_tlbi_req in core/guest.h) never sets pages == 0
+     * alongside kind == TLBI_RANGE, but if a future helper bug or a stray
+     * write ever produced the pair X8=3, X10=0, the subs x12, x12, #1
+     * below would underflow to 0xFFFFFFFFFFFFFFFF and the b.ne would loop
+     * ~2^64 iterations, hanging this vCPU. Cheap guard.
+     */
+    cbz x10, 1f
+    lsr x11, x9, #12          /* x11 = VA >> 12 (current page operand) */
+    mov x12, x10              /* x12 = remaining page counter */
+3:  tlbi vae1is, x11
+    add x11, x11, #1          /* next page (operand is in 4 KiB units) */
+    subs x12, x12, #1
+    b.ne 3b
+    dsb ish
+    ic iallu
+    dsb ish
+    isb
+    b 1f
 
 1:
     /* Restore all guest registers except X0, which now holds the syscall
@@ -586,7 +639,8 @@ handle_svc_0:
      */
     eret
 
-2:  tlbi vmalle1is
+exec_drop_frame:
+    tlbi vmalle1is
     dsb ish
     isb
     ic iallu
