@@ -174,6 +174,39 @@ typedef struct {
     char name[64];          /* Label: "[heap]", "[stack]", ELF path, etc. */
 } guest_region_t;
 
+/* TLB invalidation request kinds. After every page-table modification, the
+ * shim flushes the TLB on syscall return. The host accumulates the smallest
+ * sufficient request across the syscall and emits it via the X8/X9/X10
+ * register channel. Kind values are an internal enum independent of the
+ * X8 wire codes; the syscall epilogue does the mapping (src/syscall/syscall.c
+ * holds the canonical table):
+ *   TLBI_NONE      -> X8 = 0  (no TLB flush)
+ *   TLBI_BROADCAST -> X8 = 1  (TLBI VMALLE1IS, broadest)
+ *   TLBI_RANGE     -> X8 = 3, X9 = start VA, X10 = page count
+ *                     (TLBI VAE1IS loop preserves unrelated TLB entries)
+ * X8 = 2 is reserved for the execve drop-frame marker the shim handles
+ * separately; it is never produced by the accumulator.
+ */
+typedef enum {
+    TLBI_NONE = 0,
+    TLBI_BROADCAST = 1,
+    TLBI_RANGE = 2,
+} tlbi_kind_t;
+
+/* Cap selective TLBI at this many 4 KiB pages. Beyond this, fall back to
+ * TLBI_BROADCAST: each TLBI VAE1IS broadcasts to all cores, so for large
+ * ranges the per-instruction issue cost outweighs the benefit of preserving
+ * unrelated TLB entries. 16 pages == 64 KiB covers RELRO and other typical
+ * mprotect / munmap targets.
+ */
+#define TLBI_SELECTIVE_MAX_PAGES 16
+
+typedef struct {
+    uint8_t kind;   /* tlbi_kind_t */
+    uint16_t pages; /* Page count when kind == TLBI_RANGE (1..MAX) */
+    uint64_t start; /* Page-aligned VA when kind == TLBI_RANGE */
+} tlbi_request_t;
+
 /* Guest state. */
 typedef struct {
     void *host_base; /* Host pointer to allocated guest memory */
@@ -221,9 +254,8 @@ typedef struct {
      */
     uint64_t mmap_rw_gap_hint, mmap_rx_gap_hint;
 
-    uint64_t ttbr0; /* TTBR0 value (IPA of L0 page table) */
-    bool need_tlbi; /* Signal shim to flush TLB after page table changes */
-    hv_vcpu_t vcpu; /* vCPU handle */
+    uint64_t ttbr0;       /* TTBR0 value (IPA of L0 page table) */
+    hv_vcpu_t vcpu;       /* vCPU handle */
     hv_vcpu_exit_t *exit; /* vCPU exit info */
     uint32_t ipa_bits;    /* IPA bits requested from HVF */
     /* Semantic region tracking for munmap/mprotect/proc-self-maps */
@@ -251,6 +283,107 @@ typedef struct {
 static inline void guest_pt_gen_bump(guest_t *g)
 {
     atomic_fetch_add_explicit(&g->pt_gen, 1, memory_order_release);
+}
+
+/* TLB invalidation request helpers.
+ *
+ * Per-vCPU TLS slot. Each guest thread (= one host pthread + one HVF vCPU)
+ * accumulates its own pending TLBI request as its syscall handlers mutate
+ * the page tables. The syscall epilogue (src/syscall/syscall.c) reads its
+ * own thread's slot, emits the X8/X9/X10 protocol, and clears it.
+ *
+ * Why per-vCPU and not a guest_t-global accumulator: a global slot lets one
+ * vCPU's syscall epilogue drain (and clear) another vCPU's pending request
+ * before that vCPU has eret'd back to EL0, allowing the second vCPU to use
+ * a stale TLB until the broadcast TLBI from the first vCPU's shim catches
+ * up. A per-vCPU slot makes each thread strictly responsible for issuing
+ * the TLBI for its own changes before its own eret. Page-table changes are
+ * still global (guest memory and page tables are shared), but TLBI VAE1IS
+ * and TLBI VMALLE1IS in the inner-shareable domain broadcast to all PEs,
+ * so one vCPU's own TLBI is sufficient to invalidate stale entries on its
+ * own PE before resuming guest code.
+ *
+ * No locking is needed for the slot itself; only the owning thread reads
+ * or writes it. Page-table updates remain serialized by mmap_lock.
+ *
+ * Cross-vCPU shootdown window: between vCPU A releasing mmap_lock at the
+ * end of an mprotect/munmap and the shim on A issuing the TLBI, sibling
+ * vCPU B may continue executing EL0 code that hits A's now-stale TLB
+ * entries. Real Linux closes this with cross-CPU IPI synchronization in
+ * the kernel; user-space emulation on Hypervisor.framework cannot inject
+ * a synchronous IPI into a sibling vCPU thread, so the window remains.
+ * The guest is responsible for serializing concurrent PT mutations
+ * against concurrent accesses (futex / pthread_mutex), which is the same
+ * contract real Linux requires of well-behaved multi-threaded code. See
+ * TODO.md "Bounded retry on stale TLB data abort" (P3 hardening) for the
+ * tracked follow-up if a workload ever surfaces an actual reproducer.
+ */
+extern _Thread_local tlbi_request_t cpu_tlbi_req;
+
+static inline void tlbi_request_clear(void)
+{
+    cpu_tlbi_req.kind = TLBI_NONE;
+    cpu_tlbi_req.pages = 0;
+    cpu_tlbi_req.start = 0;
+}
+
+static inline void tlbi_request_broadcast(void)
+{
+    cpu_tlbi_req.kind = TLBI_BROADCAST;
+}
+
+static inline void tlbi_request_range(uint64_t start, uint64_t end)
+{
+    if (cpu_tlbi_req.kind == TLBI_BROADCAST)
+        return;
+    if (end <= start)
+        return;
+    /* Page-align: TLBI VAE1IS operates on 4 KiB granules. ALIGN_UP can
+     * overflow if end is within PAGE_SIZE-1 of UINT64_MAX; saturate to
+     * broadcast in that pathological case rather than wrap to 0.
+     */
+    const uint64_t mask = 0xFFFULL;
+    if (end > UINT64_MAX - mask) {
+        tlbi_request_broadcast();
+        return;
+    }
+    uint64_t s = start & ~mask;
+    uint64_t e = (end + mask) & ~mask;
+    uint64_t n = (e - s) >> 12;
+    if (n > TLBI_SELECTIVE_MAX_PAGES) {
+        tlbi_request_broadcast();
+        return;
+    }
+    if (cpu_tlbi_req.kind == TLBI_NONE) {
+        cpu_tlbi_req.kind = TLBI_RANGE;
+        cpu_tlbi_req.start = s;
+        cpu_tlbi_req.pages = (uint16_t) n;
+        return;
+    }
+    /* TLBI_RANGE: coalesce by union. Disjoint ranges still produce a single
+     * bounding interval; if it stays within the cap, the per-page TLBI loop
+     * still wins over a full flush by preserving the rest of the TLB.
+     */
+    uint64_t es = cpu_tlbi_req.start;
+    uint64_t pe = (uint64_t) cpu_tlbi_req.pages * 4096ULL;
+    /* The accumulator only ever holds page counts <= TLBI_SELECTIVE_MAX_PAGES
+     * (see the cap check above), so es + pe never overflows on real callers,
+     * but be explicit.
+     */
+    if (es > UINT64_MAX - pe) {
+        tlbi_request_broadcast();
+        return;
+    }
+    uint64_t ee = es + pe;
+    uint64_t us = s < es ? s : es;
+    uint64_t ue = e > ee ? e : ee;
+    uint64_t un = (ue - us) >> 12;
+    if (un > TLBI_SELECTIVE_MAX_PAGES) {
+        tlbi_request_broadcast();
+        return;
+    }
+    cpu_tlbi_req.start = us;
+    cpu_tlbi_req.pages = (uint16_t) un;
 }
 
 /* Convert a guest offset (0-based) to an IPA/VA (ipa_base + offset) */
@@ -387,7 +520,8 @@ uint64_t guest_build_page_tables(guest_t *g,
 
 /* Extend page tables to cover a new address range [start, end) with 2MiB
  * block descriptors. Reuses the existing L0->L1 table structure and
- * allocates new L2 tables as needed. Sets g->need_tlbi = true.
+ * allocates new L2 tables as needed. Records a TLBI request covering the
+ * affected range (range or broadcast).
  * Returns 0 on success, -1 on failure.
  */
 int guest_extend_page_tables(guest_t *g,
@@ -399,7 +533,17 @@ int guest_extend_page_tables(guest_t *g,
  * block_gpa must be within a currently-mapped 2MiB block. The block's
  * permissions are inherited by all 512 page entries. If the block is
  * already split (L2 entry is a table descriptor), this is a no-op.
- * Sets g->need_tlbi = true. Returns 0 on success, -1 on failure.
+ *
+ * No TLBI request is issued: the split alone preserves every VA->PA
+ * translation in the block (each L3 page descriptor inherits the block's
+ * permissions). Every caller follows the split with guest_invalidate_ptes
+ * or guest_update_perms on the actually-changing range; that subsequent
+ * call records the TLBI, and TLBI VAE1IS for any VA in the block also
+ * invalidates the cached 2 MiB block entry covering that VA (ARM ARM
+ * B2.2.5.6), so a single per-page TLBI suffices to retire the stale
+ * block translation as soon as any affected page is accessed.
+ *
+ * Returns 0 on success, -1 on failure.
  */
 int guest_split_block(guest_t *g, uint64_t block_gpa);
 
@@ -409,7 +553,8 @@ int guest_split_block(guest_t *g, uint64_t block_gpa);
  * PROT_NONE; the correct behavior is for the guest to fault.
  * If a 2MiB block is only partially invalidated, the block is split
  * into L3 pages first (preserving the non-invalidated pages).
- * Sets g->need_tlbi = true. Returns 0 on success, -1 on failure.
+ * Records a TLBI request covering the invalidated range.
+ * Returns 0 on success, -1 on failure.
  */
 int guest_invalidate_ptes(guest_t *g, uint64_t start, uint64_t end);
 
@@ -418,7 +563,8 @@ int guest_invalidate_ptes(guest_t *g, uint64_t start, uint64_t end);
  * updated), the block is automatically split into 4KiB L3 pages first.
  * If the entire 2MiB block is being updated, the block descriptor is
  * modified in place without splitting.
- * perms is a MEM_PERM_R/W/X combination. Sets g->need_tlbi = true.
+ * perms is a MEM_PERM_R/W/X combination. Records a TLBI request only for
+ * pages whose descriptor actually changed.
  * Returns 0 on success, -1 on failure.
  */
 int guest_update_perms(guest_t *g, uint64_t start, uint64_t end, int perms);

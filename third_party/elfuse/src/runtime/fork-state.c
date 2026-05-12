@@ -440,9 +440,7 @@ int fork_ipc_send_process_state(int ipc_sock,
         return -1;
 
     char sysroot_ipc[LINUX_PATH_MAX] = {0};
-    const char *sr = proc_get_sysroot();
-    if (sr)
-        str_copy_trunc(sysroot_ipc, sr, sizeof(sysroot_ipc));
+    (void) proc_sysroot_snapshot(sysroot_ipc, sizeof(sysroot_ipc));
     if (fork_ipc_write_all(ipc_sock, sysroot_ipc, sizeof(sysroot_ipc)) < 0)
         return -1;
 

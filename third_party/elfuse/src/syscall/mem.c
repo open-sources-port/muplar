@@ -228,6 +228,26 @@ static void split_regions_at_boundary(guest_t *g, uint64_t boundary)
     }
 }
 
+/* Find the smallest i such that g->regions[i].end > gap_start. All earlier
+ * regions are entirely below gap_start and would be skipped by the loop body
+ * with no other effect. Regions are kept sorted by start and non-overlapping
+ * (sys_mmap MAP_FIXED removes overlaps before insertion), so ends are
+ * monotonic across the array and binary-searchable.
+ */
+static int first_region_end_above(const guest_t *g, uint64_t gap_start)
+{
+    int lo = 0;
+    int hi = g->nregions;
+    while (lo < hi) {
+        int mid = lo + (hi - lo) / 2;
+        if (g->regions[mid].end <= gap_start)
+            lo = mid + 1;
+        else
+            hi = mid;
+    }
+    return lo;
+}
+
 static uint64_t find_free_gap_inner(const guest_t *g,
                                     uint64_t length,
                                     uint64_t min_addr,
@@ -243,8 +263,15 @@ static uint64_t find_free_gap_inner(const guest_t *g,
     size_t hps = host_page_size_cached();
     uint64_t gap_start = ALIGN_UP(min_addr, hps);
 
-    for (int i = 0; i < g->nregions; i++) {
-        /* Skip regions entirely before the current search position */
+    /* Skip the prefix of regions entirely below gap_start in O(log n). After a
+     * successful allocation the gap hint advances near or past the existing
+     * region tail, so the linear walk would otherwise re-scan that whole
+     * prefix on every mmap, addr-hint probe, or hint-miss full scan.
+     */
+    for (int i = first_region_end_above(g, gap_start); i < g->nregions; i++) {
+        /* A region can still slip below gap_start after the ALIGN_UP advance
+         * below skips past a smaller adjacent region; keep the cheap guard.
+         */
         if (g->regions[i].end <= gap_start)
             continue;
 
@@ -658,7 +685,6 @@ static int rollback_fresh_mmap_allocation(guest_t *g,
         hvf_remove_file_overlay(g, overlay_ipa, overlay_len);
     if (guest_invalidate_ptes(g, start, start + length) < 0)
         return -LINUX_ENOMEM;
-    g->need_tlbi = true;
     g->mmap_next = saved_mmap_next;
     g->mmap_end = saved_mmap_end;
     g->mmap_rx_next = saved_mmap_rx_next;
@@ -1409,7 +1435,6 @@ int64_t sys_mmap(guest_t *g,
              * page table entries, making the range fault on access.
              */
             guest_invalidate_ptes(g, result_off, result_off + length);
-            g->need_tlbi = true;
         }
     }
 
@@ -1511,7 +1536,6 @@ int64_t sys_mmap(guest_t *g,
      */
     if (is_prot_none && !is_fixed) {
         guest_invalidate_ptes(g, result_off, result_off + length);
-        g->need_tlbi = true;
     }
 
     if (!is_prot_none && !is_fixed && !is_noreserve) {
@@ -1585,7 +1609,6 @@ int64_t sys_mmap(guest_t *g,
      */
     if (is_noreserve && !is_fixed) {
         guest_invalidate_ptes(g, result_off, result_off + length);
-        g->need_tlbi = true;
     }
 
     /* For file-backed mmap, populate the region with file contents.
@@ -2010,7 +2033,6 @@ int64_t sys_mremap(guest_t *g,
         }
         dispose_region_snapshots(&source_snaps, &source_nsnaps);
         dispose_region_snapshots(&dest_snaps, &dest_nsnaps);
-        g->need_tlbi = true;
         return (int64_t) guest_ipa(g, new_off);
     }
 
@@ -2079,7 +2101,6 @@ int64_t sys_mremap(guest_t *g,
                     mark_overlay_metadata_range(g, old_off, old_off + old_size,
                                                 old_overlay_start,
                                                 old_overlay_end);
-                g->need_tlbi = true;
 
                 /* Update high-water marks */
                 uint64_t hwm = old_off + new_size;
@@ -2193,7 +2214,6 @@ int64_t sys_mremap(guest_t *g,
                     source_overlay_end, track_backing_fd,
                     source_overlay_file_off);
                 guest_invalidate_ptes(g, new_off, new_off + new_size);
-                g->need_tlbi = true;
                 if (track_backing_fd >= 0)
                     close(track_backing_fd);
                 return copy_err;
@@ -2232,7 +2252,6 @@ int64_t sys_mremap(guest_t *g,
                 g->mmap_next = hwm;
         }
 
-        g->need_tlbi = true;
         return (int64_t) guest_ipa(g, new_off);
     }
 
@@ -2434,7 +2453,6 @@ static int munmap_guest_range(guest_t *g, uint64_t unmap_off, uint64_t end)
      */
     if (guest_invalidate_ptes(g, unmap_off, end) < 0)
         return -LINUX_ENOMEM;
-    g->need_tlbi = true;
     for (int i = 0; i < g->nregions; i++) {
         guest_region_t *r = &g->regions[i];
         if (r->start >= end)
@@ -2581,7 +2599,6 @@ int64_t sys_mprotect(guest_t *g, uint64_t addr, uint64_t length, int prot)
             } else {
                 guest_invalidate_ptes(g, mprot_off, mprot_end);
             }
-            g->need_tlbi = true;
         }
     }
     return 0;

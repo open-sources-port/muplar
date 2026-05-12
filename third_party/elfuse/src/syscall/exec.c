@@ -348,7 +348,10 @@ int64_t sys_execve(hv_vcpu_t vcpu,
     interp_resolved[0] = '\0';
 
     if (elf_info.interp_path[0] != '\0') {
-        elf_resolve_interp(proc_get_sysroot(), elf_info.interp_path,
+        char sysroot_snap[LINUX_PATH_MAX];
+        bool have_sr =
+            proc_sysroot_snapshot(sysroot_snap, sizeof(sysroot_snap));
+        elf_resolve_interp(have_sr ? sysroot_snap : NULL, elf_info.interp_path,
                            interp_resolved, sizeof(interp_resolved));
 
         log_debug("execve: pre-validating interpreter: %s", interp_resolved);
@@ -771,10 +774,11 @@ int64_t sys_execve(hv_vcpu_t vcpu,
 
     /* Tell the shim that execve replaced the full guest register state.
      * X8=2 means: flush TLB, discard the old syscall frame, and return without
-     * restoring pre-exec registers.
+     * restoring pre-exec registers. This bypasses the normal syscall epilogue,
+     * which would otherwise overwrite X8 from cpu_tlbi_req.
      */
     hv_vcpu_set_reg(vcpu, HV_REG_X8, 2);
-    g->need_tlbi = false;
+    tlbi_request_clear();
 
     /* Readback forces HVF to commit sysreg/GPR writes before the run loop
      * resumes the vCPU.

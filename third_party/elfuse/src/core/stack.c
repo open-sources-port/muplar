@@ -286,6 +286,10 @@ uint64_t build_linux_stack(guest_t *g,
     AUX(AT_EUID, GUEST_UID);
     AUX(AT_GID, GUEST_GID);
     AUX(AT_EGID, GUEST_GID);
+    /* Bionic's __libc_init_AT_SECURE aborts when AT_SECURE is absent.
+     * elfuse never elevates privileges, so AT_SECURE is always 0.
+     */
+    AUX(AT_SECURE, 0);
     AUX(AT_HWCAP2, query_hwcap2());
     AUX(AT_HWCAP, query_hwcap());
     AUX(AT_CLKTCK, 100);

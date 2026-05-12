@@ -9,6 +9,7 @@
 
 #include <errno.h>
 #include <fcntl.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -448,6 +449,73 @@ static void test_pac_hwcap(void)
         FAIL("PACA/PACG not set in HWCAP");
 }
 
+/* AT_SECURE auxv probe. Bionic aborts when AT_SECURE is missing from the
+ * auxiliary vector. elfuse never elevates privileges, so the value is 0.
+ * getauxval() also returns 0 when an entry is not present, so distinguish
+ * the two by walking /proc/self/auxv and looking for the AT_SECURE key.
+ *
+ * Read /proc/self/auxv with a loop: procfs is not required to return the
+ * whole file in one read, and EINTR must be retried. AT_NULL must appear
+ * in the accumulated buffer or the test cannot conclude.
+ */
+static void test_at_secure_present(void)
+{
+    TEST("AT_SECURE present and zero");
+
+    int fd = open("/proc/self/auxv", O_RDONLY);
+    if (fd < 0) {
+        FAIL("cannot open /proc/self/auxv");
+        return;
+    }
+    uint64_t buf[128];
+    size_t total = 0;
+    for (;;) {
+        ssize_t n = read(fd, (char *) buf + total, sizeof(buf) - total);
+        if (n < 0) {
+            if (errno == EINTR)
+                continue;
+            close(fd);
+            FAIL("read /proc/self/auxv failed");
+            return;
+        }
+        if (n == 0)
+            break;
+        total += (size_t) n;
+        if (total >= sizeof(buf))
+            break;
+    }
+    close(fd);
+    if (total == 0 || (total & 7) != 0) {
+        FAIL("auxv read returned no bytes or misaligned length");
+        return;
+    }
+
+    int found = 0, terminated = 0;
+    uint64_t value = 0;
+    for (size_t i = 0; i + 1 < total / 8; i += 2) {
+        if (buf[i] == 0 /* AT_NULL */) {
+            terminated = 1;
+            break;
+        }
+        if (buf[i] == 23 /* AT_SECURE */) {
+            found = 1;
+            value = buf[i + 1];
+            break;
+        }
+    }
+
+    if (found) {
+        if (value != 0)
+            FAIL("AT_SECURE present but non-zero");
+        else
+            PASS();
+    } else if (!terminated) {
+        FAIL("AT_NULL not reached in auxv buffer");
+    } else {
+        FAIL("AT_SECURE missing from /proc/self/auxv");
+    }
+}
+
 int main(void)
 {
     printf("test-tier-a: Tier A compatibility tests\n\n");
@@ -482,6 +550,9 @@ int main(void)
 
     /* PAC feature */
     test_pac_hwcap();
+
+    /* AT_SECURE auxv entry */
+    test_at_secure_present();
 
     SUMMARY("test-tier-a");
     return fails > 0 ? 1 : 0;

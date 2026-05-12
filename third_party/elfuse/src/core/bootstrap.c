@@ -279,7 +279,11 @@ int guest_bootstrap_prepare(guest_t *g,
         log_error("failed to build page tables");
         return -1;
     }
-    g->need_tlbi = true;
+    /* No TLBI request here: the shim's _start does TLBI VMALLE1IS before
+     * enabling the MMU (src/core/shim.S), and the per-vCPU accumulator is the
+     * wrong place to stage a bring-up flush -- bootstrap may run on a thread
+     * whose slot is later consumed by an unrelated syscall.
+     */
 
     guest_region_add(g, g->shim_base, g->shim_base + shim_bin_len,
                      LINUX_PROT_READ | LINUX_PROT_EXEC, LINUX_MAP_PRIVATE, 0,
@@ -439,6 +443,15 @@ int guest_bootstrap_create_vcpu(guest_t *g,
     if (verbose)
         log_debug("main thread registered with SP_EL1=0x%llx",
                   (unsigned long long) el1_sp);
+
+    /* guest_build_page_tables and the bootstrap-time guest_invalidate_ptes
+     * calls (stack guard, null page, etc.) accumulate TLBI requests on this
+     * (the main) thread's cpu_tlbi_req TLS slot. The shim's _start does TLBI
+     * VMALLE1IS before enabling the MMU, so any TLB state was already dropped
+     * before guest code runs. Clear the accumulator so the first guest syscall
+     * does not redundantly broadcast on top of that.
+     */
+    tlbi_request_clear();
 
     return 0;
 }

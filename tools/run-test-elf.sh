@@ -1,7 +1,6 @@
 #!/bin/zsh
 
 ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
-ELF="$ROOT_DIR/build/bin/test_return_42"
 
 echo "ROOT [${ROOT_DIR}]"
 echo "ANDROID SDK [${ANDROID_NDK_HOME}]"
@@ -21,15 +20,31 @@ if [ "$returnCode" -ne 0 ]; then
 fi
 echo "Building the source code done."
 
-echo "Building test binary..."
-sh $ROOT_DIR/tests/assets/elf/compile.sh
+echo "========================================="
+echo "Building basic test binary..."
+export scriptToRun=$ROOT_DIR/tests/assets/elf/compile-basic.sh
+chmod +x ${scriptToRun}
+sh ${scriptToRun}
 returnCode=$?
 if [ "$returnCode" -ne 0 ]; then
-    echo "Building test binary error."
+    echo "Building basic test binary error."
   exit 1
 fi
-echo "Building test binary done."
+echo "Building basic test binary done."
 
+echo "========================================="
+echo "Building shared test binary..."
+export scriptToRun=$ROOT_DIR/tests/assets/elf/compile-shared-lib.sh
+chmod +x ${scriptToRun}
+sh ${scriptToRun}
+returnCode=$?
+if [ "$returnCode" -ne 0 ]; then
+    echo "Building shared test binary error."
+  exit 1
+fi
+echo "Building shared test binary done."
+
+echo "========================================="
 echo "Running Muplar ELF loader..."
 echo "codesign -d --entitlements - $ROOT_DIR/build/bin/mup"
 cat > $ROOT_DIR/mup.entitlements << 'EOF'
@@ -45,5 +60,20 @@ cat > $ROOT_DIR/mup.entitlements << 'EOF'
 EOF
 codesign --entitlements mup.entitlements --force -s - $ROOT_DIR/build/bin/mup
 codesign -d --entitlements - $ROOT_DIR/build/bin/mup 2>&1  # verify it took
+
+ELF="$ROOT_DIR/build/bin/test_return_42"
+echo "========================\nCalling $ELF..."
 "$ROOT_DIR/build/bin/mup" "$ELF"
+echo "Exit code: $?"
+
+ELF="$ROOT_DIR/build/bin/simple_app_with_print"
+echo "========================\nCalling $ELF..."
+"$ROOT_DIR/build/bin/mup" "$ELF"
+echo "Exit code: $?"
+
+ELF="$ROOT_DIR/build/bin/test_shared"
+echo "========================\nCalling $ELF..."
+"$ROOT_DIR/build/bin/mup" --sysroot "$ROOT_DIR/build/sysroot" "$ELF"
+echo "Exit code: $?"
+
 echo "Script run finished!"

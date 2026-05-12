@@ -599,6 +599,13 @@ static int dev_shm_resolve_path(const char *guest_suffix,
     return 0;
 }
 
+int proc_dev_shm_resolve(const char *guest_suffix,
+                         char *host_path,
+                         size_t host_path_sz)
+{
+    return dev_shm_resolve_path(guest_suffix, host_path, host_path_sz);
+}
+
 /* Give synthetic procfs nodes stable identities so directory walkers do not
  * collapse distinct paths into one inode and falsely report filesystem loops.
  */
@@ -2553,12 +2560,26 @@ int proc_intercept_readlink(const char *path, char *buf, size_t bufsiz)
             return proc_intercept_readlink(alias, buf, bufsiz);
     }
 
-    /* /proc/self/exe -> path of current ELF binary */
+    /* /proc/self/exe -> path of current ELF binary.
+     * Strip the sysroot prefix so a guest running under --sysroot=/opt/sr
+     * sees /bin/ls rather than /opt/sr/bin/ls, matching the chroot-like
+     * abstraction the rest of the path layer presents.
+     */
     if (!strcmp(path, "/proc/self/exe")) {
         const char *exe = proc_get_elf_path();
         if (!exe) {
             errno = ENOENT;
             return -1;
+        }
+        char sysroot_snap[LINUX_PATH_MAX];
+        if (proc_sysroot_snapshot(sysroot_snap, sizeof(sysroot_snap))) {
+            size_t sr_len = strlen(sysroot_snap);
+            if (sr_len > 0 && strncmp(exe, sysroot_snap, sr_len) == 0 &&
+                (exe[sr_len] == '/' || exe[sr_len] == '\0')) {
+                exe += sr_len;
+                if (*exe == '\0')
+                    exe = "/";
+            }
         }
         size_t len = strlen(exe);
         if (len > bufsiz)
