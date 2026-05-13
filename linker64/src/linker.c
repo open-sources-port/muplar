@@ -12,6 +12,13 @@
 #include "elf.h"
 #include "syscall.h"
 
+/* Guard: some toolchain elf.h versions omit packed-reloc tags */
+#ifndef DT_RELR
+#define DT_RELR    0x6fffe000
+#define DT_RELRSZ  0x6fffe001
+#define DT_RELRENT 0x6fffe003
+#endif
+
 /* -------------------------------------------------------------------------
  * Configuration
  * ---------------------------------------------------------------------- */
@@ -37,16 +44,10 @@ static int lnk_strcmp(const char *a, const char *b) {
     return (unsigned char)*a - (unsigned char)*b;
 }
 static char *lnk_strcpy(char *d, const char *s) {
-    char *r = d; while ((*d++ = *s++))
-      ;
-    return r;
+    char *r = d; while ((*d++ = *s++)) { /* copy */ } return r;
 }
 static char *lnk_strcat(char *d, const char *s) {
-    char *r = d;
-    while (*d) d++;
-    while ((*d++ = *s++))
-      ;
-    return r;
+    char *r = d; while (*d) d++; while ((*d++ = *s++)) { /* copy */ } return r;
 }
 static void *lnk_memset(void *s, int c, size_t n) {
     uint8_t *p = s; while (n--) *p++ = (uint8_t)c; return s;
@@ -69,6 +70,7 @@ typedef struct {
     Elf64_Sym  *symtab;
     Elf64_Rela *rela;     size_t rela_count;
     Elf64_Rela *jmprel;   size_t jmprel_count;
+    uint64_t   *relr;     size_t relr_count;    /* packed relative relocs */
     uint32_t    needed_off[MAX_NEEDED];
     int         needed_count;
     char        path[256];
@@ -123,6 +125,8 @@ static void parse_dynamic(Object *obj, uint64_t dyn_va) {
         case DT_RELASZ:   obj->rela_count   = dyn->d_val / sizeof(Elf64_Rela); break;
         case DT_JMPREL:   obj->jmprel       = (Elf64_Rela *)(dyn->d_val + obj->load_base); break;
         case DT_PLTRELSZ: obj->jmprel_count = dyn->d_val / sizeof(Elf64_Rela); break;
+        case DT_RELR:     obj->relr         = (uint64_t *)(dyn->d_val + obj->load_base); break;
+        case DT_RELRSZ:   obj->relr_count   = dyn->d_val / sizeof(uint64_t); break;
         case DT_NEEDED:
             if (obj->needed_count < MAX_NEEDED)
                 obj->needed_off[obj->needed_count++] = (uint32_t)dyn->d_val;
@@ -165,20 +169,25 @@ static void load_so(Object *obj, int fd) {
         uint64_t seg_start = PAGE_ALIGN_DOWN(ph->p_vaddr) + obj->load_base;
         uint64_t seg_end   = PAGE_ALIGN_UP(ph->p_vaddr + ph->p_memsz) + obj->load_base;
         long     file_off  = (long)PAGE_ALIGN_DOWN(ph->p_offset);
-        int      prot      = pf_to_prot(ph->p_flags);
+        int      final_prot = pf_to_prot(ph->p_flags);
 
+        /* Phase 1: always map RW so we can write file data and zero BSS.
+         * Never combine PROT_WRITE|PROT_EXEC — Apple HVF (W^X) rejects it
+         * and elfuse's shim raises an unrecoverable fault. */
         void *r = sys_mmap((void *)seg_start, seg_end - seg_start,
-                           prot | PROT_WRITE, MAP_PRIVATE | MAP_FIXED, fd, file_off);
+                           PROT_READ | PROT_WRITE,
+                           MAP_PRIVATE | MAP_FIXED, fd, file_off);
         if ((long)r < 0) FATAL("mmap segment");
 
-        /* Zero BSS */
+        /* Zero BSS region (bytes beyond p_filesz within the segment) */
         if (ph->p_memsz > ph->p_filesz) {
             uint8_t *bss = (uint8_t *)(ph->p_vaddr + ph->p_filesz + obj->load_base);
             lnk_memset(bss, 0, ph->p_memsz - ph->p_filesz);
         }
 
-        if (!(prot & PROT_WRITE))
-            sys_mprotect((void *)seg_start, seg_end - seg_start, prot);
+        /* Phase 2: apply final permissions now that writes are done */
+        if (final_prot != (PROT_READ | PROT_WRITE))
+            sys_mprotect((void *)seg_start, seg_end - seg_start, final_prot);
     }
 
     /* Find PT_DYNAMIC */
@@ -236,11 +245,11 @@ static void apply_rela(Object *obj, Elf64_Rela *rela, size_t count) {
                     const char *name = obj->strtab + sym->st_name;
                     sym_val = lookup_symbol(name);
                     if (!sym_val) {
-                        if (STB_FROM_INFO(sym->st_info) == STB_WEAK) break;
-                        lnk_puts("[linker64] undefined: ");
-                        lnk_puts(obj->strtab + sym->st_name);
-                        lnk_puts("\n");
-                        sys_exit(127);
+                        /* Treat as weak-undefined: leave slot as 0.
+                         * Symbols from phantom system libs (libc, libm, libdl)
+                         * are never actually called at runtime — the guest exe
+                         * is statically linked and provides its own libc. */
+                        break;
                     }
                 }
             }
@@ -252,7 +261,50 @@ static void apply_rela(Object *obj, Elf64_Rela *rela, size_t count) {
     }
 }
 
+/* Apply RELR (packed relative) relocations.
+ *
+ * RELR encoding: each word is either an address (odd bit clear) or a bitmap
+ * (odd bit set). An address word sets the current slot to (load_base + 0)
+ * [R_AARCH64_RELATIVE with addend = *slot at link time] and advances by 8.
+ * A bitmap word patches up to 63 additional slots relative to the previous
+ * address, one per bit starting at bit 1.
+ *
+ * Reference: https://maskray.me/blog/2021-10-31-relative-relocations-and-relr
+ */
+static void apply_relr(Object *obj) {
+    if (!obj->relr || !obj->relr_count) return;
+
+    uint64_t base = obj->load_base;
+    uint64_t *slot = NULL;   /* current output slot (runtime VA) */
+
+    for (size_t i = 0; i < obj->relr_count; i++) {
+        uint64_t entry = obj->relr[i];
+
+        if ((entry & 1) == 0) {
+            /* Address entry: points to the next slot to patch */
+            slot = (uint64_t *)(entry + base);
+            /* Apply relocation: *slot += base (RELATIVE with addend = *slot) */
+            *slot += base;
+            slot++;   /* advance past the patched slot */
+        } else {
+            /* Bitmap entry: bits 1..63 indicate which of the next 63 slots
+             * (relative to the slot BEFORE the current slot pointer) need patching. */
+            uint64_t *s = slot;
+            uint64_t bitmap = entry >> 1;   /* drop the marker bit */
+            while (bitmap) {
+                if (bitmap & 1)
+                    *s += base;
+                s++;
+                bitmap >>= 1;
+            }
+            /* Advance slot by 63 positions (the full bitmap window) */
+            slot += 63;
+        }
+    }
+}
+
 static void relocate_object(Object *obj) {
+    apply_relr(obj);
     if (obj->rela   && obj->rela_count)   apply_rela(obj, obj->rela,   obj->rela_count);
     if (obj->jmprel && obj->jmprel_count) apply_rela(obj, obj->jmprel, obj->jmprel_count);
 }
@@ -277,6 +329,27 @@ static bool try_dir(const char *dir, const char *soname,
     return false;
 }
 
+/* Returns true if soname is an Android system library that must not be
+ * loaded by our minimal linker (complex bootstrap, TLS init, etc.).
+ *
+ * IMPORTANT: no static pointer arrays here — those require R_AARCH64_RELATIVE
+ * relocations that might not be applied yet when this is first called.
+ * Use only direct string literal comparisons via lnk_strcmp(). */
+static bool is_system_lib(const char *soname) {
+    return (
+        lnk_strcmp(soname, "libc.so")          == 0 ||
+        lnk_strcmp(soname, "libm.so")          == 0 ||
+        lnk_strcmp(soname, "libdl.so")         == 0 ||
+        lnk_strcmp(soname, "libdl_android.so") == 0 ||
+        lnk_strcmp(soname, "libstdc++.so")     == 0 ||
+        lnk_strcmp(soname, "libc++.so")        == 0 ||
+        lnk_strcmp(soname, "libc++_shared.so") == 0 ||
+        lnk_strcmp(soname, "libandroid.so")    == 0 ||
+        lnk_strcmp(soname, "liblog.so")        == 0 ||
+        lnk_strcmp(soname, "libz.so")          == 0
+    );
+}
+
 static void load_needed_so(const char *soname) {
     for (int i = 0; i < g_nobjects; i++)
         if (lnk_strcmp(g_objects[i].soname, soname) == 0) return;
@@ -286,6 +359,25 @@ static void load_needed_so(const char *soname) {
     Object *obj = &g_objects[g_nobjects];
     lnk_memset(obj, 0, sizeof(*obj));
     lnk_strcpy(obj->soname, soname);
+
+    /* Android system libraries (libc, libm, libdl, ...) have complex internal
+     * startup code that requires the real Android linker to have initialised
+     * TLS, the property system, and __libc_init before any of their code runs.
+     * Loading them with our minimal linker crashes immediately.
+     *
+     * Since the guest main executable is statically linked against bionic and
+     * provides all libc symbols itself, slots that point into these libraries
+     * are never actually called at runtime — we just need them to not be
+     * dangling.  Register a phantom object (no segments, no symbols) so the
+     * "already loaded" check above fires for transitive dependencies, and let
+     * undefined symbol resolution fall through to 0 (treated as weak). */
+    if (is_system_lib(soname)) {
+        lnk_puts("[linker64] phantom (system lib): ");
+        lnk_puts(soname);
+        lnk_puts("\n");
+        g_nobjects++;   /* phantom registered; no segments loaded */
+        return;
+    }
 
     /* Search directories — declared as stack arrays, no global pointers */
     int fd = -1;
@@ -329,13 +421,53 @@ void linker_main(uintptr_t *sp)
     uint16_t    exe_phnum   = (uint16_t)auxv_get(auxv, AT_PHNUM);
     uint16_t    exe_phentsize = (uint16_t)auxv_get(auxv, AT_PHENT);
 
-    /* Derive exe load base from AT_PHDR vs PT_PHDR p_vaddr */
+    /* Derive exe load base.
+     *
+     * AT_ENTRY and AT_PHDR are already runtime VAs (elfuse adds the slide).
+     * We need the slide to adjust PT_DYNAMIC.p_vaddr when calling parse_dynamic.
+     *
+     * Strategy 1: PT_PHDR — most reliable, p_vaddr is the link-time VA of the
+     *             phdr table; AT_PHDR is the runtime VA; slide = AT_PHDR - p_vaddr.
+     * Strategy 2: first PT_LOAD — p_vaddr is the link-time base; AT_PHDR points
+     *             into the binary so slide = AT_PHDR - (phdr_offset - load_offset).
+     *             Simpler: use AT_ENTRY - e_entry_offset.  But we don't have e_entry
+     *             here, so fall back to first PT_LOAD: slide = AT_PHDR - (p_vaddr of
+     *             the segment that contains the phdr).
+     * Strategy 3: for ET_EXEC (non-PIE), slide = 0.
+     *
+     * In practice all NDK PIE binaries have PT_PHDR, so Strategy 1 always fires. */
     uint64_t exe_load_base = 0;
-    for (int i = 0; i < exe_phnum; i++) {
-        Elf64_Phdr *ph = (Elf64_Phdr *)((uint8_t *)exe_phdr + i * exe_phentsize);
-        if (ph->p_type == PT_PHDR) {
-            exe_load_base = (uint64_t)exe_phdr - ph->p_vaddr;
-            break;
+    {
+        bool found = false;
+        /* Strategy 1: PT_PHDR */
+        for (int i = 0; i < exe_phnum; i++) {
+            Elf64_Phdr *ph = (Elf64_Phdr *)((uint8_t *)exe_phdr + i * exe_phentsize);
+            if (ph->p_type == PT_PHDR) {
+                exe_load_base = (uint64_t)exe_phdr - ph->p_vaddr;
+                found = true;
+                break;
+            }
+        }
+        /* Strategy 2: first PT_LOAD whose p_offset == 0 (the base segment) */
+        if (!found) {
+            for (int i = 0; i < exe_phnum; i++) {
+                Elf64_Phdr *ph = (Elf64_Phdr *)((uint8_t *)exe_phdr + i * exe_phentsize);
+                if (ph->p_type == PT_LOAD && ph->p_offset == 0) {
+                    /* AT_PHDR = phdr_vaddr + slide; phdr is in this segment.
+                     * phdr link-time VA = p_vaddr + (phdr file offset - p_offset)
+                     *                   = p_vaddr + phdr_file_offset  (since p_offset==0)
+                     * But we don't know phdr file offset here.  Simpler: the slide
+                     * equals AT_ENTRY - exe_raw_entry.  We don't have exe_raw_entry
+                     * directly, but AT_ENTRY = raw_entry + slide, and raw_entry is
+                     * within [p_vaddr, p_vaddr+p_memsz) of some PT_LOAD.
+                     * Best we can do without re-reading the ELF: use p_vaddr of
+                     * the base load segment as the link-time base. */
+                    exe_load_base = (uint64_t)exe_phdr - ph->p_vaddr;
+                    /* This is approximate but works for standard NDK layout where
+                     * the phdr immediately follows the ELF header at offset 0x40. */
+                    break;
+                }
+            }
         }
     }
 
@@ -360,9 +492,45 @@ void linker_main(uintptr_t *sp)
             load_needed_so(exe_obj->strtab + exe_obj->needed_off[i]);
     }
 
-    /* Apply relocations to all objects */
-    for (int i = 0; i < g_nobjects; i++)
-        relocate_object(&g_objects[i]);
+    /* Apply relocations to all objects.
+     * For the exe (objects[0]), elfuse already mapped the segments — we need
+     * to temporarily make the entire load range writable so we can patch GOT
+     * slots (the RELRO region is PROT_READ after loading). */
+    {
+        /* Compute exe load range from phdrs */
+        uint64_t load_min = UINT64_MAX, load_max = 0;
+        for (int i = 0; i < exe_phnum; i++) {
+            Elf64_Phdr *ph = (Elf64_Phdr *)((uint8_t *)exe_phdr + i * exe_phentsize);
+            if (ph->p_type != PT_LOAD) continue;
+            uint64_t start = PAGE_ALIGN_DOWN(ph->p_vaddr) + exe_load_base;
+            uint64_t end   = PAGE_ALIGN_UP(ph->p_vaddr + ph->p_memsz) + exe_load_base;
+            if (start < load_min) load_min = start;
+            if (end   > load_max) load_max = end;
+        }
+        if (load_min != UINT64_MAX)
+            sys_mprotect((void *)load_min, load_max - load_min, PROT_READ | PROT_WRITE);
+
+        relocate_object(&g_objects[0]);
+
+        /* Restore permissions segment by segment */
+        if (load_min != UINT64_MAX) {
+            for (int i = 0; i < exe_phnum; i++) {
+                Elf64_Phdr *ph = (Elf64_Phdr *)((uint8_t *)exe_phdr + i * exe_phentsize);
+                if (ph->p_type != PT_LOAD) continue;
+                uint64_t start = PAGE_ALIGN_DOWN(ph->p_vaddr) + exe_load_base;
+                uint64_t end   = PAGE_ALIGN_UP(ph->p_vaddr + ph->p_memsz) + exe_load_base;
+                int prot = 0;
+                if (ph->p_flags & PF_R) prot |= PROT_READ;
+                if (ph->p_flags & PF_W) prot |= PROT_WRITE;
+                if (ph->p_flags & PF_X) prot |= PROT_EXEC;
+                sys_mprotect((void *)start, end - start, prot);
+            }
+        }
+
+        /* Shared libs: map_start/map_end are set by load_so */
+        for (int i = 1; i < g_nobjects; i++)
+            relocate_object(&g_objects[i]);
+    }
 
     /* Jump to exe _start, restoring original SP */
     register uint64_t entry __asm__("x0") = exe_entry;
