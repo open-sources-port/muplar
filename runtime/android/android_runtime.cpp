@@ -3,6 +3,7 @@
 
 #include <cstdio>
 #include <cstring>
+#include <unistd.h>
 
 extern "C" {
     #include "core/guest.h"
@@ -32,8 +33,8 @@ static constexpr uint32_t HVC_STRCPY              = 0x200B;
 static constexpr uint32_t HVC_STRNCPY             = 0x200C;
 static constexpr uint32_t HVC_STRCAT              = 0x200D;
 static constexpr uint32_t HVC_STRDUP              = 0x200E;
-static constexpr uint32_t HVC_SPRINTF             = 0x200F;
-static constexpr uint32_t HVC_SNPRINTF            = 0x2010;
+[[maybe_unused]] static constexpr uint32_t HVC_SPRINTF             = 0x200F;
+[[maybe_unused]] static constexpr uint32_t HVC_SNPRINTF            = 0x2010;
 static constexpr uint32_t HVC_PRINTF              = 0x2011;
 static constexpr uint32_t HVC_ABORT               = 0x2012;
 static constexpr uint32_t HVC_EXIT                = 0x2013;
@@ -54,10 +55,10 @@ static constexpr uint32_t HVC_CLOCK_GETTIME       = 0x2032;
 static constexpr uint32_t HVC_GETTIMEOFDAY        = 0x2033;
 static constexpr uint32_t HVC_USLEEP              = 0x2034;
 static constexpr uint32_t HVC_NANOSLEEP           = 0x2035;
-static constexpr uint32_t HVC_STRTOL              = 0x2036;
-static constexpr uint32_t HVC_STRTOD              = 0x2037;
+[[maybe_unused]] static constexpr uint32_t HVC_STRTOL              = 0x2036;
+[[maybe_unused]] static constexpr uint32_t HVC_STRTOD              = 0x2037;
 static constexpr uint32_t HVC_ATOI                = 0x2038;
-static constexpr uint32_t HVC_ATOF                = 0x2039;
+[[maybe_unused]] static constexpr uint32_t HVC_ATOF                = 0x2039;
 static constexpr uint32_t HVC_RAND                = 0x203A;
 static constexpr uint32_t HVC_SRAND               = 0x203B;
 
@@ -75,11 +76,11 @@ static constexpr uint32_t HVC_ALOOPER_POLL_ALL    = 0x2204;
 static constexpr uint32_t HVC_ALOOPER_ADD_FD      = 0x2205;
 static constexpr uint32_t HVC_ALOOPER_REMOVE_FD   = 0x2206;
 static constexpr uint32_t HVC_ALOOPER_WAKE        = 0x2207;
-static constexpr uint32_t HVC_ASSET_MGR_OPEN      = 0x2210;
-static constexpr uint32_t HVC_ASSET_OPEN          = 0x2211;
-static constexpr uint32_t HVC_ASSET_READ          = 0x2212;
-static constexpr uint32_t HVC_ASSET_CLOSE         = 0x2213;
-static constexpr uint32_t HVC_ASSET_LENGTH        = 0x2214;
+[[maybe_unused]] static constexpr uint32_t HVC_ASSET_MGR_OPEN      = 0x2210;
+[[maybe_unused]] static constexpr uint32_t HVC_ASSET_OPEN          = 0x2211;
+[[maybe_unused]] static constexpr uint32_t HVC_ASSET_READ          = 0x2212;
+[[maybe_unused]] static constexpr uint32_t HVC_ASSET_CLOSE         = 0x2213;
+[[maybe_unused]] static constexpr uint32_t HVC_ASSET_LENGTH        = 0x2214;
 static constexpr uint32_t HVC_CHOREOGRAPHER_GET   = 0x2220;
 static constexpr uint32_t HVC_CHOREOGRAPHER_CB    = 0x2221;
 static constexpr uint32_t HVC_NATIVE_WINDOW_SET_BUF= 0x2230;
