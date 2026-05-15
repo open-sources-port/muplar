@@ -17,6 +17,7 @@
                 "${workspaceFolder}/runtime",
                 "${workspaceFolder}/runtime/elf",
                 "${workspaceFolder}/runtime/memory",
+                "${workspaceFolder}/runtime/jni",
                 "${workspaceFolder}/third_party/elfuse/src/core",
                 "${workspaceFolder}/third_party/elfuse/src/runtime",
                 "${workspaceFolder}/third_party/elfuse/src/syscell"

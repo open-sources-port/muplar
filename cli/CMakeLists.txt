@@ -20,4 +20,5 @@ target_include_directories(mup PUBLIC
     ${CMAKE_SOURCE_DIR}/runtime
     ${CMAKE_SOURCE_DIR}/runtime/elf
     ${CMAKE_SOURCE_DIR}/runtime/memory
+     ${CMAKE_SOURCE_DIR}/runtime/jni
 )
