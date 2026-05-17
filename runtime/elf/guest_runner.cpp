@@ -1,69 +1,56 @@
 // runtime/elf/guest_runner.cpp
 //
-// Implements GuestRunner::run() by delegating to the elfuse
-// guest_bootstrap_prepare / guest_bootstrap_create_vcpu / vcpu_run_loop
-// pipeline that already lives in third_party/elfuse.
+// GuestRunner::run() — wraps elfuse bootstrap + owns the vCPU run loop.
 //
-// The flow mirrors third_party/elfuse/src/main.c but is wrapped in a
-// C++ class so the rest of muplar can call it without touching C strings
-// directly.
+// Changes from v1: intercepts HVC #6 (muplar JNI/Android calls) before
+// delegating HVC #5 to elfuse's syscall_dispatch.
 //
-// Build requirements (add to runtime/elf/CMakeLists.txt):
-//   target_link_libraries(muplar_runtime_elf
-//       PRIVATE
-//           muplar_elfuse          # the elfuse static lib target
-//           "-framework Hypervisor"
-//   )
+// HVC immediate assignment:
+//   #5  → elfuse Linux syscall forwarding (unchanged)
+//   #6  → muplar dispatch (JNI 0x1000–0x1FFF, Android 0x2000–0x23FF)
+//         X8 carries the muplar call number, X0–X7 are arguments.
 
 #include "guest_runner.h"
 
 #include <stdexcept>
 #include <cstring>
 #include <cstdlib>
+#include <cstdio>
 #include <vector>
 
-// elfuse C headers — must be in an extern "C" block because elfuse is
-// plain C and does not have __cplusplus guards.
 extern "C" {
-    #include "core/bootstrap.h"  // guest_bootstrap_prepare / create_vcpu
-    #include "core/guest.h"      // guest_t, guest_destroy, vcpu_run_loop
-    #include "debug/log.h"       // log_init, log_set_level, LOG_DEBUG
-    #include "runtime/forkipc.h" // fork_child_main (not used here, but
-                                 //   forkipc.h is included by bootstrap.h
-                                 //   on some builds)
-
-    // shim_blob.h is generated at build time by elfuse's Makefile
-    // (xxd -i shim.bin > shim_blob.h).  It defines:
-    //   extern const unsigned char shim_bin[];
-    //   extern const unsigned int  shim_bin_len;
+    #include "core/bootstrap.h"
+    #include "core/guest.h"
+    #include "debug/log.h"
+    #include "debug/crashreport.h"
+    #include "runtime/forkipc.h"
     #include "shim_blob.h"
-
-    // Syscall
     #include "syscall/proc.h"
-
+    #include "syscall/abi.h"
     extern char** environ;
 }
 
 #include <Hypervisor/Hypervisor.h>
 
+// JNI bridge
+#include "../jni/jni_env.h"
+#include "../jni/jni_bridge.h"
+#include "../jni/jni_onload.h"
+
+// Android runtime stubs
+#include "../android/android_runtime.h"
+
 namespace muplar::runtime::elf {
 
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
+// ── Helpers ───────────────────────────────────────────────────────────────────
 
-// Convert a vector<string> to a heap-allocated NULL-terminated const char**,
-// as elfuse's C API expects.  Caller owns the memory; call free_cstrings().
 static const char** to_cstrings(const std::vector<std::string>& v)
 {
-    auto** arr = static_cast<const char**>(
-        std::calloc(v.size(), sizeof(const char*))
-    );
+    auto** arr = static_cast<const char**>(std::calloc(v.size(), sizeof(const char*)));
     if (!arr) return nullptr;
     for (size_t i = 0; i < v.size(); ++i) {
         arr[i] = strdup(v[i].c_str());
         if (!arr[i]) {
-            // Roll back on OOM
             for (size_t j = 0; j < i; ++j) free(const_cast<char*>(arr[j]));
             free(arr);
             return nullptr;
@@ -79,123 +66,219 @@ static void free_cstrings(const char** arr, int n)
     free(arr);
 }
 
-// ---------------------------------------------------------------------------
-// GuestRunner::run
-// ---------------------------------------------------------------------------
+
+// ── muplar_dispatch ───────────────────────────────────────────────────────────
+//
+// Called from the run loop on HVC #6.
+// X8 = muplar call number (0x1000–0x23FF)
+// X0–X7 = arguments
+// Returns value to write back into X0.
+
+static uint64_t muplar_dispatch(hv_vcpu_t vcpu,
+                                 [[maybe_unused]] jni::JniBridge* jni_bridge,
+                                 jni::JniOnLoad*                  jni_onload,
+                                 android::AndroidRuntime*         art,
+                                 [[maybe_unused]] guest_t*        g)
+{
+    uint64_t x8 = 0;
+    hv_vcpu_get_reg(vcpu, HV_REG_X8, &x8);
+    uint32_t call_nr = static_cast<uint32_t>(x8);
+
+    uint64_t regs[8] = {};
+    hv_vcpu_get_reg(vcpu, HV_REG_X0, &regs[0]);
+    hv_vcpu_get_reg(vcpu, HV_REG_X1, &regs[1]);
+    hv_vcpu_get_reg(vcpu, HV_REG_X2, &regs[2]);
+    hv_vcpu_get_reg(vcpu, HV_REG_X3, &regs[3]);
+    hv_vcpu_get_reg(vcpu, HV_REG_X4, &regs[4]);
+    hv_vcpu_get_reg(vcpu, HV_REG_X5, &regs[5]);
+    hv_vcpu_get_reg(vcpu, HV_REG_X6, &regs[6]);
+    hv_vcpu_get_reg(vcpu, HV_REG_X7, &regs[7]);
+
+    uint64_t x0_out = 0;
+
+    // JNI_OnLoad sentinel / JNI calls (0x1000–0x1FFF)
+    if (call_nr >= 0x1000 && call_nr <= 0x1FFF) {
+        jni_onload->try_intercept(call_nr, regs, &x0_out);
+        return x0_out;
+    }
+
+    // Android runtime stubs (0x2000–0x23FF)
+    if (call_nr >= 0x2000 && call_nr <= 0x23FF) {
+        art->try_dispatch(call_nr, regs, &x0_out);
+        return x0_out;
+    }
+
+    std::fprintf(stderr, "[muplar] unknown HVC #6 call_nr=0x%X\n", call_nr);
+    return 0;
+}
+
+// ── muplar_run_loop ───────────────────────────────────────────────────────────
+//
+// Mirrors elfuse's vcpu_run_loop but intercepts HVC #6 before passing
+// HVC #5 to syscall_dispatch.
+
+static int muplar_run_loop(hv_vcpu_t              vcpu,
+                            hv_vcpu_exit_t*        vexit,
+                            guest_t*               g,
+                            jni::JniBridge*        jni_bridge,
+                            jni::JniOnLoad*        jni_onload,
+                            android::AndroidRuntime* art,
+                            bool                   verbose,
+                            [[maybe_unused]] int   timeout_sec)
+{
+    int  exit_code = 0;
+    bool running   = true;
+
+    while (running) {
+        if (proc_exit_group_requested()) {
+            exit_code = proc_exit_group_requested();
+            break;
+        }
+
+        if (verbose) {
+            uint64_t pc = 0;
+            hv_vcpu_get_reg(vcpu, HV_REG_PC, &pc);
+            std::fprintf(stderr, "[muplar] vcpu_run PC=0x%llx\n",
+                         (unsigned long long)pc);
+        }
+
+        hv_return_t hr = hv_vcpu_run(vcpu);
+        if (hr != HV_SUCCESS) {
+            std::fprintf(stderr, "[muplar] hv_vcpu_run failed: 0x%x\n", hr);
+            exit_code = 1;
+            break;
+        }
+
+        if (proc_exit_group_requested()) {
+            exit_code = proc_exit_group_requested();
+            break;
+        }
+
+        if (vexit->reason == HV_EXIT_REASON_EXCEPTION) {
+            uint32_t ec  = (vexit->exception.syndrome >> 26) & 0x3F;
+            uint16_t imm = vexit->exception.syndrome & 0xFFFF;
+
+            if (ec == 0x16) {
+                // HVC exit
+                if (imm == 6) {
+                    // ── muplar intercept ──────────────────────────────────
+                    uint64_t result = muplar_dispatch(vcpu, jni_bridge,
+                                                       jni_onload, art, g);
+                    hv_vcpu_set_reg(vcpu, HV_REG_X0, result);
+
+                    // Advance PC past the HVC instruction (4 bytes)
+                    uint64_t pc = 0;
+                    hv_vcpu_get_reg(vcpu, HV_REG_PC, &pc);
+                    hv_vcpu_set_reg(vcpu, HV_REG_PC, pc + 4);
+
+                } else {
+                    // ── all other HVCs belong to elfuse ───────────────────
+                    // (#5 = Linux syscall, #11 = EL0 fault/signal,
+                    //  #0,2,4,7,9,10,12 = internal elfuse mechanisms)
+                    int ret = syscall_dispatch(vcpu, g, &exit_code, verbose);
+                    if (ret == 1)
+                        running = false;
+                }
+            } else {
+                // Non-HVC exception — hand off to elfuse crash reporter
+                crash_report(vcpu, g, CRASH_BAD_EXCEPTION, nullptr);
+                exit_code = 128 + ec;
+                running = false;
+            }
+        } else if (vexit->reason == HV_EXIT_REASON_CANCELED) {
+            // hv_vcpus_exit() was called (e.g. from exit_group handler)
+            if (proc_exit_group_requested()) {
+                exit_code = proc_exit_group_requested();
+            }
+            running = false;
+        }
+        // HV_EXIT_REASON_VTIMER_ACTIVATED: re-enter immediately
+    }
+
+    return exit_code;
+}
+
+// ── GuestRunner::run ──────────────────────────────────────────────────────────
 
 int GuestRunner::run(const GuestRunnerConfig& cfg)
 {
-    // -----------------------------------------------------------------------
-    // 0. Initialise elfuse logging
-    // -----------------------------------------------------------------------
     log_init();
-    if (cfg.verbose) {
-        log_set_level(LOG_DEBUG);
-    }
+    if (cfg.verbose) log_set_level(LOG_DEBUG);
 
-    // -----------------------------------------------------------------------
-    // 1. Prepare argv / sysroot as C strings
-    //
-    //    elfuse copies these strings internally (bootstrap.c strdup's them),
-    //    so we only need them alive until guest_bootstrap_prepare returns.
-    // -----------------------------------------------------------------------
-    const char* elf_path = cfg.elf_path.c_str();
-    const char* sysroot  = cfg.sysroot.empty() ? nullptr
-                                                : cfg.sysroot.c_str();
-
-    int guest_argc = static_cast<int>(cfg.argv.size());
+    const char*  elf_path  = cfg.elf_path.c_str();
+    const char*  sysroot   = cfg.sysroot.empty() ? nullptr : cfg.sysroot.c_str();
+    int          guest_argc = static_cast<int>(cfg.argv.size());
     const char** guest_argv = to_cstrings(cfg.argv);
 
-    if (!guest_argv) {
-        throw std::runtime_error("GuestRunner: out of memory allocating argv");
-    }
+    if (!guest_argv)
+        throw std::runtime_error("GuestRunner: OOM allocating argv");
 
-    // -----------------------------------------------------------------------
-    // 2. Bootstrap the guest
-    //
-    //    guest_bootstrap_prepare:
-    //      • Calls elf_load() to parse the ELF header and segments.
-    //      • Calls guest_init() to allocate the host-side hypervisor memory
-    //        slab (mmap'd MAP_ANON, demand-paged by macOS).
-    //      • Calls elf_map_segments() to copy PT_LOAD segments into the slab.
-    //      • If the binary has a PT_INTERP (dynamic linker), loads that too.
-    //      • Calls build_linux_stack() to construct the initial stack with
-    //        argc/argv/envp/auxv — this is the part your old ExecutionContext
-    //        was missing entirely.
-    //      • Embeds the shim (EL1 exception-vector code) in guest memory.
-    //      • Sets up identity-mapped page tables (GVA == GPA).
-    //      • Returns the entry_point and stack_pointer to use when creating
-    //        the vCPU.
-    // -----------------------------------------------------------------------
-    guest_t      g;
-    bool         guest_initialized = false;
+    guest_t           g;
+    bool              guest_initialized = false;
     guest_bootstrap_t boot;
 
-    std::printf("[Muplar] calling guest_bootstrap_prepare...\n");
-    int rc = guest_bootstrap_prepare( &g, elf_path, sysroot, guest_argc, guest_argv, environ, shim_bin, shim_bin_len, cfg.verbose, &guest_initialized, &boot );
-    std::printf("[Muplar] guest_bootstrap_prepare returned: %d\n", rc);
-
+    std::printf("[Muplar] guest_bootstrap_prepare...\n");
+    int rc = guest_bootstrap_prepare(&g, elf_path, sysroot,
+                                      guest_argc, guest_argv, environ,
+                                      shim_bin, shim_bin_len,
+                                      cfg.verbose, &guest_initialized, &boot);
     free_cstrings(guest_argv, guest_argc);
 
     if (rc < 0) {
         if (guest_initialized) guest_destroy(&g);
         throw std::runtime_error(
-            "GuestRunner: guest_bootstrap_prepare failed for: " + cfg.elf_path
-        );
+            "GuestRunner: guest_bootstrap_prepare failed for: " + cfg.elf_path);
     }
 
-    // -----------------------------------------------------------------------
-    // 3. Create the vCPU
-    //
-    //    guest_bootstrap_create_vcpu:
-    //      • Calls hv_vm_create() if not already done.
-    //      • Calls hv_vcpu_create() to allocate the hardware vCPU.
-    //      • Writes all AArch64 system registers (SCTLR_EL1, TCR_EL1,
-    //        MAIR_EL1, TTBR0_EL1, VBAR_EL1 …) so the guest starts in a
-    //        valid EL1 state with MMU on and page tables live.
-    //      • Sets PC = boot.entry_point, SP = boot.stack_pointer, CPSR to
-    //        EL1h mode.
-    //      • Sets X0 = 0 (as Linux kernel does for the initial process).
-    // -----------------------------------------------------------------------
     hv_vcpu_t       vcpu;
     hv_vcpu_exit_t* vexit;
 
-    std::printf("[Muplar] calling guest_bootstrap_create_vcpu...\n");
+    std::printf("[Muplar] guest_bootstrap_create_vcpu...\n");
     rc = guest_bootstrap_create_vcpu(&g, &boot, cfg.verbose, &vcpu, &vexit);
-    std::printf("[Muplar] guest_bootstrap_create_vcpu returned: %d\n", rc);
-
     if (rc < 0) {
         guest_destroy(&g);
-        throw std::runtime_error(
-            "GuestRunner: guest_bootstrap_create_vcpu failed"
-        );
+        throw std::runtime_error("GuestRunner: guest_bootstrap_create_vcpu failed");
     }
 
-    // -----------------------------------------------------------------------
-    // 4. Run the guest
+    // ── Set up muplar subsystems ──────────────────────────────────────────────
     //
-    //    vcpu_run_loop is elfuse's main dispatch loop:
-    //      • Calls hv_vcpu_run() in a loop.
-    //      • On HV_EXIT_REASON_EXCEPTION with syndrome ESR_EC_HVC:
-    //          - Reads the Linux syscall number from X8.
-    //          - Dispatches to the appropriate handler in syscall/*.c
-    //            (read, write, open, mmap, futex, clone, exit …).
-    //          - Translates arguments and return values between Linux and
-    //            macOS ABIs (e.g. mmap flags, errno values, struct layouts).
-    //          - Writes the result back into X0.
-    //      • On HV_EXIT_REASON_EXCEPTION with SIGILL / SIGSEGV:
-    //          - Logs a crash report and returns a non-zero exit code.
-    //      • Returns when the guest calls exit() / exit_group().
-    // -----------------------------------------------------------------------
-    std::printf("[Muplar] calling vcpu_run_loop...\n");
-    int exit_code = vcpu_run_loop(vcpu, vexit, &g, cfg.verbose, cfg.timeout_sec);
-    std::printf("[Muplar] vcpu_run_loop returned: %d\n", rc);
+    // Use shim_data_base (2MiB RW block) for our arenas — safe to write.
+    // shim_base is RX shim code; below it is the PT pool — do NOT write there.
+    // Layout within shim_data_base:
+    //   +0x000000 : JNI stub area    (4 KB)
+    //   +0x001000 : Android stubs    (4 KB)
+    //   +0x002000 : JNI table        (2 KB)
+    //   +0x003000 : JavaVM arena     (256 bytes)
+    uint64_t jni_stubs_gpa     = g.shim_data_base + 0x000000;
+    uint64_t android_stubs_gpa = g.shim_data_base + 0x001000;
+    uint64_t jni_table_gpa     = g.shim_data_base + 0x002000;
+    uint64_t java_vm_gpa       = g.shim_data_base + 0x003000;
 
-    // -----------------------------------------------------------------------
-    // 5. Tear down
-    // -----------------------------------------------------------------------
+    // 1. JNI environment
+    jni::JniEnv jni_env;
+
+    // 2. JNI bridge — installs JNINativeInterface table in guest memory
+    jni::JniBridge jni_bridge(&g, &jni_env, jni_table_gpa, jni_stubs_gpa);
+    jni_bridge.install();
+
+    // 3. JNI_OnLoad bootstrap
+    jni::JniOnLoad jni_onload(&g, &jni_bridge, &jni_env, java_vm_gpa);
+    jni_onload.install();
+
+    // 4. Android runtime stubs — installs HVC shims + builds symbol tables
+    android::AndroidRuntime art(&g, android_stubs_gpa);
+    art.install();
+
+    // (If you have a Linker, call art.builtin_symbols() + linker.add_builtin()
+    //  here before loading the target .so.)
+
+    std::printf("[Muplar] entering muplar_run_loop...\n");
+    int exit_code = muplar_run_loop(vcpu, vexit, &g,
+                                     &jni_bridge, &jni_onload, &art,
+                                     cfg.verbose, cfg.timeout_sec);
+    std::printf("[Muplar] exit code: %d\n", exit_code);
+
     guest_destroy(&g);
-
     return exit_code;
 }
 

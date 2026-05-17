@@ -125,7 +125,7 @@ static void encode_stub(uint8_t* out, uint32_t hvc_nr)
     // MOVZ X8, #imm16  — encoding: 1_10_100101_00_<imm16>_01000
     uint32_t movz = 0xD2800008u | ((hvc_nr & 0xFFFF) << 5);
     // HVC #5           — encoding: 1101 0100 000 <imm16> 00010  imm16=5
-    uint32_t hvc  = 0xD4000002u | (5u << 5);
+    uint32_t hvc  = 0xD4000002u | (6u << 5);
     memcpy(out + 0, &movz, 4);
     memcpy(out + 4, &hvc,  4);
 }
