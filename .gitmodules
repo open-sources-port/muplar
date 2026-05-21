@@ -1,3 +1,4 @@
 [submodule "third_party/elfuse"]
 	path = third_party/elfuse
-	url = https://github.com/sysprog21/elfuse.git
+	url = git@github.com:open-sources-port/elfuse.git
+	branch = main
