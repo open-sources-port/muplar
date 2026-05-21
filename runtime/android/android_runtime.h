@@ -53,7 +53,7 @@ class AndroidRuntime {
 public:
     // guest      : the running guest (must outlive AndroidRuntime)
     // stub_arena_gpa : base GPA of a free region for HVC shim stubs.
-    //                  Each stub is 8 bytes (movz x8, #hvc_nr; hvc #5).
+    //                  Each stub is 12 bytes (movz x8; hvc #6; ret).
     //                  Need at least num_stubs * 8 bytes — 4 KB is plenty.
     AndroidRuntime(guest_t* guest, uint64_t stub_arena_gpa);
 
@@ -82,7 +82,7 @@ private:
     void register_libandroid_stubs();
     void register_libdl_stubs();
 
-    // Write one 8-byte HVC shim stub at the next free slot in the arena.
+    // Write one HVC shim stub at the next free slot in the arena.
     // Returns the GPA of the stub.
     uint64_t write_stub(uint32_t hvc_nr);
 
@@ -106,7 +106,7 @@ private:
     // ── In-guest heap (bump allocator for malloc stubs) ───────────────────
     uint64_t heap_base_  = 0;
     uint64_t heap_bump_  = 0;
-    static constexpr uint64_t HEAP_SIZE = 4 * 1024 * 1024; // 4 MB
+    static constexpr uint64_t HEAP_SIZE = 512 * 1024; // lives inside shim data
 
     // ── pthread handle table ──────────────────────────────────────────────
     struct PthreadEntry { uint64_t stack_gpa; uint64_t stack_size; };

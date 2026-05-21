@@ -76,4 +76,18 @@ echo "========================\nCalling $ELF..."
 "$ROOT_DIR/build/bin/mup" --sysroot "$ROOT_DIR/build/sysroot" "$ELF"
 echo "Exit code: $?"
 
+NDK_SYSROOT=$NDK_PREBUILT/sysroot
+SYSROOT_TMP="$ROOT_DIR/build/sysroot/data/local/tmp"
+SYSROOT_LIB="$ROOT_DIR/build/sysroot/system/lib64"
+
+ELF="$SYSROOT_TMP/libjnitest.so"
+echo "========================\nCalling $ELF..."
+"$ROOT_DIR/build/bin/mup" --sysroot "$ROOT_DIR/build/sysroot" "$ELF"
+echo "Exit code: $?"
+
+ELF="$SYSROOT_TMP/libnativeactivitytest.so"
+echo "========================\nCalling $ELF..."
+"$ROOT_DIR/build/bin/mup" --sysroot "$ROOT_DIR/build/sysroot" "$ELF"
+echo "Exit code: $?"
+
 echo "Script run finished!"

@@ -3,6 +3,7 @@
 
 #include <cstdio>
 #include <cstring>
+#include <string>
 #include <unistd.h>
 
 extern "C" {
@@ -116,18 +117,89 @@ static uint64_t guest_read_u64(guest_t* g, uint64_t gpa)
     return v;
 }
 
-// ── AArch64 HVC shim stub layout (8 bytes) ────────────────────────────────────
+static std::string format_guest_log(guest_t* g,
+                                    const std::string& fmt,
+                                    const uint64_t* varargs,
+                                    size_t vararg_count)
+{
+    std::string out;
+    size_t arg = 0;
+
+    for (size_t i = 0; i < fmt.size(); ++i) {
+        if (fmt[i] != '%' || i + 1 >= fmt.size()) {
+            out.push_back(fmt[i]);
+            continue;
+        }
+
+        char tmp[64] = {};
+        char spec = fmt[++i];
+        if (spec == '%') {
+            out.push_back('%');
+            continue;
+        }
+        if (spec == 'l' && i + 2 < fmt.size() && fmt[i + 1] == 'l') {
+            i += 2;
+            spec = fmt[i];
+        }
+        if (arg >= vararg_count) {
+            out.push_back('%');
+            out.push_back(spec);
+            continue;
+        }
+
+        uint64_t value = varargs[arg++];
+        switch (spec) {
+        case 'd':
+        case 'i':
+            std::snprintf(tmp, sizeof(tmp), "%lld",
+                          static_cast<long long>(value));
+            out += tmp;
+            break;
+        case 'u':
+            std::snprintf(tmp, sizeof(tmp), "%llu",
+                          static_cast<unsigned long long>(value));
+            out += tmp;
+            break;
+        case 'x':
+            std::snprintf(tmp, sizeof(tmp), "%llx",
+                          static_cast<unsigned long long>(value));
+            out += tmp;
+            break;
+        case 'p':
+            std::snprintf(tmp, sizeof(tmp), "0x%llx",
+                          static_cast<unsigned long long>(value));
+            out += tmp;
+            break;
+        case 's':
+            out += guest_read_string(g, value);
+            break;
+        default:
+            out.push_back('%');
+            out.push_back(spec);
+            break;
+        }
+    }
+
+    return out;
+}
+
+// ── AArch64 HVC shim stub layout ─────────────────────────────────────────────
 //   movz x8, #<hvc_nr>     ; 4 bytes
-//   hvc  #5                ; 4 bytes
-// The elfuse shim catches HVC #5, reads X8 as the call number, dispatches.
+//   hvc  #6                ; 4 bytes
+//   ret                    ; 4 bytes
+// The elfuse shim catches HVC #6, reads X8 as the call number, dispatches.
+static constexpr uint64_t HVC_STUB_SIZE = 12;
+
 static void encode_stub(uint8_t* out, uint32_t hvc_nr)
 {
     // MOVZ X8, #imm16  — encoding: 1_10_100101_00_<imm16>_01000
     uint32_t movz = 0xD2800008u | ((hvc_nr & 0xFFFF) << 5);
-    // HVC #5           — encoding: 1101 0100 000 <imm16> 00010  imm16=5
+    // HVC #6           — encoding: 1101 0100 000 <imm16> 00010  imm16=6
     uint32_t hvc  = 0xD4000002u | (6u << 5);
+    uint32_t ret  = 0xD65F03C0u;
     memcpy(out + 0, &movz, 4);
     memcpy(out + 4, &hvc,  4);
+    memcpy(out + 8, &ret,  4);
 }
 
 // ── AndroidRuntime ────────────────────────────────────────────────────────────
@@ -138,11 +210,11 @@ AndroidRuntime::AndroidRuntime(guest_t* guest, uint64_t stub_arena_gpa)
 
 uint64_t AndroidRuntime::write_stub(uint32_t hvc_nr)
 {
-    uint8_t stub[8];
+    uint8_t stub[HVC_STUB_SIZE];
     encode_stub(stub, hvc_nr);
     uint64_t gpa = next_stub_gpa_;
-    guest_write(guest_, gpa, stub, 8);
-    next_stub_gpa_ += 8;
+    guest_write(guest_, gpa, stub, sizeof(stub));
+    next_stub_gpa_ += HVC_STUB_SIZE;
     return gpa;
 }
 
@@ -163,9 +235,9 @@ void AndroidRuntime::install()
     installed_     = true;
     next_stub_gpa_ = arena_gpa_;
 
-    // Carve out a heap region just after the stub area.
-    // Reserve 2 KB for stubs (250 stubs × 8 bytes), then heap.
-    heap_base_ = arena_gpa_ + 2048;
+    // Carve out a heap region after fixed shim tables/scratch objects.
+    // The whole shim data block is 2 MiB, so keep this bounded and local.
+    heap_base_ = arena_gpa_ + 0x10000;
     heap_bump_ = heap_base_;
 
     register_libc_stubs();
@@ -462,8 +534,9 @@ void AndroidRuntime::register_liblog_stubs()
             // a[0]=priority, a[1]=tag GPA, a[2]=fmt GPA, a[3..]=args
             auto tag = guest_read_string(g, a[1]);
             auto fmt = guest_read_string(g, a[2]);
-            std::fprintf(stderr, "[logcat/%s] %s\n", tag.c_str(), fmt.c_str());
-            return static_cast<uint64_t>(fmt.size());
+            auto msg = format_guest_log(g, fmt, a + 3, 5);
+            std::fprintf(stderr, "[logcat/%s] %s\n", tag.c_str(), msg.c_str());
+            return static_cast<uint64_t>(msg.size());
         });
 
     add("liblog.so", "__android_log_write", HVC_LOG_WRITE,
