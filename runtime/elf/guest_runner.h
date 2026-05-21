@@ -20,10 +20,19 @@
 //   // cfg.sysroot = "/opt/android-sysroot";  // optional
 //   int exit_code = runner.run(cfg);
 
+#include <cstdint>
 #include <string>
 #include <vector>
 
 namespace muplar::runtime::elf {
+
+    struct JniCallConfig {
+        bool enabled = false;
+        std::string class_name;
+        std::string method_name;
+        std::string signature;
+        std::vector<int64_t> int_args;
+    };
 
     struct GuestRunnerConfig {
         // Path to the AArch64 Linux ELF binary.
@@ -43,6 +52,12 @@ namespace muplar::runtime::elf {
         // Per-vCPU-iteration timeout in seconds.  A guest that spins
         // indefinitely without a syscall will be killed after this.
         int timeout_sec = 10;
+
+        // Optional phase-5 JNI/native call target for direct Android .so runs.
+        JniCallConfig jni_call;
+
+        // Optional phase-5 NativeActivity bootstrap entry.
+        bool native_activity = false;
     };
 
     class GuestRunner {

@@ -27,8 +27,9 @@ extern "C" {
 
 #include <Hypervisor/Hypervisor.h>
 #include <cstdint>
-#include <string>
 #include <functional>
+#include <string>
+#include <vector>
 
 namespace muplar::runtime::jni {
 
@@ -85,6 +86,12 @@ public:
     uint64_t find_jni_onload(uint64_t so_load_base,
                              const std::string& so_path);
 
+    // Locate any exported dynamic symbol in a loaded .so.
+    uint64_t find_symbol(uint64_t so_load_base,
+                         const std::string& so_path,
+                         const std::string& symbol_name,
+                         bool quiet = false);
+
     // Set up the vCPU to call JNI_OnLoad and run until it returns.
     //
     // Call this after find_jni_onload() returns a non-zero GPA.
@@ -97,6 +104,32 @@ public:
     //
     // Returns the int returned by JNI_OnLoad (should be JNI_VERSION_1_6).
     int call_jni_onload(uint64_t        jni_onload_gpa,
+                        hv_vcpu_t       vcpu,
+                        hv_vcpu_exit_t* vexit,
+                        std::function<int(hv_vcpu_t, hv_vcpu_exit_t*, guest_t*)> run_loop_cb);
+
+    // Generic guest function call helper. Sets X0..X7 from args and uses the
+    // same sentinel return path as JNI_OnLoad.
+    int64_t call_guest_function(uint64_t        entry_gpa,
+                                const std::vector<uint64_t>& args,
+                                hv_vcpu_t       vcpu,
+                                hv_vcpu_exit_t* vexit,
+                                std::function<int(hv_vcpu_t, hv_vcpu_exit_t*, guest_t*)> run_loop_cb);
+
+    // Smoke helper for registered JNI methods with signature (II)I.
+    int call_native_int2(uint64_t        native_gpa,
+                         uint64_t        thiz,
+                         int             a,
+                         int             b,
+                         hv_vcpu_t       vcpu,
+                         hv_vcpu_exit_t* vexit,
+                         std::function<int(hv_vcpu_t, hv_vcpu_exit_t*, guest_t*)> run_loop_cb);
+
+    // Generic helper for registered/exported JNI methods with primitive
+    // integer-like arguments. X0=JNIEnv*, X1=thiz, X2..X7=args.
+    int64_t call_native(uint64_t        native_gpa,
+                        uint64_t        thiz,
+                        const std::vector<int64_t>& args,
                         hv_vcpu_t       vcpu,
                         hv_vcpu_exit_t* vexit,
                         std::function<int(hv_vcpu_t, hv_vcpu_exit_t*, guest_t*)> run_loop_cb);
@@ -125,6 +158,7 @@ private:
 
     bool     onload_returned_  = false;
     uint64_t onload_retval_    = 0;
+    uint64_t sentinel_stub_gpa_ = 0;
 };
 
 } // namespace muplar::runtime::jni

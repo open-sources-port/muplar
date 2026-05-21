@@ -6,7 +6,7 @@ ROOT_DIR="$(cd "$SCRIPT_DIR/../../.." && pwd)"
 
 NDK_PREBUILT=$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/darwin-x86_64
 CC=$NDK_PREBUILT/bin/aarch64-linux-android35-clang
-
+NDK_SYSROOT=$NDK_PREBUILT/sysroot
 SYSROOT_TMP="$ROOT_DIR/build/sysroot/data/local/tmp"
 SYSROOT_LIB="$ROOT_DIR/build/sysroot/system/lib64"
 
@@ -17,6 +17,34 @@ echo "[compile] Building libadd.so ..."
 $CC -shared -fPIC -Wl,-z,max-page-size=4096 \
     "$ROOT_DIR/tests/assets/elf/libadd.c" \
     -o "$SYSROOT_TMP/libadd.so"
+
+# --- libjnitest.so ---
+
+
+echo "[compile] Building libjnitest.so ..."
+$CC -shared -fPIC \
+    -Wl,-z,max-page-size=4096 \
+    -isystem "$NDK_SYSROOT/usr/include" \
+    -isystem "$NDK_SYSROOT/usr/include/aarch64-linux-android" \
+    "$ROOT_DIR/tests/assets/elf/libjnitest.c" \
+    -llog \
+    -o "$SYSROOT_TMP/libjnitest.so"
+
+echo "[compile] Built: $SYSROOT_TMP/libjnitest.so"
+file "$SYSROOT_TMP/libjnitest.so"
+
+# --- libnativeactivitytest.so ---
+echo "[compile] Building libnativeactivitytest.so ..."
+$CC -shared -fPIC \
+    -Wl,-z,max-page-size=4096 \
+    -isystem "$NDK_SYSROOT/usr/include" \
+    -isystem "$NDK_SYSROOT/usr/include/aarch64-linux-android" \
+    "$ROOT_DIR/tests/assets/elf/libnativeactivitytest.c" \
+    -llog \
+    -o "$SYSROOT_TMP/libnativeactivitytest.so"
+
+echo "[compile] Built: $SYSROOT_TMP/libnativeactivitytest.so"
+file "$SYSROOT_TMP/libnativeactivitytest.so"
 
 # --- test_shared ---
 # -nostartfiles: skip crtbegin_dynamic.o which calls __libc_init (needs real libc)

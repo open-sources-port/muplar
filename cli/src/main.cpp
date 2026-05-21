@@ -23,7 +23,11 @@
 static void print_usage(const char* prog)
 {
     std::cerr << "Usage: " << prog
-              << " [--verbose] [--sysroot PATH] <elf-file> [args...]\n";
+              << " [--verbose] [--sysroot PATH]\n"
+              << "              [--native-activity]\n"
+              << "              [--jni-call CLASS METHOD SIGNATURE]"
+              << " [--jni-int VALUE ...]\n"
+              << "              <elf-file> [args...]\n";
 }
 
 int main(int argc, char** argv)
@@ -50,6 +54,26 @@ int main(int argc, char** argv)
         } else if ((flag == "--sysroot") && arg_start + 1 < argc) {
             cfg.sysroot = argv[arg_start + 1];
             arg_start  += 2;
+        } else if (flag == "--native-activity") {
+            cfg.native_activity = true;
+            ++arg_start;
+        } else if ((flag == "--jni-call") && arg_start + 3 < argc) {
+            cfg.jni_call.enabled = true;
+            cfg.jni_call.class_name  = argv[arg_start + 1];
+            cfg.jni_call.method_name = argv[arg_start + 2];
+            cfg.jni_call.signature   = argv[arg_start + 3];
+            arg_start += 4;
+        } else if ((flag == "--jni-int" || flag == "--jni-arg") &&
+                   arg_start + 1 < argc) {
+            try {
+                cfg.jni_call.int_args.push_back(
+                    std::stoll(argv[arg_start + 1], nullptr, 0));
+            } catch (const std::exception&) {
+                std::cerr << "Invalid --jni-int value: "
+                          << argv[arg_start + 1] << "\n";
+                return 1;
+            }
+            arg_start += 2;
         } else if (flag == "--") {
             ++arg_start;
             break;

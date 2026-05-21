@@ -12,6 +12,17 @@ namespace muplar::runtime::jni {
 
 // ── JNINativeMethod layout in AArch64 guest memory ──────────────────────────
 // sizeof(GuestJNINativeMethod) = 24 (3 × 8-byte pointers, no padding)
+static constexpr uint64_t JNI_STUB_SIZE = 12;
+
+static void encode_hvc_stub(uint8_t* out, uint32_t call_nr)
+{
+    uint32_t movz = 0xD2800008u | ((call_nr & 0xFFFFu) << 5);
+    uint32_t hvc  = 0xD4000002u | (6u << 5);
+    uint32_t ret  = 0xD65F03C0u;
+    std::memcpy(out + 0, &movz, 4);
+    std::memcpy(out + 4, &hvc,  4);
+    std::memcpy(out + 8, &ret,  4);
+}
 
 JniBridge::JniBridge(guest_t* guest,
                      JniEnv*  jni_env,
@@ -36,6 +47,12 @@ void JniBridge::write_u64(uint64_t gpa, uint64_t value)
     guest_write(guest_, gpa, &value, sizeof(value));
 }
 
+uint64_t JniBridge::rebase_if_needed(uint64_t gpa) const
+{
+    if (!gpa || !guest_->elf_load_min) return gpa;
+    return gpa < guest_->elf_load_min ? guest_->elf_load_min + gpa : gpa;
+}
+
 // ────────────────────────────────────────────────────────────────────────────
 // install — write the JNINativeInterface slot table into guest memory.
 //
@@ -44,17 +61,22 @@ void JniBridge::write_u64(uint64_t gpa, uint64_t value)
 // all others remain zero (→ crash-on-call = diagnosable missing coverage).
 //
 // Table address at table_gpa_; each slot is 8 bytes.
-// Stubs at stub_base_gpa_ + (call_nr - 0x1000) * 8.
+// Stubs at stub_base_gpa_ + (call_nr - 0x1000) * JNI_STUB_SIZE.
 // ────────────────────────────────────────────────────────────────────────────
 void JniBridge::install()
 {
-    // Zero the table (230 slots × 8 bytes = 1840 bytes)
-    static constexpr int SLOTS = 230;
+    // Zero the Android JNI table through JNI 1.6's GetObjectRefType slot.
+    static constexpr int SLOTS = 233;
     uint8_t zeroes[SLOTS * 8] = {};
     guest_write(guest_, table_gpa_, zeroes, sizeof(zeroes));
 
-    // Write each implemented slot
+    // Write each implemented function stub and table slot.
     for (auto& [slot, stub_gpa] : env_->install_entries(stub_base_gpa_)) {
+        uint32_t call_nr =
+            0x1000u + static_cast<uint32_t>((stub_gpa - stub_base_gpa_) / JNI_STUB_SIZE);
+        uint8_t stub[JNI_STUB_SIZE] = {};
+        encode_hvc_stub(stub, call_nr);
+        guest_write(guest_, stub_gpa, stub, sizeof(stub));
         write_u64(table_gpa_ + static_cast<uint64_t>(slot) * 8, stub_gpa);
     }
 
@@ -99,6 +121,10 @@ void JniBridge::register_natives_from_guest(uint64_t class_handle,
         guest_read(guest_, entry_gpa + 0,  &name_gpa, 8);
         guest_read(guest_, entry_gpa + 8,  &sig_gpa,  8);
         guest_read(guest_, entry_gpa + 16, &fn_gpa,   8);
+
+        name_gpa = rebase_if_needed(name_gpa);
+        sig_gpa  = rebase_if_needed(sig_gpa);
+        fn_gpa   = rebase_if_needed(fn_gpa);
 
         std::string name = read_str(name_gpa);
         std::string sig  = read_str(sig_gpa);

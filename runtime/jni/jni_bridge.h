@@ -61,6 +61,7 @@ private:
     // ── guest memory helpers ──────────────────────────────────────────────
     std::string read_str(uint64_t gpa);
     void        write_u64(uint64_t gpa, uint64_t value);
+    uint64_t    rebase_if_needed(uint64_t gpa) const;
 
     // Pre-resolve any GPA arguments that are char* pointers before the call.
     void intern_char_arg(uint64_t gpa);
