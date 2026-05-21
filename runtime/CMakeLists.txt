@@ -1,6 +1,7 @@
 add_subdirectory(elf)
 add_subdirectory(memory)
 add_subdirectory(jni)
+add_subdirectory(android)
 
 add_library(muplar_runtime
     runtime_builder.cpp
