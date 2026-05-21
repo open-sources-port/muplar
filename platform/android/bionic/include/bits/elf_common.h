@@ -561,9 +561,6 @@ typedef struct {
 #define	PT_OPENBSD_BOOTDATA	0x65A41BE6	/* OpenBSD section for boot args */
 
 /* Values for p_flags. */
-#define	PF_X		0x1		/* Executable. */
-#define	PF_W		0x2		/* Writable. */
-#define	PF_R		0x4		/* Readable. */
 #define	PF_MASKOS	0x0ff00000	/* Operating system-specific. */
 #define	PF_MASKPROC	0xf0000000	/* Processor-specific. */
 

@@ -190,9 +190,7 @@ typedef struct elf64_hdr {
   Elf64_Half e_shnum;
   Elf64_Half e_shstrndx;
 } Elf64_Ehdr;
-#define PF_R 0x4
-#define PF_W 0x2
-#define PF_X 0x1
+
 typedef struct elf32_phdr {
   Elf32_Word p_type;
   Elf32_Off p_offset;

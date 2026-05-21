@@ -11,7 +11,10 @@ add_executable(mup
 
 target_link_libraries(mup
     PRIVATE
-    muplar_runtime
+    muplar_runtime_memory
+    muplar_runtime_elf
+    muplar_runtime_jni
+    muplar_runtime_android
 )
 
 target_include_directories(mup PUBLIC
