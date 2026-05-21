@@ -1,40 +1,31 @@
 # runtime/elf/CMakeLists.txt
 
 # ── Source files ──────────────────────────────────────────────────────────────
-add_library(muplar_runtime_elf STATIC
-    elf_loader.cpp
-    elf_mapper.cpp
-    execution_context.cpp
-    guest_runner.cpp
+add_library(muplar_runtime_android STATIC
+    android_runtime.cpp
 )
 
-# ── Must wait for elfuse to build first ───────────────────────────────────────
-add_dependencies(muplar_runtime_elf elfuse_lib)
-
 # ── Include paths ─────────────────────────────────────────────────────────────
-target_include_directories(muplar_runtime_elf
+target_include_directories(muplar_runtime_android
     PUBLIC
         ${CMAKE_SOURCE_DIR}/runtime/elf
+        ${CMAKE_SOURCE_DIR}/runtime/jni
     PRIVATE
         ${CMAKE_SOURCE_DIR}/third_party/elfuse/src
+        # shim_blob.h / version.h / dispatch.h land here after elfuse make
         ${CMAKE_SOURCE_DIR}/third_party/elfuse/build
-        ${CMAKE_SOURCE_DIR}/runtime/jni
-        ${CMAKE_SOURCE_DIR}/runtime/android
 )
 
 # ── Link dependencies ─────────────────────────────────────────────────────────
-target_link_libraries(muplar_runtime_elf
+target_link_libraries(muplar_runtime_android
     PUBLIC
         muplar_runtime_memory
-    PRIVATE
+        muplar_runtime_elf
         muplar_runtime_jni
-        muplar_runtime_android
-        elfuse
-        "-framework Hypervisor"
 )
 
 # ── Compiler flags ────────────────────────────────────────────────────────────
-target_compile_options(muplar_runtime_elf PRIVATE
+target_compile_options(muplar_runtime_android PRIVATE
     -Wall
     -Wextra
     -Wno-language-extension-token
