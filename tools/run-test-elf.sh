@@ -87,7 +87,7 @@ echo "Exit code: $?"
 
 ELF="$SYSROOT_TMP/libnativeactivitytest.so"
 echo "========================\nCalling $ELF..."
-"$ROOT_DIR/build/bin/mup" --sysroot "$ROOT_DIR/build/sysroot" "$ELF"
+"$ROOT_DIR/build/bin/mup" --native-activity --sysroot "$ROOT_DIR/build/sysroot" "$ELF"
 echo "Exit code: $?"
 
 echo "Script run finished!"
