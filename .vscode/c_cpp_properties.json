@@ -20,7 +20,8 @@
                 "${workspaceFolder}/runtime/jni",
                 "${workspaceFolder}/third_party/elfuse/src/core",
                 "${workspaceFolder}/third_party/elfuse/src/runtime",
-                "${workspaceFolder}/third_party/elfuse/src/syscell"
+                "${workspaceFolder}/third_party/elfuse/src/syscell",
+                "${workspaceFolder}/third_party/angle-include"
             ],
 
             "defines": [

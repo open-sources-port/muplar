@@ -20,6 +20,7 @@ target_include_directories(muplar_runtime_elf
         ${CMAKE_SOURCE_DIR}/third_party/elfuse/build
         ${CMAKE_SOURCE_DIR}/runtime/jni
         ${CMAKE_SOURCE_DIR}/runtime/android
+        ${CMAKE_SOURCE_DIR}/third_party/angle-include
 )
 
 # ── Link dependencies ─────────────────────────────────────────────────────────

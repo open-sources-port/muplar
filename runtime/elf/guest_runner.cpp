@@ -55,6 +55,14 @@ static constexpr int64_t MU_DT_ANDROID_RELR    = 0x6fffe000;
 static constexpr int64_t MU_DT_ANDROID_RELRSZ  = 0x6fffe001;
 static constexpr int64_t MU_DT_ANDROID_RELRENT = 0x6fffe003;
 
+static uint64_t read_guest_u64_or_zero(guest_t *g, uint64_t gpa)
+{
+    uint64_t value = 0;
+    if (guest_read(g, gpa, &value, sizeof(value)) != 0)
+        return 0;
+    return value;
+}
+
 static uint64_t dyn_val(const Elf64_Dyn& dyn)
 {
     return dyn.d_un.d_val;
@@ -689,10 +697,40 @@ int GuestRunner::run(const GuestRunnerConfig& cfg)
                 } else {
                     uint64_t activity = prepare_native_activity(
                         &g, jni_onload, g.shim_data_base + 0x004000);
+
                     jni_onload.call_guest_function(
                         on_create, { activity, 0, 0 }, vcpu, vexit,
                         run_current_vcpu);
+
                     std::printf("[Muplar] ANativeActivity_onCreate returned ✓\n");
+
+                    uint64_t callbacks = read_guest_u64_or_zero(&g, activity + 0x00);
+
+                    uint64_t on_start = read_guest_u64_or_zero(&g, callbacks + 0x00);
+                    uint64_t on_resume = read_guest_u64_or_zero(&g, callbacks + 0x08);
+                    uint64_t on_pause = read_guest_u64_or_zero(&g, callbacks + 0x18);
+                    uint64_t on_stop = read_guest_u64_or_zero(&g, callbacks + 0x20);
+                    uint64_t on_destroy = read_guest_u64_or_zero(&g, callbacks + 0x28);
+
+                    if (on_start)
+                        jni_onload.call_guest_function(
+                            on_start, { activity }, vcpu, vexit, run_current_vcpu);
+
+                    if (on_resume)
+                        jni_onload.call_guest_function(
+                            on_resume, { activity }, vcpu, vexit, run_current_vcpu);
+
+                    if (on_pause)
+                        jni_onload.call_guest_function(
+                            on_pause, { activity }, vcpu, vexit, run_current_vcpu);
+
+                    if (on_stop)
+                        jni_onload.call_guest_function(
+                            on_stop, { activity }, vcpu, vexit, run_current_vcpu);
+
+                    if (on_destroy)
+                        jni_onload.call_guest_function(
+                            on_destroy, { activity }, vcpu, vexit, run_current_vcpu);
                 }
             } else if (cfg.jni_call.enabled) {
                 if (cfg.jni_call.int_args.size() > 6) {
