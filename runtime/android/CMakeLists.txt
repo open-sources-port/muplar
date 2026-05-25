@@ -1,8 +1,19 @@
 # runtime/android/CMakeLists.txt
 
 # ── Source files ──────────────────────────────────────────────────────────────
-add_library(muplar_runtime_android STATIC
+set(MUPLAR_ANDROID_SOURCES
     android_runtime.cpp
+)
+
+if(APPLE)
+    enable_language(OBJCXX)
+    list(APPEND MUPLAR_ANDROID_SOURCES host_window_mac.mm)
+else()
+    list(APPEND MUPLAR_ANDROID_SOURCES host_window_stub.cpp)
+endif()
+
+add_library(muplar_runtime_android STATIC
+    ${MUPLAR_ANDROID_SOURCES}
 )
 
 # ── ANGLE binaries (OpenGL ES → Metal on macOS) ───────────────────────────────
@@ -32,6 +43,13 @@ target_link_libraries(muplar_runtime_android
         ${ANGLE_LIB_DIR}/libEGL.dylib
         ${ANGLE_LIB_DIR}/libGLESv2.dylib
 )
+
+if(APPLE)
+    target_link_libraries(muplar_runtime_android PRIVATE "-framework AppKit")
+    set_source_files_properties(host_window_mac.mm PROPERTIES
+        COMPILE_OPTIONS "-fobjc-arc"
+    )
+endif()
 
 # Tell the dynamic linker where to find the dylibs at runtime
 set_target_properties(muplar_runtime_android PROPERTIES

@@ -65,34 +65,7 @@ EOF
 codesign --entitlements mup.entitlements --force -s - $ROOT_DIR/build/bin/mup
 codesign -d --entitlements - $ROOT_DIR/build/bin/mup 2>&1  # verify it took
 
-ELF="$ROOT_DIR/build/bin/test_return_42"
-echo "========================\nCalling $ELF..."
-"$ROOT_DIR/build/bin/mup" "$ELF"
-echo "Exit code: $?"
-
-ELF="$ROOT_DIR/build/bin/simple_app_with_print"
-echo "========================\nCalling $ELF..."
-"$ROOT_DIR/build/bin/mup" "$ELF"
-echo "Exit code: $?"
-
-ELF="$ROOT_DIR/build/bin/test_shared"
-echo "========================\nCalling $ELF..."
-"$ROOT_DIR/build/bin/mup" --sysroot "$ROOT_DIR/build/sysroot" "$ELF"
-echo "Exit code: $?"
-
-ELF="$SYSROOT_TMP/libjnitest.so"
-echo "========================\nCalling $ELF..."
-"$ROOT_DIR/build/bin/mup" --sysroot "$ROOT_DIR/build/sysroot" "$ELF"
-echo "Exit code: $?"
-
 ELF="$SYSROOT_TMP/libnativeactivitytest.so"
 echo "========================\nCalling $ELF..."
-"$ROOT_DIR/build/bin/mup" --native-activity --sysroot "$ROOT_DIR/build/sysroot" "$ELF"
+"$ROOT_DIR/build/bin/mup" --native-activity --sysroot "$ROOT_DIR/build/sysroot" --host-window "$ELF"
 echo "Exit code: $?"
-
-ELF="$SYSROOT_TMP/libnativegluethreadtest.so"
-echo "========================\nCalling $ELF..."
-"$ROOT_DIR/build/bin/mup" --native-activity --sysroot "$ROOT_DIR/build/sysroot" "$ELF"
-echo "Exit code: $?"
-
-echo "Script run finished!"

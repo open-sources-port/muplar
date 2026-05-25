@@ -58,3 +58,4 @@ dkms.conf
 /**/.cache
 /**/*.log
 /**/.DS_Store
+.codegraph

@@ -15,7 +15,11 @@
 #include <string>
 #include <unordered_map>
 #include <functional>
+#include <memory>
 #include <optional>
+#include <vector>
+
+#include "host_window.h"
 
 // ANGLE / EGL / GLES headers (macOS host-side)
 #include <EGL/egl.h>
@@ -41,7 +45,29 @@ struct StubEntry {
 
 class AndroidRuntime {
 public:
-    AndroidRuntime(guest_t* guest, uint64_t stub_arena_gpa);
+    struct PendingPthreadCall {
+        uint64_t handle = 0;
+        uint64_t start_routine = 0;
+        uint64_t arg = 0;
+    };
+
+    struct PendingLooperCallback {
+        uint64_t callback = 0;
+        int32_t fd = -1;
+        int32_t events = 0;
+        uint64_t data = 0;
+        int32_t ident = 0;
+    };
+
+    struct PendingFrameCallback {
+        uint64_t callback = 0;
+        uint64_t frame_time_nanos = 0;
+        uint64_t data = 0;
+    };
+
+    AndroidRuntime(guest_t* guest,
+                   uint64_t stub_arena_gpa,
+                   bool host_window_enabled = false);
     ~AndroidRuntime();
 
     // Write HVC shim stubs into guest memory and build the symbol tables.
@@ -57,13 +83,22 @@ public:
         nullptr
     };
 
-    // HVC dispatch — call from the HVC exit handler when X8 is in [0x2000, 0x25FF].
+    // HVC dispatch — call from the HVC exit handler when X8 is in [0x2000, 0x2FFF].
     bool try_dispatch(uint32_t hvc_nr, const uint64_t regs[8], uint64_t* x0_out);
 
     // EGL state accessors (used by NativeWindow bridge)
     EGLDisplay egl_display() const { return egl_display_; }
     EGLContext egl_context() const { return egl_context_; }
     EGLSurface egl_surface() const { return egl_surface_; }
+    uint64_t native_window_handle() const { return GUEST_NATIVE_WINDOW; }
+    uint64_t input_queue_handle() const { return GUEST_INPUT_QUEUE; }
+    bool host_window_active() const;
+    void run_host_window_after_guest(int linger_ms);
+    bool pump_host_app_events();
+    std::vector<PendingPthreadCall> take_pending_pthread_calls();
+    void complete_pthread_call(uint64_t handle, uint64_t retval);
+    std::vector<PendingLooperCallback> take_pending_looper_callbacks();
+    std::vector<PendingFrameCallback> take_pending_frame_callbacks();
 
 private:
     void register_libc_stubs();
@@ -104,12 +139,75 @@ private:
     // ── pthread handle table ──────────────────────────────────────────────────
     struct PthreadEntry { uint64_t stack_gpa; uint64_t stack_size; };
     std::unordered_map<uint64_t, PthreadEntry> threads_;
+    std::vector<PendingPthreadCall> pending_pthreads_;
+    std::unordered_map<uint64_t, uint64_t> pthread_returns_;
+    std::unordered_map<uint64_t, uint64_t> pending_pthread_join_retvals_;
     uint64_t next_thread_handle_ = 0x8000'0001ULL;
+
+    // ── ALooper registrations ────────────────────────────────────────────────
+    struct LooperRegistration {
+        int32_t fd = -1;
+        int32_t ident = 0;
+        int32_t events = 0;
+        uint64_t callback = 0;
+        uint64_t data = 0;
+        bool delivered = false;
+    };
+    std::vector<LooperRegistration> looper_regs_;
+    std::vector<PendingLooperCallback> pending_looper_callbacks_;
+
+    // ── Input queue state ────────────────────────────────────────────────────
+    struct InputQueueState {
+        bool attached = false;
+        uint64_t looper = 0;
+        int32_t ident = 0;
+        uint64_t callback = 0;
+        uint64_t data = 0;
+    };
+    struct InputEventState {
+        uint64_t handle = 0;
+        int32_t type = 0;
+        int32_t action = 0;
+        int32_t source = 0;
+        int32_t device_id = 0;
+        int32_t key_code = 0;
+        float x = 0.0f;
+        float y = 0.0f;
+        bool offered = false;
+        bool finished = false;
+    };
+    InputQueueState input_queue_;
+    std::vector<InputEventState> input_events_;
+    size_t next_input_event_ = 0;
+    uint64_t current_input_event_ = 0;
+    static constexpr uint64_t GUEST_INPUT_QUEUE = 0xA11E0001ULL;
+    static constexpr uint64_t GUEST_INPUT_EVENT_BASE = 0xA11E1000ULL;
+    static constexpr int32_t INPUT_QUEUE_FD = 91;
+
+    // ── Choreographer state ──────────────────────────────────────────────────
+    std::vector<PendingFrameCallback> pending_frame_callbacks_;
+    uint64_t next_frame_time_nanos_ = 16'666'666ULL;
 
     // ── dlopen handle table ───────────────────────────────────────────────────
     struct DlopenEntry { std::string path; uint64_t load_base; };
     std::unordered_map<uint64_t, DlopenEntry> dl_handles_;
     uint64_t next_dl_handle_ = 0x9000'0001ULL;
+
+    // ── Native window state ───────────────────────────────────────────────────
+    struct NativeWindowState {
+        int32_t width = 320;
+        int32_t height = 240;
+        int32_t stride = 320;
+        int32_t format = 1; // AHARDWAREBUFFER_FORMAT_R8G8B8A8_UNORM
+        uint64_t bits_gpa = 0;
+        uint64_t bits_size = 0;
+        uint32_t ref_count = 1;
+        bool locked = false;
+    };
+    NativeWindowState native_window_;
+    static constexpr uint64_t GUEST_NATIVE_WINDOW = 0xA11D0001ULL;
+    static constexpr int32_t MAX_NATIVE_WINDOW_WIDTH = 640;
+    static constexpr int32_t MAX_NATIVE_WINDOW_HEIGHT = 480;
 
     // ── ANGLE / EGL host state ────────────────────────────────────────────────
     void*      angle_egl_lib_  = nullptr;   // dlopen handle for libEGL.dylib
@@ -137,6 +235,16 @@ private:
 
     // Helper: resolve a symbol from ANGLE (tries EGL then GLES lib)
     void* angle_sym(const char* name) const;
+
+    void ensure_host_window();
+    bool collect_host_input_events();
+    bool queue_ready_looper_callbacks();
+    void rearm_looper_fd(int32_t fd);
+    void present_native_window_buffer();
+    void present_egl_surface();
+
+    bool host_window_enabled_ = false;
+    std::unique_ptr<HostWindow> host_window_;
 };
 
 } // namespace muplar::runtime::android

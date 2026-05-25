@@ -7,6 +7,7 @@
 #include <unistd.h>
 #include <dlfcn.h>
 #include <vector>
+#include <algorithm>
 
 // EGL / GLES headers (macOS host — provided by ANGLE)
 #include <EGL/egl.h>
@@ -60,6 +61,15 @@ static constexpr uint32_t HVC_PTHREAD_GETSPECIFIC = 0x2027;
 static constexpr uint32_t HVC_PTHREAD_SETSPECIFIC = 0x2028;
 static constexpr uint32_t HVC_PTHREAD_ONCE        = 0x2029;
 static constexpr uint32_t HVC_PTHREAD_SELF        = 0x202A;
+static constexpr uint32_t HVC_PTHREAD_COND_INIT   = 0x2040;
+static constexpr uint32_t HVC_PTHREAD_COND_WAIT   = 0x2041;
+static constexpr uint32_t HVC_PTHREAD_COND_SIGNAL = 0x2042;
+static constexpr uint32_t HVC_PTHREAD_COND_BCAST  = 0x2043;
+static constexpr uint32_t HVC_PTHREAD_COND_DESTROY= 0x2044;
+static constexpr uint32_t HVC_PTHREAD_ATTR_INIT   = 0x2045;
+static constexpr uint32_t HVC_PTHREAD_ATTR_DESTROY= 0x2046;
+static constexpr uint32_t HVC_PTHREAD_ATTR_SETDETACH = 0x2047;
+static constexpr uint32_t HVC_PTHREAD_DETACH      = 0x2048;
 static constexpr uint32_t HVC_GETPID              = 0x2030;
 static constexpr uint32_t HVC_GETENV_LIBC         = 0x2031;
 static constexpr uint32_t HVC_CLOCK_GETTIME       = 0x2032;
@@ -97,7 +107,27 @@ static constexpr uint32_t HVC_CHOREOGRAPHER_CB    = 0x2221;
 static constexpr uint32_t HVC_NATIVE_WINDOW_SET_BUF = 0x2230;
 static constexpr uint32_t HVC_NATIVE_WINDOW_LOCK    = 0x2231;
 static constexpr uint32_t HVC_NATIVE_WINDOW_UNLOCK  = 0x2232;
+static constexpr uint32_t HVC_NATIVE_WINDOW_ACQUIRE = 0x2233;
+static constexpr uint32_t HVC_NATIVE_WINDOW_RELEASE = 0x2234;
+static constexpr uint32_t HVC_NATIVE_WINDOW_WIDTH   = 0x2235;
+static constexpr uint32_t HVC_NATIVE_WINDOW_HEIGHT  = 0x2236;
+static constexpr uint32_t HVC_NATIVE_WINDOW_FORMAT  = 0x2237;
 static constexpr uint32_t HVC_PROP_GET              = 0x2240;
+static constexpr uint32_t HVC_INPUT_QUEUE_ATTACH    = 0x2250;
+static constexpr uint32_t HVC_INPUT_QUEUE_DETACH    = 0x2251;
+static constexpr uint32_t HVC_INPUT_QUEUE_HAS_EVENTS= 0x2252;
+static constexpr uint32_t HVC_INPUT_QUEUE_GET_EVENT = 0x2253;
+static constexpr uint32_t HVC_INPUT_QUEUE_PRE_DISPATCH = 0x2254;
+static constexpr uint32_t HVC_INPUT_QUEUE_FINISH    = 0x2255;
+static constexpr uint32_t HVC_INPUT_EVENT_GET_TYPE  = 0x2260;
+static constexpr uint32_t HVC_INPUT_EVENT_GET_DEVICE_ID = 0x2261;
+static constexpr uint32_t HVC_INPUT_EVENT_GET_SOURCE = 0x2262;
+static constexpr uint32_t HVC_MOTION_EVENT_GET_ACTION = 0x2263;
+static constexpr uint32_t HVC_KEY_EVENT_GET_ACTION  = 0x2264;
+static constexpr uint32_t HVC_KEY_EVENT_GET_KEYCODE = 0x2265;
+static constexpr uint32_t HVC_CHOREOGRAPHER_CB_DELAYED = 0x2270;
+static constexpr uint32_t HVC_CHOREOGRAPHER_CB64       = 0x2271;
+static constexpr uint32_t HVC_CHOREOGRAPHER_CB64_DELAYED = 0x2272;
 
 // libdl
 static constexpr uint32_t HVC_DLOPEN              = 0x2300;
@@ -253,15 +283,29 @@ static std::string format_guest_log(guest_t* g,
         char tmp[64] = {};
         char spec = fmt[++i];
         if (spec == '%') { out.push_back('%'); continue; }
-        if (spec == 'l' && i + 2 < fmt.size() && fmt[i + 1] == 'l') {
-            i += 2; spec = fmt[i];
+        if (spec == 'l' && i + 1 < fmt.size()) {
+            if (fmt[i + 1] == 'l' && i + 2 < fmt.size()) {
+                i += 2;
+            } else {
+                i += 1;
+            }
+            spec = fmt[i];
         }
         if (arg >= vararg_count) { out.push_back('%'); out.push_back(spec); continue; }
 
         uint64_t value = varargs[arg++];
         switch (spec) {
-        case 'd': case 'i':
-            std::snprintf(tmp, sizeof(tmp), "%lld", (long long)value); out += tmp; break;
+        case 'd': case 'i': {
+            int64_t signed_value = static_cast<int64_t>(value);
+            if ((value & 0xffffffff00000000ULL) == 0 &&
+                (value & 0x80000000ULL)) {
+                signed_value = static_cast<int32_t>(value);
+            }
+            std::snprintf(tmp, sizeof(tmp), "%lld",
+                          (long long)signed_value);
+            out += tmp;
+            break;
+        }
         case 'u':
             std::snprintf(tmp, sizeof(tmp), "%llu", (unsigned long long)value); out += tmp; break;
         case 'x': case 'X':
@@ -283,8 +327,12 @@ static std::string format_guest_log(guest_t* g,
 
 // ── AndroidRuntime ────────────────────────────────────────────────────────────
 
-AndroidRuntime::AndroidRuntime(guest_t* guest, uint64_t stub_arena_gpa)
-    : guest_(guest), arena_gpa_(stub_arena_gpa)
+AndroidRuntime::AndroidRuntime(guest_t* guest,
+                               uint64_t stub_arena_gpa,
+                               bool host_window_enabled)
+    : guest_(guest),
+      arena_gpa_(stub_arena_gpa),
+      host_window_enabled_(host_window_enabled)
 {}
 
 AndroidRuntime::~AndroidRuntime()
@@ -330,6 +378,194 @@ void* AndroidRuntime::angle_sym(const char* name) const
     return sym;
 }
 
+bool AndroidRuntime::host_window_active() const
+{
+    return host_window_ && host_window_->valid() && !host_window_->closed();
+}
+
+void AndroidRuntime::run_host_window_after_guest(int linger_ms)
+{
+    if (!host_window_active()) return;
+
+    if (linger_ms >= 0) {
+        host_window_->run_for_ms(linger_ms);
+    } else {
+        std::fprintf(stderr, "[HostWindow] close the Muplar window to exit\n");
+        host_window_->run_until_closed();
+    }
+}
+
+bool AndroidRuntime::pump_host_app_events()
+{
+    if (!host_window_enabled_)
+        return false;
+
+    bool did_work = collect_host_input_events();
+    did_work |= queue_ready_looper_callbacks();
+    return did_work;
+}
+
+std::vector<AndroidRuntime::PendingPthreadCall>
+AndroidRuntime::take_pending_pthread_calls()
+{
+    std::vector<PendingPthreadCall> out;
+    out.swap(pending_pthreads_);
+    return out;
+}
+
+void AndroidRuntime::complete_pthread_call(uint64_t handle, uint64_t retval)
+{
+    pthread_returns_[handle] = retval;
+
+    auto join_it = pending_pthread_join_retvals_.find(handle);
+    if (join_it != pending_pthread_join_retvals_.end()) {
+        if (join_it->second)
+            guest_write_u64(guest_, join_it->second, retval);
+        pending_pthread_join_retvals_.erase(join_it);
+    }
+}
+
+std::vector<AndroidRuntime::PendingLooperCallback>
+AndroidRuntime::take_pending_looper_callbacks()
+{
+    std::vector<PendingLooperCallback> out;
+    out.swap(pending_looper_callbacks_);
+    return out;
+}
+
+std::vector<AndroidRuntime::PendingFrameCallback>
+AndroidRuntime::take_pending_frame_callbacks()
+{
+    std::vector<PendingFrameCallback> out;
+    out.swap(pending_frame_callbacks_);
+    return out;
+}
+
+void AndroidRuntime::ensure_host_window()
+{
+    if (!host_window_enabled_) return;
+    if (host_window_active()) return;
+
+    host_window_ = std::make_unique<HostWindow>(
+        native_window_.width, native_window_.height);
+    if (!host_window_->valid()) {
+        std::fprintf(stderr, "[HostWindow] unavailable on this host/thread\n");
+        host_window_.reset();
+    }
+}
+
+void AndroidRuntime::rearm_looper_fd(int32_t fd)
+{
+    for (auto& reg : looper_regs_) {
+        if (reg.fd == fd)
+            reg.delivered = false;
+    }
+}
+
+bool AndroidRuntime::collect_host_input_events()
+{
+    if (!host_window_enabled_)
+        return false;
+
+    ensure_host_window();
+    if (!host_window_active())
+        return false;
+
+    host_window_->pump_events();
+    auto events = host_window_->take_input_events();
+    if (!input_queue_.attached || events.empty())
+        return false;
+
+    for (const auto& host_event : events) {
+        uint64_t handle = GUEST_INPUT_EVENT_BASE +
+            static_cast<uint64_t>(input_events_.size()) * 0x100ULL;
+        input_events_.push_back({
+            handle,
+            host_event.type,
+            host_event.action,
+            host_event.source,
+            host_event.device_id,
+            host_event.key_code,
+            host_event.x,
+            host_event.y,
+            false,
+            false
+        });
+        std::fprintf(stderr,
+            "[InputQueue] host event handle=0x%llx type=%d action=%d source=0x%x key=%d x=%.1f y=%.1f\n",
+            (unsigned long long)handle,
+            host_event.type,
+            host_event.action,
+            host_event.source,
+            host_event.key_code,
+            static_cast<double>(host_event.x),
+            static_cast<double>(host_event.y));
+    }
+
+    rearm_looper_fd(INPUT_QUEUE_FD);
+    return true;
+}
+
+bool AndroidRuntime::queue_ready_looper_callbacks()
+{
+    bool did_work = false;
+    for (auto& reg : looper_regs_) {
+        if (reg.delivered || !reg.callback)
+            continue;
+
+        if (reg.fd == INPUT_QUEUE_FD &&
+            (!input_queue_.attached || next_input_event_ >= input_events_.size())) {
+            continue;
+        }
+
+        reg.delivered = true;
+        pending_looper_callbacks_.push_back({
+            reg.callback, reg.fd, reg.events, reg.data, reg.ident
+        });
+        did_work = true;
+
+        std::fprintf(stderr,
+            "[ALooper] queued callback fd=%d ident=%d events=0x%x callback=0x%llx data=0x%llx\n",
+            reg.fd, reg.ident, reg.events,
+            (unsigned long long)reg.callback,
+            (unsigned long long)reg.data);
+    }
+    return did_work;
+}
+
+void AndroidRuntime::present_native_window_buffer()
+{
+    if (!host_window_enabled_ || !native_window_.bits_gpa) return;
+    ensure_host_window();
+    if (!host_window_active()) return;
+
+    size_t bytes = static_cast<size_t>(native_window_.stride) *
+                   static_cast<size_t>(native_window_.height) * 4;
+    if (bytes == 0 || bytes > native_window_.bits_size) return;
+
+    std::vector<uint8_t> pixels(bytes);
+    guest_read(guest_, native_window_.bits_gpa, pixels.data(), bytes);
+    host_window_->present_rgba(
+        pixels.data(), native_window_.width, native_window_.height,
+        native_window_.stride);
+}
+
+void AndroidRuntime::present_egl_surface()
+{
+    if (!host_window_enabled_) return;
+    ensure_host_window();
+    if (!host_window_active()) return;
+
+    int width = native_window_.width;
+    int height = native_window_.height;
+    if (width <= 0 || height <= 0) return;
+
+    std::vector<uint8_t> pixels(static_cast<size_t>(width) *
+                                static_cast<size_t>(height) * 4);
+    glReadPixels(0, 0, width, height, GL_RGBA, GL_UNSIGNED_BYTE, pixels.data());
+    host_window_->present_rgba(pixels.data(), width, height, width);
+}
+
 uint64_t AndroidRuntime::write_stub(uint32_t hvc_nr)
 {
     uint8_t stub[HVC_STUB_SIZE];
@@ -359,6 +595,19 @@ void AndroidRuntime::install()
 
     heap_base_ = arena_gpa_ + 0x10000;
     heap_bump_ = heap_base_;
+    native_window_.bits_gpa = arena_gpa_ + 0x0A0000;
+    native_window_.bits_size =
+        static_cast<uint64_t>(MAX_NATIVE_WINDOW_WIDTH) *
+        static_cast<uint64_t>(MAX_NATIVE_WINDOW_HEIGHT) * 4;
+    input_queue_ = {};
+    input_events_ = {
+        { GUEST_INPUT_EVENT_BASE + 0x00, 2, 0, 0x1002, 1, 0, 160.0f, 120.0f, false, false },
+        { GUEST_INPUT_EVENT_BASE + 0x100, 2, 1, 0x1002, 1, 0, 160.0f, 120.0f, false, false },
+    };
+    next_input_event_ = 0;
+    current_input_event_ = 0;
+    pending_frame_callbacks_.clear();
+    next_frame_time_nanos_ = 16'666'666ULL;
 
     load_angle();   // non-fatal — stubs still register, calls log + return 0
 
@@ -540,17 +789,55 @@ void AndroidRuntime::register_libc_stubs()
     add("libc.so", "pthread_create", HVC_PTHREAD_CREATE,
         [this](guest_t* g, const uint64_t a[8]) -> uint64_t {
             uint64_t h = next_thread_handle_++;
-            guest_write_u64(g, a[0], h);
+            if (a[0]) guest_write_u64(g, a[0], h);
             threads_[h] = {0, 0};
-            std::fprintf(stderr, "[ART] pthread_create fn=0x%llx handle=0x%llx (stub)\n",
-                         (unsigned long long)a[2], (unsigned long long)h);
+            pending_pthreads_.push_back({h, a[2], a[3]});
+            std::fprintf(stderr, "[ART] pthread_create fn=0x%llx arg=0x%llx handle=0x%llx (queued)\n",
+                         (unsigned long long)a[2], (unsigned long long)a[3],
+                         (unsigned long long)h);
             return 0;
         });
 
-    add("libc.so", "pthread_join",
-        HVC_PTHREAD_JOIN, [](guest_t*, const uint64_t[8]) -> uint64_t { return 0; });
-    add("libc.so", "pthread_self",
-        HVC_PTHREAD_SELF, [](guest_t*, const uint64_t[8]) -> uint64_t { return 1; });
+    add("libc.so", "pthread_join", HVC_PTHREAD_JOIN,
+        [this](guest_t* g, const uint64_t a[8]) -> uint64_t {
+            auto ret = pthread_returns_.find(a[0]);
+            if (ret != pthread_returns_.end()) {
+                if (a[1]) guest_write_u64(g, a[1], ret->second);
+            } else if (a[1]) {
+                pending_pthread_join_retvals_[a[0]] = a[1];
+            }
+            std::fprintf(stderr, "[ART] pthread_join handle=0x%llx\n",
+                         (unsigned long long)a[0]);
+            return 0;
+        });
+
+    add("libc.so", "pthread_detach", HVC_PTHREAD_DETACH,
+        [](guest_t*, const uint64_t a[8]) -> uint64_t {
+            std::fprintf(stderr, "[ART] pthread_detach handle=0x%llx\n",
+                         (unsigned long long)a[0]);
+            return 0;
+        });
+
+    add("libc.so", "pthread_attr_init", HVC_PTHREAD_ATTR_INIT,
+        [](guest_t*, const uint64_t[8]) -> uint64_t { return 0; });
+    add("libc.so", "pthread_attr_destroy", HVC_PTHREAD_ATTR_DESTROY,
+        [](guest_t*, const uint64_t[8]) -> uint64_t { return 0; });
+    add("libc.so", "pthread_attr_setdetachstate", HVC_PTHREAD_ATTR_SETDETACH,
+        [](guest_t*, const uint64_t[8]) -> uint64_t { return 0; });
+
+    add("libc.so", "pthread_cond_init", HVC_PTHREAD_COND_INIT,
+        [](guest_t*, const uint64_t[8]) -> uint64_t { return 0; });
+    add("libc.so", "pthread_cond_wait", HVC_PTHREAD_COND_WAIT,
+        [](guest_t*, const uint64_t[8]) -> uint64_t { return 0; });
+    add("libc.so", "pthread_cond_signal", HVC_PTHREAD_COND_SIGNAL,
+        [](guest_t*, const uint64_t[8]) -> uint64_t { return 0; });
+    add("libc.so", "pthread_cond_broadcast", HVC_PTHREAD_COND_BCAST,
+        [](guest_t*, const uint64_t[8]) -> uint64_t { return 0; });
+    add("libc.so", "pthread_cond_destroy", HVC_PTHREAD_COND_DESTROY,
+        [](guest_t*, const uint64_t[8]) -> uint64_t { return 0; });
+
+    add("libc.so", "pthread_self", HVC_PTHREAD_SELF,
+        [](guest_t*, const uint64_t[8]) -> uint64_t { return 1; });
     add("libc.so", "pthread_mutex_init",
         HVC_PTHREAD_MUTEX_INIT,    [](guest_t*, const uint64_t[8]) -> uint64_t { return 0; });
     add("libc.so", "pthread_mutex_lock",
@@ -636,26 +923,382 @@ void AndroidRuntime::register_liblog_stubs()
 
 void AndroidRuntime::register_libandroid_stubs()
 {
-    add("libandroid.so", "ALooper_prepare",  HVC_ALOOPER_PREPARE,
-        [this](guest_t*, const uint64_t[8]) -> uint64_t { return arena_gpa_ + 0x100; });
-    add("libandroid.so", "ALooper_acquire",  HVC_ALOOPER_ACQUIRE,  [](guest_t*, const uint64_t[8]) -> uint64_t { return 0; });
-    add("libandroid.so", "ALooper_release",  HVC_ALOOPER_RELEASE,  [](guest_t*, const uint64_t[8]) -> uint64_t { return 0; });
-    add("libandroid.so", "ALooper_pollOnce", HVC_ALOOPER_POLL_ONCE,[](guest_t*, const uint64_t[8]) -> uint64_t { return (uint64_t)-1; });
-    add("libandroid.so", "ALooper_pollAll",  HVC_ALOOPER_POLL_ALL, [](guest_t*, const uint64_t[8]) -> uint64_t { return (uint64_t)-1; });
-    add("libandroid.so", "ALooper_addFd",    HVC_ALOOPER_ADD_FD,   [](guest_t*, const uint64_t[8]) -> uint64_t { return 1; });
-    add("libandroid.so", "ALooper_removeFd", HVC_ALOOPER_REMOVE_FD,[](guest_t*, const uint64_t[8]) -> uint64_t { return 1; });
-    add("libandroid.so", "ALooper_wake",     HVC_ALOOPER_WAKE,     [](guest_t*, const uint64_t[8]) -> uint64_t { return 0; });
+    auto input_event_pending = [this]() -> bool {
+        collect_host_input_events();
+        return next_input_event_ < input_events_.size();
+    };
+    auto find_input_event = [this](uint64_t handle) -> InputEventState* {
+        auto it = std::find_if(input_events_.begin(), input_events_.end(),
+            [handle](const InputEventState& event) {
+                return event.handle == handle;
+            });
+        return it == input_events_.end() ? nullptr : &*it;
+    };
 
-    // ANativeWindow — return fake window handle; EGL will use GUEST_EGL_SURFACE
-    add("libandroid.so", "ANativeWindow_setBuffersGeometry", HVC_NATIVE_WINDOW_SET_BUF,
+    add("libandroid.so", "ALooper_prepare",  HVC_ALOOPER_PREPARE,
+        [this](guest_t*, const uint64_t[8]) -> uint64_t {
+            return arena_gpa_ + 0x100;
+        });
+    add("libandroid.so", "ALooper_acquire",  HVC_ALOOPER_ACQUIRE,
         [](guest_t*, const uint64_t[8]) -> uint64_t { return 0; });
-    add("libandroid.so", "ANativeWindow_lock",         HVC_NATIVE_WINDOW_LOCK,   [](guest_t*, const uint64_t[8]) -> uint64_t { return 0; });
-    add("libandroid.so", "ANativeWindow_unlockAndPost", HVC_NATIVE_WINDOW_UNLOCK, [](guest_t*, const uint64_t[8]) -> uint64_t { return 0; });
+    add("libandroid.so", "ALooper_release",  HVC_ALOOPER_RELEASE,
+        [](guest_t*, const uint64_t[8]) -> uint64_t { return 0; });
+
+    auto poll_looper = [this, input_event_pending](guest_t* g, const uint64_t a[8]) -> uint64_t {
+        constexpr uint64_t ALOOPER_POLL_TIMEOUT =
+            static_cast<uint64_t>(static_cast<int64_t>(-1));
+        constexpr uint64_t ALOOPER_POLL_CALLBACK =
+            static_cast<uint64_t>(static_cast<int64_t>(-2));
+
+        for (auto& reg : looper_regs_) {
+            if (reg.delivered) continue;
+            if (reg.fd == INPUT_QUEUE_FD &&
+                (!input_queue_.attached || !input_event_pending())) {
+                continue;
+            }
+            reg.delivered = true;
+
+            if (a[1]) guest_write_u32(g, a[1], static_cast<uint32_t>(reg.fd));
+            if (a[2]) guest_write_u32(g, a[2], static_cast<uint32_t>(reg.events));
+            if (a[3]) guest_write_u64(g, a[3], reg.data);
+
+            std::fprintf(stderr,
+                "[ALooper] poll fd=%d ident=%d events=0x%x callback=0x%llx data=0x%llx\n",
+                reg.fd, reg.ident, reg.events,
+                (unsigned long long)reg.callback,
+                (unsigned long long)reg.data);
+
+            if (reg.callback) {
+                pending_looper_callbacks_.push_back({
+                    reg.callback, reg.fd, reg.events, reg.data, reg.ident
+                });
+                return ALOOPER_POLL_CALLBACK;
+            }
+            return static_cast<uint64_t>(static_cast<int64_t>(reg.ident));
+        }
+
+        return ALOOPER_POLL_TIMEOUT;
+    };
+
+    add("libandroid.so", "ALooper_pollOnce", HVC_ALOOPER_POLL_ONCE,
+        poll_looper);
+    add("libandroid.so", "ALooper_pollAll",  HVC_ALOOPER_POLL_ALL,
+        poll_looper);
+    add("libandroid.so", "ALooper_addFd",    HVC_ALOOPER_ADD_FD,
+        [this](guest_t*, const uint64_t a[8]) -> uint64_t {
+            int32_t fd = static_cast<int32_t>(a[1]);
+            int32_t ident = static_cast<int32_t>(a[2]);
+            int32_t events = static_cast<int32_t>(a[3]);
+            uint64_t callback = a[4];
+            uint64_t data = a[5];
+
+            if (fd < 0 || (!callback && ident < 0))
+                return 0;
+
+            auto it = std::find_if(looper_regs_.begin(), looper_regs_.end(),
+                [fd](const LooperRegistration& reg) { return reg.fd == fd; });
+            if (it == looper_regs_.end()) {
+                looper_regs_.push_back({fd, ident, events, callback, data, false});
+            } else {
+                *it = {fd, ident, events, callback, data, false};
+            }
+
+            std::fprintf(stderr,
+                "[ALooper] addFd fd=%d ident=%d events=0x%x callback=0x%llx data=0x%llx\n",
+                fd, ident, events,
+                (unsigned long long)callback,
+                (unsigned long long)data);
+            return 1;
+        });
+    add("libandroid.so", "ALooper_removeFd", HVC_ALOOPER_REMOVE_FD,
+        [this](guest_t*, const uint64_t a[8]) -> uint64_t {
+            int32_t fd = static_cast<int32_t>(a[1]);
+            auto old_size = looper_regs_.size();
+            looper_regs_.erase(std::remove_if(looper_regs_.begin(), looper_regs_.end(),
+                [fd](const LooperRegistration& reg) { return reg.fd == fd; }),
+                looper_regs_.end());
+            return looper_regs_.size() != old_size ? 1 : 0;
+        });
+    add("libandroid.so", "ALooper_wake",     HVC_ALOOPER_WAKE,
+        [this](guest_t*, const uint64_t[8]) -> uint64_t {
+            for (auto& reg : looper_regs_)
+                reg.delivered = false;
+            return 0;
+        });
+
+    // AInputQueue — minimal queued touch events routed through ALooper.
+    add("libandroid.so", "AInputQueue_attachLooper", HVC_INPUT_QUEUE_ATTACH,
+        [this](guest_t*, const uint64_t a[8]) -> uint64_t {
+            if (a[0] != GUEST_INPUT_QUEUE)
+                return 0;
+
+            input_queue_.attached = true;
+            input_queue_.looper = a[1];
+            input_queue_.ident = static_cast<int32_t>(a[2]);
+            input_queue_.callback = a[3];
+            input_queue_.data = a[4];
+
+            auto it = std::find_if(looper_regs_.begin(), looper_regs_.end(),
+                [](const LooperRegistration& reg) {
+                    return reg.fd == INPUT_QUEUE_FD;
+                });
+            LooperRegistration reg{
+                INPUT_QUEUE_FD,
+                input_queue_.ident,
+                1,
+                input_queue_.callback,
+                input_queue_.data,
+                false
+            };
+            if (it == looper_regs_.end())
+                looper_regs_.push_back(reg);
+            else
+                *it = reg;
+
+            std::fprintf(stderr,
+                "[InputQueue] attach looper=0x%llx ident=%d callback=0x%llx data=0x%llx pending=%zu\n",
+                (unsigned long long)input_queue_.looper,
+                input_queue_.ident,
+                (unsigned long long)input_queue_.callback,
+                (unsigned long long)input_queue_.data,
+                input_events_.size() - next_input_event_);
+            return 0;
+        });
+
+    add("libandroid.so", "AInputQueue_detachLooper", HVC_INPUT_QUEUE_DETACH,
+        [this](guest_t*, const uint64_t a[8]) -> uint64_t {
+            if (a[0] == GUEST_INPUT_QUEUE) {
+                input_queue_ = {};
+                looper_regs_.erase(std::remove_if(looper_regs_.begin(), looper_regs_.end(),
+                    [](const LooperRegistration& reg) {
+                        return reg.fd == INPUT_QUEUE_FD;
+                    }),
+                    looper_regs_.end());
+                std::fprintf(stderr, "[InputQueue] detach\n");
+            }
+            return 0;
+        });
+
+    add("libandroid.so", "AInputQueue_hasEvents", HVC_INPUT_QUEUE_HAS_EVENTS,
+        [input_event_pending](guest_t*, const uint64_t[8]) -> uint64_t {
+            return input_event_pending() ? 1 : 0;
+        });
+
+    add("libandroid.so", "AInputQueue_getEvent", HVC_INPUT_QUEUE_GET_EVENT,
+        [this, input_event_pending](guest_t* g, const uint64_t a[8]) -> uint64_t {
+            constexpr uint64_t INPUT_QUEUE_EMPTY =
+                static_cast<uint64_t>(static_cast<int64_t>(-1));
+            if (a[0] != GUEST_INPUT_QUEUE || !a[1] || !input_event_pending())
+                return INPUT_QUEUE_EMPTY;
+
+            InputEventState& event = input_events_[next_input_event_];
+            event.offered = true;
+            current_input_event_ = event.handle;
+            guest_write_u64(g, a[1], event.handle);
+
+            std::fprintf(stderr,
+                "[InputQueue] getEvent handle=0x%llx type=%d action=%d\n",
+                (unsigned long long)event.handle, event.type, event.action);
+            return 0;
+        });
+
+    add("libandroid.so", "AInputQueue_preDispatchEvent", HVC_INPUT_QUEUE_PRE_DISPATCH,
+        [](guest_t*, const uint64_t[8]) -> uint64_t { return 0; });
+
+    add("libandroid.so", "AInputQueue_finishEvent", HVC_INPUT_QUEUE_FINISH,
+        [this, input_event_pending, find_input_event]
+        (guest_t*, const uint64_t a[8]) -> uint64_t {
+            if (a[0] != GUEST_INPUT_QUEUE)
+                return 0;
+
+            InputEventState* event = find_input_event(a[1]);
+            if (event && !event->finished) {
+                event->finished = true;
+                if (next_input_event_ < input_events_.size() &&
+                    input_events_[next_input_event_].handle == a[1]) {
+                    next_input_event_++;
+                }
+                current_input_event_ = 0;
+                std::fprintf(stderr,
+                    "[InputQueue] finishEvent handle=0x%llx handled=%lld remaining=%zu\n",
+                    (unsigned long long)a[1],
+                    (long long)static_cast<int64_t>(a[2]),
+                    input_events_.size() - next_input_event_);
+            }
+
+            if (input_queue_.attached && input_event_pending())
+                rearm_looper_fd(INPUT_QUEUE_FD);
+            return 0;
+        });
+
+    add("libandroid.so", "AInputEvent_getType", HVC_INPUT_EVENT_GET_TYPE,
+        [find_input_event](guest_t*, const uint64_t a[8]) -> uint64_t {
+            auto* event = find_input_event(a[0]);
+            return event ? static_cast<uint64_t>(static_cast<int64_t>(event->type)) : 0;
+        });
+    add("libandroid.so", "AInputEvent_getDeviceId", HVC_INPUT_EVENT_GET_DEVICE_ID,
+        [find_input_event](guest_t*, const uint64_t a[8]) -> uint64_t {
+            auto* event = find_input_event(a[0]);
+            return event ? static_cast<uint64_t>(static_cast<int64_t>(event->device_id)) : 0;
+        });
+    add("libandroid.so", "AInputEvent_getSource", HVC_INPUT_EVENT_GET_SOURCE,
+        [find_input_event](guest_t*, const uint64_t a[8]) -> uint64_t {
+            auto* event = find_input_event(a[0]);
+            return event ? static_cast<uint64_t>(static_cast<int64_t>(event->source)) : 0;
+        });
+    add("libandroid.so", "AMotionEvent_getAction", HVC_MOTION_EVENT_GET_ACTION,
+        [find_input_event](guest_t*, const uint64_t a[8]) -> uint64_t {
+            auto* event = find_input_event(a[0]);
+            return event ? static_cast<uint64_t>(static_cast<int64_t>(event->action)) : 0;
+        });
+    add("libandroid.so", "AKeyEvent_getAction", HVC_KEY_EVENT_GET_ACTION,
+        [find_input_event](guest_t*, const uint64_t a[8]) -> uint64_t {
+            auto* event = find_input_event(a[0]);
+            return event ? static_cast<uint64_t>(static_cast<int64_t>(event->action)) : 0;
+        });
+    add("libandroid.so", "AKeyEvent_getKeyCode", HVC_KEY_EVENT_GET_KEYCODE,
+        [find_input_event](guest_t*, const uint64_t a[8]) -> uint64_t {
+            auto* event = find_input_event(a[0]);
+            return event ? static_cast<uint64_t>(static_cast<int64_t>(event->key_code)) : 0;
+        });
+
+    // ANativeWindow — stable opaque handle plus a guest-visible software buffer.
+    add("libandroid.so", "ANativeWindow_acquire", HVC_NATIVE_WINDOW_ACQUIRE,
+        [this](guest_t*, const uint64_t a[8]) -> uint64_t {
+            if (a[0] == GUEST_NATIVE_WINDOW) native_window_.ref_count++;
+            return 0;
+        });
+
+    add("libandroid.so", "ANativeWindow_release", HVC_NATIVE_WINDOW_RELEASE,
+        [this](guest_t*, const uint64_t a[8]) -> uint64_t {
+            if (a[0] == GUEST_NATIVE_WINDOW && native_window_.ref_count > 0)
+                native_window_.ref_count--;
+            return 0;
+        });
+
+    add("libandroid.so", "ANativeWindow_getWidth", HVC_NATIVE_WINDOW_WIDTH,
+        [this](guest_t*, const uint64_t a[8]) -> uint64_t {
+            return a[0] == GUEST_NATIVE_WINDOW
+                ? static_cast<uint64_t>(static_cast<uint32_t>(native_window_.width))
+                : static_cast<uint64_t>(static_cast<uint32_t>(-22));
+        });
+
+    add("libandroid.so", "ANativeWindow_getHeight", HVC_NATIVE_WINDOW_HEIGHT,
+        [this](guest_t*, const uint64_t a[8]) -> uint64_t {
+            return a[0] == GUEST_NATIVE_WINDOW
+                ? static_cast<uint64_t>(static_cast<uint32_t>(native_window_.height))
+                : static_cast<uint64_t>(static_cast<uint32_t>(-22));
+        });
+
+    add("libandroid.so", "ANativeWindow_getFormat", HVC_NATIVE_WINDOW_FORMAT,
+        [this](guest_t*, const uint64_t a[8]) -> uint64_t {
+            return a[0] == GUEST_NATIVE_WINDOW
+                ? static_cast<uint64_t>(static_cast<uint32_t>(native_window_.format))
+                : static_cast<uint64_t>(static_cast<uint32_t>(-22));
+        });
+
+    add("libandroid.so", "ANativeWindow_setBuffersGeometry", HVC_NATIVE_WINDOW_SET_BUF,
+        [this](guest_t*, const uint64_t a[8]) -> uint64_t {
+            if (a[0] != GUEST_NATIVE_WINDOW) return static_cast<uint32_t>(-22);
+
+            int32_t width = static_cast<int32_t>(a[1]);
+            int32_t height = static_cast<int32_t>(a[2]);
+            int32_t format = static_cast<int32_t>(a[3]);
+
+            if (width > 0) native_window_.width = width;
+            if (height > 0) native_window_.height = height;
+            if (format > 0) native_window_.format = format;
+
+            if (native_window_.width > MAX_NATIVE_WINDOW_WIDTH)
+                native_window_.width = MAX_NATIVE_WINDOW_WIDTH;
+            if (native_window_.height > MAX_NATIVE_WINDOW_HEIGHT)
+                native_window_.height = MAX_NATIVE_WINDOW_HEIGHT;
+            native_window_.stride = native_window_.width;
+
+            std::fprintf(stderr,
+                "[NativeWindow] setBuffersGeometry %dx%d fmt=%d\n",
+                native_window_.width, native_window_.height, native_window_.format);
+            return 0;
+        });
+
+    add("libandroid.so", "ANativeWindow_lock", HVC_NATIVE_WINDOW_LOCK,
+        [this](guest_t* g, const uint64_t a[8]) -> uint64_t {
+            if (a[0] != GUEST_NATIVE_WINDOW || !a[1]) return static_cast<uint32_t>(-22);
+
+            // ANativeWindow_Buffer: width, height, stride, format, bits, reserved[6].
+            guest_write_u32(g, a[1] + 0x00, static_cast<uint32_t>(native_window_.width));
+            guest_write_u32(g, a[1] + 0x04, static_cast<uint32_t>(native_window_.height));
+            guest_write_u32(g, a[1] + 0x08, static_cast<uint32_t>(native_window_.stride));
+            guest_write_u32(g, a[1] + 0x0C, static_cast<uint32_t>(native_window_.format));
+            guest_write_u64(g, a[1] + 0x10, native_window_.bits_gpa);
+
+            if (a[2]) {
+                guest_write_u32(g, a[2] + 0x00, 0);
+                guest_write_u32(g, a[2] + 0x04, 0);
+                guest_write_u32(g, a[2] + 0x08, static_cast<uint32_t>(native_window_.width));
+                guest_write_u32(g, a[2] + 0x0C, static_cast<uint32_t>(native_window_.height));
+            }
+
+            native_window_.locked = true;
+            std::fprintf(stderr,
+                "[NativeWindow] lock buffer=%dx%d bits=0x%llx\n",
+                native_window_.width, native_window_.height,
+                (unsigned long long)native_window_.bits_gpa);
+            return 0;
+        });
+
+    add("libandroid.so", "ANativeWindow_unlockAndPost", HVC_NATIVE_WINDOW_UNLOCK,
+        [this](guest_t*, const uint64_t a[8]) -> uint64_t {
+            if (a[0] != GUEST_NATIVE_WINDOW) return static_cast<uint32_t>(-22);
+            native_window_.locked = false;
+            std::fprintf(stderr, "[NativeWindow] unlockAndPost\n");
+            present_native_window_buffer();
+            return 0;
+        });
 
     add("libandroid.so", "AChoreographer_getInstance", HVC_CHOREOGRAPHER_GET,
         [this](guest_t*, const uint64_t[8]) -> uint64_t { return arena_gpa_ + 0x200; });
+
+    auto post_frame_callback =
+        [this](const char* symbol, const uint64_t a[8], uint64_t delay_ms) -> uint64_t {
+            (void)a[0];
+            uint64_t callback = a[1];
+            uint64_t data = a[2];
+            if (!callback)
+                return 0;
+
+            uint64_t frame_time = next_frame_time_nanos_ + delay_ms * 1'000'000ULL;
+            next_frame_time_nanos_ = frame_time + 16'666'666ULL;
+            pending_frame_callbacks_.push_back({callback, frame_time, data});
+            std::fprintf(stderr,
+                "[Choreographer] %s callback=0x%llx data=0x%llx frame=%llu delay_ms=%llu\n",
+                symbol,
+                (unsigned long long)callback,
+                (unsigned long long)data,
+                (unsigned long long)frame_time,
+                (unsigned long long)delay_ms);
+            return 0;
+        };
+
     add("libandroid.so", "AChoreographer_postFrameCallback", HVC_CHOREOGRAPHER_CB,
-        [](guest_t*, const uint64_t[8]) -> uint64_t { return 0; });
+        [post_frame_callback](guest_t*, const uint64_t a[8]) -> uint64_t {
+            return post_frame_callback("postFrameCallback", a, 0);
+        });
+    add("libandroid.so", "AChoreographer_postFrameCallbackDelayed",
+        HVC_CHOREOGRAPHER_CB_DELAYED,
+        [post_frame_callback](guest_t*, const uint64_t a[8]) -> uint64_t {
+            return post_frame_callback("postFrameCallbackDelayed", a, a[3]);
+        });
+    add("libandroid.so", "AChoreographer_postFrameCallback64",
+        HVC_CHOREOGRAPHER_CB64,
+        [post_frame_callback](guest_t*, const uint64_t a[8]) -> uint64_t {
+            return post_frame_callback("postFrameCallback64", a, 0);
+        });
+    add("libandroid.so", "AChoreographer_postFrameCallbackDelayed64",
+        HVC_CHOREOGRAPHER_CB64_DELAYED,
+        [post_frame_callback](guest_t*, const uint64_t a[8]) -> uint64_t {
+            return post_frame_callback("postFrameCallbackDelayed64", a, a[3]);
+        });
 
     add("libandroid.so", "__system_property_get", HVC_PROP_GET,
         [](guest_t* g, const uint64_t a[8]) -> uint64_t {
@@ -774,6 +1417,11 @@ void AndroidRuntime::register_libegl_stubs()
             } else {
                 attribs.push_back(EGL_NONE);
             }
+            for (size_t i = 0; i + 1 < attribs.size(); i += 2) {
+                if (attribs[i] == EGL_NONE) break;
+                if (attribs[i] == EGL_SURFACE_TYPE)
+                    attribs[i + 1] |= EGL_PBUFFER_BIT;
+            }
 
             EGLint num = 0;
             EGLBoolean ok = eglChooseConfig(egl_display_, attribs.data(),
@@ -811,18 +1459,24 @@ void AndroidRuntime::register_libegl_stubs()
         });
 
     // eglCreateWindowSurface(display, config, native_window, attrib_list)
-    // For now we create a 1×1 pbuffer — NativeWindow integration comes in Phase 5.
+    // Backed by a pbuffer sized to our current fake NativeWindow.
     add("libEGL.so", "eglCreateWindowSurface", HVC_EGL_CREATE_WIN_SURFACE,
         [this](guest_t*, const uint64_t a[8]) -> uint64_t {
             if (a[0] != GUEST_EGL_DISPLAY || egl_display_ == EGL_NO_DISPLAY) return 0;
+            if (a[2] != GUEST_NATIVE_WINDOW) {
+                std::fprintf(stderr, "[EGL] eglCreateWindowSurface: unknown native window 0x%llx\n",
+                             (unsigned long long)a[2]);
+                return 0;
+            }
             if (egl_surface_ == EGL_NO_SURFACE) {
-                // Create a pbuffer surface as a stand-in until we have a real window
                 EGLint pbuf_attribs[] = {
-                    EGL_WIDTH,  1280, EGL_HEIGHT, 720, EGL_NONE
+                    EGL_WIDTH, native_window_.width,
+                    EGL_HEIGHT, native_window_.height,
+                    EGL_NONE
                 };
                 egl_surface_ = eglCreatePbufferSurface(egl_display_, egl_config_, pbuf_attribs);
-                std::fprintf(stderr, "[EGL] eglCreateWindowSurface → pbuffer %p (Phase 5: replace with Metal layer)\n",
-                             egl_surface_);
+                std::fprintf(stderr, "[EGL] eglCreateWindowSurface → pbuffer %p (%dx%d)\n",
+                             egl_surface_, native_window_.width, native_window_.height);
             }
             return (egl_surface_ != EGL_NO_SURFACE) ? GUEST_EGL_SURFACE : 0;
         });
@@ -862,6 +1516,8 @@ void AndroidRuntime::register_libegl_stubs()
         [this](guest_t*, const uint64_t[8]) -> uint64_t {
             if (egl_display_ == EGL_NO_DISPLAY || egl_surface_ == EGL_NO_SURFACE) return 0;
             EGLBoolean ok = eglSwapBuffers(egl_display_, egl_surface_);
+            std::fprintf(stderr, "[EGL] eglSwapBuffers → %d\n", ok);
+            if (ok) present_egl_surface();
             return ok ? 1 : 0;
         });
 

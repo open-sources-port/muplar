@@ -25,6 +25,7 @@ static void print_usage(const char* prog)
     std::cerr << "Usage: " << prog
               << " [--verbose] [--sysroot PATH]\n"
               << "              [--native-activity]\n"
+              << "              [--host-window] [--host-window-ms VALUE]\n"
               << "              [--jni-call CLASS METHOD SIGNATURE]"
               << " [--jni-int VALUE ...]\n"
               << "              <elf-file> [args...]\n";
@@ -57,6 +58,19 @@ int main(int argc, char** argv)
         } else if (flag == "--native-activity") {
             cfg.native_activity = true;
             ++arg_start;
+        } else if (flag == "--host-window") {
+            cfg.host_window = true;
+            ++arg_start;
+        } else if ((flag == "--host-window-ms") && arg_start + 1 < argc) {
+            cfg.host_window = true;
+            try {
+                cfg.host_window_linger_ms = std::stoi(argv[arg_start + 1], nullptr, 0);
+            } catch (const std::exception&) {
+                std::cerr << "Invalid --host-window-ms value: "
+                          << argv[arg_start + 1] << "\n";
+                return 1;
+            }
+            arg_start += 2;
         } else if ((flag == "--jni-call") && arg_start + 3 < argc) {
             cfg.jni_call.enabled = true;
             cfg.jni_call.class_name  = argv[arg_start + 1];

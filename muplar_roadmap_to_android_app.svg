@@ -1,4 +1,4 @@
-<svg width="100%" viewBox="0 0 680 620" role="img" xmlns="http://www.w3.org/2000/svg">
+<svg width="100%" viewBox="0 0 680 1124" role="img" xmlns="http://www.w3.org/2000/svg">
 <title>Muplar roadmap from current state to running Android apps</title>
 <desc>A vertical flowchart showing 5 stages: current state, JNI_OnLoad, dynamic linker, Android runtime stubs, and full app execution.</desc>
 
@@ -71,16 +71,70 @@ text{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}
 <line class="arrow" x1="340" y1="412" x2="340" y2="440" marker-end="url(#arrow)"/>
 
 <g>
-<rect class="current" x="40" y="440" width="600" height="56" rx="8"/>
-<text class="current-title" x="60" y="464">→ NativeActivity bootstrap</text>
-<text class="current-subtitle" x="60" y="482">Call ANativeActivity_onCreate with framework-shaped state</text>
-<text class="current-title phase-label" x="560" y="472" text-anchor="middle">Phase 5.2 (Current)</text>
+<rect class="done" x="40" y="440" width="600" height="56" rx="8"/>
+<text class="done-title" x="60" y="464">✓ NativeActivity window + EGL smoke</text>
+<text class="done-subtitle" x="60" y="482">Lifecycle callbacks, ANativeWindow, host window, EGL/GLES frame</text>
+<text class="done-title phase-label" x="560" y="472" text-anchor="middle">Phase 5.2 (Done)</text>
+</g>
+
+<line class="arrow" x1="340" y1="496" x2="340" y2="524" marker-end="url(#arrow)"/>
+
+<g>
+<rect class="done" x="40" y="524" width="600" height="56" rx="8"/>
+<text class="done-title" x="60" y="548">✓ NativeActivity glue pthread + looper callbacks</text>
+<text class="done-subtitle" x="60" y="566">Run pthread guest entrypoints; deliver ALooper addFd/poll callbacks</text>
+<text class="done-title phase-label" x="560" y="556" text-anchor="middle">Phase 5.3 (Done)</text>
+</g>
+
+<line class="arrow" x1="340" y1="580" x2="340" y2="608" marker-end="url(#arrow)"/>
+
+<g>
+<rect class="done" x="40" y="608" width="600" height="56" rx="8"/>
+<text class="done-title" x="60" y="632">✓ Input queue + repeated app-loop scheduling</text>
+<text class="done-subtitle" x="60" y="650">AInputQueue attach/detach, repeated poll, synthetic motion events</text>
+<text class="done-title phase-label" x="560" y="640" text-anchor="middle">Phase 5.4 (Done)</text>
+</g>
+
+<line class="arrow" x1="340" y1="664" x2="340" y2="692" marker-end="url(#arrow)"/>
+
+<g>
+<rect class="done" x="40" y="692" width="600" height="56" rx="8"/>
+<text class="done-title" x="60" y="716">✓ Choreographer + frame-loop callbacks</text>
+<text class="done-subtitle" x="60" y="734">Frame callbacks, reposted frames, app-loop drain budget</text>
+<text class="done-title phase-label" x="560" y="724" text-anchor="middle">Phase 5.5 (Done)</text>
+</g>
+
+<line class="arrow" x1="340" y1="748" x2="340" y2="776" marker-end="url(#arrow)"/>
+
+<g>
+<rect class="done" x="40" y="776" width="600" height="56" rx="8"/>
+<text class="done-title" x="60" y="800">✓ Host input capture + queue rearm</text>
+<text class="done-subtitle" x="60" y="818">Mouse/key events enqueue into AInputQueue; looper fd is rearmed</text>
+<text class="done-title phase-label" x="560" y="808" text-anchor="middle">Phase 5.6 (Done)</text>
+</g>
+
+<line class="arrow" x1="340" y1="832" x2="340" y2="860" marker-end="url(#arrow)"/>
+
+<g>
+<rect class="done" x="40" y="860" width="600" height="56" rx="8"/>
+<text class="done-title" x="60" y="884">✓ Persistent host-driven app loop</text>
+<text class="done-subtitle" x="60" y="902">Guest callbacks stay alive while host window pumps input/frame ticks</text>
+<text class="done-title phase-label" x="560" y="892" text-anchor="middle">Phase 5.7 (Done)</text>
+</g>
+
+<line class="arrow" x1="340" y1="916" x2="340" y2="944" marker-end="url(#arrow)"/>
+
+<g>
+<rect class="current" x="40" y="944" width="600" height="56" rx="8"/>
+<text class="current-title" x="60" y="968">→ Native app glue scheduler</text>
+<text class="current-subtitle" x="60" y="986">Resume long-running guest threads and ident-based ALooper polling</text>
+<text class="current-title phase-label" x="560" y="976" text-anchor="middle">Phase 5.8 (Current)</text>
 </g>
 
 <g>
-<rect class="callout" x="40" y="516" width="600" height="76" rx="8"/>
-<text class="callout-text" x="340" y="540" text-anchor="middle">Next hard boundary:</text>
-<text class="callout-text" x="340" y="558" text-anchor="middle">NativeActivity glue needs real guest pthread scheduling, looper events,</text>
-<text class="callout-text" x="340" y="576" text-anchor="middle">window/input callbacks, then GPU/display and Binder compatibility.</text>
+<rect class="callout" x="40" y="1020" width="600" height="76" rx="8"/>
+<text class="callout-text" x="340" y="1044" text-anchor="middle">Next hard boundary:</text>
+<text class="callout-text" x="340" y="1062" text-anchor="middle">Run native_app_glue-style event loops without returning immediately,</text>
+<text class="callout-text" x="340" y="1080" text-anchor="middle">then expand Binder/services and APK compatibility.</text>
 </g>
 </svg>
