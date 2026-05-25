@@ -3,11 +3,15 @@
 
 #include <cstdio>
 #include <cstring>
+#include <filesystem>
+#include <fstream>
 #include <string>
+#include <system_error>
 #include <unistd.h>
 #include <dlfcn.h>
 #include <vector>
 #include <algorithm>
+#include <utility>
 
 // EGL / GLES headers (macOS host — provided by ANGLE)
 #include <EGL/egl.h>
@@ -16,6 +20,7 @@
 
 extern "C" {
     #include "core/guest.h"
+    #include "syscall/proc.h"
 }
 
 namespace muplar::runtime::android {
@@ -82,6 +87,11 @@ static constexpr uint32_t HVC_ATOI                = 0x2038;
 [[maybe_unused]] static constexpr uint32_t HVC_ATOF    = 0x2039;
 static constexpr uint32_t HVC_RAND                = 0x203A;
 static constexpr uint32_t HVC_SRAND               = 0x203B;
+static constexpr uint32_t HVC_PIPE                = 0x203C;
+static constexpr uint32_t HVC_PIPE2               = 0x203D;
+static constexpr uint32_t HVC_READ                = 0x203E;
+static constexpr uint32_t HVC_WRITE               = 0x203F;
+static constexpr uint32_t HVC_CLOSE               = 0x2049;
 
 // liblog
 static constexpr uint32_t HVC_LOG_PRINT           = 0x2100;
@@ -97,11 +107,13 @@ static constexpr uint32_t HVC_ALOOPER_POLL_ALL    = 0x2204;
 static constexpr uint32_t HVC_ALOOPER_ADD_FD      = 0x2205;
 static constexpr uint32_t HVC_ALOOPER_REMOVE_FD   = 0x2206;
 static constexpr uint32_t HVC_ALOOPER_WAKE        = 0x2207;
-[[maybe_unused]] static constexpr uint32_t HVC_ASSET_MGR_OPEN = 0x2210;
-[[maybe_unused]] static constexpr uint32_t HVC_ASSET_OPEN     = 0x2211;
-[[maybe_unused]] static constexpr uint32_t HVC_ASSET_READ     = 0x2212;
-[[maybe_unused]] static constexpr uint32_t HVC_ASSET_CLOSE    = 0x2213;
-[[maybe_unused]] static constexpr uint32_t HVC_ASSET_LENGTH   = 0x2214;
+static constexpr uint32_t HVC_ASSET_MGR_FROM_JAVA = 0x2210;
+static constexpr uint32_t HVC_ASSET_OPEN          = 0x2211;
+static constexpr uint32_t HVC_ASSET_READ          = 0x2212;
+static constexpr uint32_t HVC_ASSET_CLOSE         = 0x2213;
+static constexpr uint32_t HVC_ASSET_LENGTH        = 0x2214;
+static constexpr uint32_t HVC_ASSET_REMAINING     = 0x2215;
+static constexpr uint32_t HVC_ASSET_SEEK          = 0x2216;
 static constexpr uint32_t HVC_CHOREOGRAPHER_GET   = 0x2220;
 static constexpr uint32_t HVC_CHOREOGRAPHER_CB    = 0x2221;
 static constexpr uint32_t HVC_NATIVE_WINDOW_SET_BUF = 0x2230;
@@ -266,6 +278,58 @@ static void guest_write_u32(guest_t* g, uint64_t gpa, uint32_t v)
     guest_write(g, gpa, &v, 4);
 }
 
+static uint64_t guest_neg_errno(int err)
+{
+    return static_cast<uint64_t>(-static_cast<int64_t>(err));
+}
+
+static uint64_t guest_negative_one()
+{
+    return static_cast<uint64_t>(static_cast<int64_t>(-1));
+}
+
+static bool safe_asset_name(const std::string& name)
+{
+    if (name.empty() || name.front() == '/' ||
+        name.find('\\') != std::string::npos ||
+        name.find(':') != std::string::npos) {
+        return false;
+    }
+
+    size_t start = 0;
+    while (start <= name.size()) {
+        size_t end = name.find('/', start);
+        std::string part = name.substr(
+            start, end == std::string::npos ? std::string::npos : end - start);
+        if (part == "..")
+            return false;
+        if (end == std::string::npos)
+            break;
+        start = end + 1;
+    }
+    return true;
+}
+
+static std::vector<uint8_t> read_asset_file(const std::filesystem::path& path)
+{
+    std::ifstream in(path, std::ios::binary);
+    if (!in)
+        return {};
+
+    in.seekg(0, std::ios::end);
+    std::streamoff size = in.tellg();
+    if (size < 0)
+        return {};
+    in.seekg(0, std::ios::beg);
+
+    std::vector<uint8_t> data(static_cast<size_t>(size));
+    if (!data.empty())
+        in.read(reinterpret_cast<char*>(data.data()), size);
+    if (!in && size > 0)
+        return {};
+    return data;
+}
+
 static std::string format_guest_log(guest_t* g,
                                     const std::string& fmt,
                                     const uint64_t* varargs,
@@ -347,6 +411,11 @@ AndroidRuntime::~AndroidRuntime()
     if (angle_egl_lib_)  ::dlclose(angle_egl_lib_);
 }
 
+void AndroidRuntime::set_asset_root(std::string asset_root)
+{
+    asset_root_ = std::move(asset_root);
+}
+
 bool AndroidRuntime::load_angle()
 {
     // Try @rpath first (set by CMakeLists), then fallback to relative path.
@@ -402,7 +471,23 @@ bool AndroidRuntime::pump_host_app_events()
 
     bool did_work = collect_host_input_events();
     did_work |= queue_ready_looper_callbacks();
+    if (input_queue_.attached && next_input_event_ < input_events_.size())
+        did_work = true;
     return did_work;
+}
+
+void AndroidRuntime::set_thread_yield_enabled(bool enabled)
+{
+    thread_yield_enabled_ = enabled;
+    if (!enabled)
+        thread_yielded_ = false;
+}
+
+bool AndroidRuntime::consume_thread_yield()
+{
+    bool yielded = thread_yielded_;
+    thread_yielded_ = false;
+    return yielded;
 }
 
 std::vector<AndroidRuntime::PendingPthreadCall>
@@ -462,6 +547,34 @@ void AndroidRuntime::rearm_looper_fd(int32_t fd)
     }
 }
 
+AndroidRuntime::HostPipe* AndroidRuntime::pipe_for_fd(int32_t fd)
+{
+    for (auto& pipe : pipes_) {
+        if (pipe.read_fd == fd || pipe.write_fd == fd)
+            return &pipe;
+    }
+    return nullptr;
+}
+
+const AndroidRuntime::HostPipe* AndroidRuntime::pipe_for_fd(int32_t fd) const
+{
+    for (const auto& pipe : pipes_) {
+        if (pipe.read_fd == fd || pipe.write_fd == fd)
+            return &pipe;
+    }
+    return nullptr;
+}
+
+bool AndroidRuntime::looper_fd_ready(int32_t fd) const
+{
+    const HostPipe* pipe = pipe_for_fd(fd);
+    if (!pipe)
+        return true;
+    if (fd == pipe->read_fd)
+        return !pipe->buffer.empty() || !pipe->write_open;
+    return pipe->write_open;
+}
+
 bool AndroidRuntime::collect_host_input_events()
 {
     if (!host_window_enabled_)
@@ -517,6 +630,8 @@ bool AndroidRuntime::queue_ready_looper_callbacks()
             (!input_queue_.attached || next_input_event_ >= input_events_.size())) {
             continue;
         }
+        if (!looper_fd_ready(reg.fd))
+            continue;
 
         reg.delivered = true;
         pending_looper_callbacks_.push_back({
@@ -606,6 +721,8 @@ void AndroidRuntime::install()
     };
     next_input_event_ = 0;
     current_input_event_ = 0;
+    pipes_.clear();
+    next_pipe_fd_ = 200;
     pending_frame_callbacks_.clear();
     next_frame_time_nanos_ = 16'666'666ULL;
 
@@ -788,13 +905,25 @@ void AndroidRuntime::register_libc_stubs()
 
     add("libc.so", "pthread_create", HVC_PTHREAD_CREATE,
         [this](guest_t* g, const uint64_t a[8]) -> uint64_t {
+            constexpr uint64_t kGuestThreadStackSize = 64 * 1024;
             uint64_t h = next_thread_handle_++;
+            uint64_t stack_base = (heap_bump_ + 15) & ~15ULL;
+            uint64_t stack_top = stack_base + kGuestThreadStackSize;
+            if (stack_top > heap_base_ + HEAP_SIZE)
+                return 11; // EAGAIN
+
+            heap_bump_ = stack_top;
+            std::vector<uint8_t> zero(kGuestThreadStackSize, 0);
+            guest_write(g, stack_base, zero.data(), zero.size());
+
             if (a[0]) guest_write_u64(g, a[0], h);
-            threads_[h] = {0, 0};
-            pending_pthreads_.push_back({h, a[2], a[3]});
-            std::fprintf(stderr, "[ART] pthread_create fn=0x%llx arg=0x%llx handle=0x%llx (queued)\n",
+            threads_[h] = {stack_base, kGuestThreadStackSize};
+            pending_pthreads_.push_back({h, a[2], a[3], stack_top});
+            std::fprintf(stderr, "[ART] pthread_create fn=0x%llx arg=0x%llx handle=0x%llx stack=0x%llx..0x%llx (queued)\n",
                          (unsigned long long)a[2], (unsigned long long)a[3],
-                         (unsigned long long)h);
+                         (unsigned long long)h,
+                         (unsigned long long)stack_base,
+                         (unsigned long long)stack_top);
             return 0;
         });
 
@@ -885,6 +1014,98 @@ void AndroidRuntime::register_libc_stubs()
     add("libc.so", "rand",  HVC_RAND,  [](guest_t*, const uint64_t[8]) -> uint64_t { return (uint64_t)::rand(); });
     add("libc.so", "srand", HVC_SRAND, [](guest_t*, const uint64_t a[8]) -> uint64_t { ::srand((unsigned)a[0]); return 0; });
 
+    auto create_pipe = [this](guest_t* g, uint64_t fds_gpa) -> uint64_t {
+        if (!fds_gpa)
+            return guest_neg_errno(14); // EFAULT
+
+        HostPipe pipe;
+        pipe.read_fd = next_pipe_fd_++;
+        pipe.write_fd = next_pipe_fd_++;
+        pipes_.push_back(pipe);
+
+        guest_write_u32(g, fds_gpa + 0, static_cast<uint32_t>(pipe.read_fd));
+        guest_write_u32(g, fds_gpa + 4, static_cast<uint32_t>(pipe.write_fd));
+        std::fprintf(stderr, "[ART] pipe -> [%d,%d]\n",
+                     pipe.read_fd, pipe.write_fd);
+        return 0;
+    };
+
+    add("libc.so", "pipe", HVC_PIPE,
+        [create_pipe](guest_t* g, const uint64_t a[8]) -> uint64_t {
+            return create_pipe(g, a[0]);
+        });
+    add("libc.so", "pipe2", HVC_PIPE2,
+        [create_pipe](guest_t* g, const uint64_t a[8]) -> uint64_t {
+            (void)a[1];
+            return create_pipe(g, a[0]);
+        });
+    add("libc.so", "read", HVC_READ,
+        [this](guest_t* g, const uint64_t a[8]) -> uint64_t {
+            int32_t fd = static_cast<int32_t>(a[0]);
+            HostPipe* pipe = pipe_for_fd(fd);
+            if (!pipe || fd != pipe->read_fd || !pipe->read_open)
+                return guest_neg_errno(9); // EBADF
+            if (!a[1] && a[2])
+                return guest_neg_errno(14); // EFAULT
+
+            size_t requested = a[2] > SIZE_MAX ? SIZE_MAX : static_cast<size_t>(a[2]);
+            size_t to_copy = std::min(requested, pipe->buffer.size());
+            if (to_copy == 0)
+                return pipe->write_open ? guest_neg_errno(11) : 0; // EAGAIN or EOF
+
+            if (guest_write(g, a[1], pipe->buffer.data(), to_copy) != 0)
+                return guest_neg_errno(14);
+            pipe->buffer.erase(pipe->buffer.begin(), pipe->buffer.begin() + to_copy);
+            if (!pipe->buffer.empty())
+                rearm_looper_fd(pipe->read_fd);
+
+            std::fprintf(stderr, "[ART] read pipe fd=%d bytes=%zu remaining=%zu\n",
+                         fd, to_copy, pipe->buffer.size());
+            return static_cast<uint64_t>(to_copy);
+        });
+    add("libc.so", "write", HVC_WRITE,
+        [this](guest_t* g, const uint64_t a[8]) -> uint64_t {
+            int32_t fd = static_cast<int32_t>(a[0]);
+            if (!a[1] && a[2])
+                return guest_neg_errno(14); // EFAULT
+
+            size_t count = a[2] > SIZE_MAX ? SIZE_MAX : static_cast<size_t>(a[2]);
+            std::vector<uint8_t> bytes(count);
+            if (count && guest_read(g, a[1], bytes.data(), count) != 0)
+                return guest_neg_errno(14);
+
+            if (fd == 1 || fd == 2) {
+                if (!bytes.empty())
+                    std::fwrite(bytes.data(), 1, bytes.size(), stderr);
+                return static_cast<uint64_t>(count);
+            }
+
+            HostPipe* pipe = pipe_for_fd(fd);
+            if (!pipe || fd != pipe->write_fd || !pipe->write_open)
+                return guest_neg_errno(9); // EBADF
+
+            pipe->buffer.insert(pipe->buffer.end(), bytes.begin(), bytes.end());
+            rearm_looper_fd(pipe->read_fd);
+            std::fprintf(stderr, "[ART] write pipe fd=%d bytes=%zu queued=%zu\n",
+                         fd, count, pipe->buffer.size());
+            return static_cast<uint64_t>(count);
+        });
+    add("libc.so", "close", HVC_CLOSE,
+        [this](guest_t*, const uint64_t a[8]) -> uint64_t {
+            int32_t fd = static_cast<int32_t>(a[0]);
+            HostPipe* pipe = pipe_for_fd(fd);
+            if (!pipe)
+                return guest_neg_errno(9); // EBADF
+            if (fd == pipe->read_fd)
+                pipe->read_open = false;
+            if (fd == pipe->write_fd) {
+                pipe->write_open = false;
+                rearm_looper_fd(pipe->read_fd);
+            }
+            std::fprintf(stderr, "[ART] close fd=%d\n", fd);
+            return 0;
+        });
+
     sym_tables_["libm.so"]    = sym_tables_["libc.so"];
     sym_tables_["libstdc++.so"] = sym_tables_["libc.so"];
 }
@@ -946,7 +1167,7 @@ void AndroidRuntime::register_libandroid_stubs()
 
     auto poll_looper = [this, input_event_pending](guest_t* g, const uint64_t a[8]) -> uint64_t {
         constexpr uint64_t ALOOPER_POLL_TIMEOUT =
-            static_cast<uint64_t>(static_cast<int64_t>(-1));
+            static_cast<uint64_t>(static_cast<int64_t>(-3));
         constexpr uint64_t ALOOPER_POLL_CALLBACK =
             static_cast<uint64_t>(static_cast<int64_t>(-2));
 
@@ -956,6 +1177,8 @@ void AndroidRuntime::register_libandroid_stubs()
                 (!input_queue_.attached || !input_event_pending())) {
                 continue;
             }
+            if (!looper_fd_ready(reg.fd))
+                continue;
             reg.delivered = true;
 
             if (a[1]) guest_write_u32(g, a[1], static_cast<uint32_t>(reg.fd));
@@ -975,6 +1198,12 @@ void AndroidRuntime::register_libandroid_stubs()
                 return ALOOPER_POLL_CALLBACK;
             }
             return static_cast<uint64_t>(static_cast<int64_t>(reg.ident));
+        }
+
+        int32_t timeout_ms = static_cast<int32_t>(a[0]);
+        if (timeout_ms < 0 && thread_yield_enabled_) {
+            thread_yielded_ = true;
+            proc_request_hvc6_yield();
         }
 
         return ALOOPER_POLL_TIMEOUT;
@@ -1025,6 +1254,119 @@ void AndroidRuntime::register_libandroid_stubs()
                 reg.delivered = false;
             return 0;
         });
+
+    // AAssetManager/AAsset — host-backed reads from extracted APK assets/.
+    add("libandroid.so", "AAssetManager_fromJava", HVC_ASSET_MGR_FROM_JAVA,
+        [](guest_t*, const uint64_t[8]) -> uint64_t {
+            return GUEST_ASSET_MANAGER;
+        });
+
+    add("libandroid.so", "AAssetManager_open", HVC_ASSET_OPEN,
+        [this](guest_t* g, const uint64_t a[8]) -> uint64_t {
+            if (a[0] != GUEST_ASSET_MANAGER || asset_root_.empty())
+                return 0;
+
+            std::string name = guest_read_string(g, a[1]);
+            if (!safe_asset_name(name))
+                return 0;
+
+            std::filesystem::path path =
+                std::filesystem::path(asset_root_) / std::filesystem::path(name);
+            std::error_code ec;
+            if (!std::filesystem::is_regular_file(path, ec))
+                return 0;
+
+            std::vector<uint8_t> bytes = read_asset_file(path);
+            if (bytes.empty() && std::filesystem::file_size(path, ec) != 0)
+                return 0;
+
+            uint64_t handle = next_asset_handle_++;
+            assets_[handle] = { name, std::move(bytes), 0 };
+            std::fprintf(stderr,
+                "[AssetManager] open %s size=%zu mode=%lld -> 0x%llx\n",
+                name.c_str(),
+                assets_[handle].bytes.size(),
+                (long long)static_cast<int64_t>(a[2]),
+                (unsigned long long)handle);
+            return handle;
+        });
+
+    add("libandroid.so", "AAsset_read", HVC_ASSET_READ,
+        [this](guest_t* g, const uint64_t a[8]) -> uint64_t {
+            auto it = assets_.find(a[0]);
+            if (it == assets_.end() || !a[1])
+                return guest_negative_one();
+
+            AssetState& asset = it->second;
+            size_t remaining = asset.offset < asset.bytes.size()
+                ? asset.bytes.size() - asset.offset
+                : 0;
+            size_t requested = static_cast<size_t>(
+                std::min<uint64_t>(a[2], 0x7fffffffULL));
+            size_t n = std::min(remaining, requested);
+            if (n > 0 &&
+                guest_write(g, a[1], asset.bytes.data() + asset.offset, n) != 0) {
+                return guest_negative_one();
+            }
+            asset.offset += n;
+            return n;
+        });
+
+    add("libandroid.so", "AAsset_close", HVC_ASSET_CLOSE,
+        [this](guest_t*, const uint64_t a[8]) -> uint64_t {
+            assets_.erase(a[0]);
+            return 0;
+        });
+
+    auto asset_length = [this](guest_t*, const uint64_t a[8]) -> uint64_t {
+        auto it = assets_.find(a[0]);
+        return it == assets_.end() ? 0 : it->second.bytes.size();
+    };
+    add("libandroid.so", "AAsset_getLength", HVC_ASSET_LENGTH, asset_length);
+    add("libandroid.so", "AAsset_getLength64", HVC_ASSET_LENGTH, asset_length);
+
+    auto asset_remaining = [this](guest_t*, const uint64_t a[8]) -> uint64_t {
+        auto it = assets_.find(a[0]);
+        if (it == assets_.end())
+            return 0;
+        const AssetState& asset = it->second;
+        return asset.offset < asset.bytes.size()
+            ? asset.bytes.size() - asset.offset
+            : 0;
+    };
+    add("libandroid.so", "AAsset_getRemainingLength", HVC_ASSET_REMAINING,
+        asset_remaining);
+    add("libandroid.so", "AAsset_getRemainingLength64", HVC_ASSET_REMAINING,
+        asset_remaining);
+
+    auto asset_seek = [this](guest_t*, const uint64_t a[8]) -> uint64_t {
+        auto it = assets_.find(a[0]);
+        if (it == assets_.end())
+            return guest_negative_one();
+
+        AssetState& asset = it->second;
+        int64_t offset = static_cast<int64_t>(a[1]);
+        int32_t whence = static_cast<int32_t>(a[2]);
+        int64_t base = 0;
+        if (whence == SEEK_SET) {
+            base = 0;
+        } else if (whence == SEEK_CUR) {
+            base = static_cast<int64_t>(asset.offset);
+        } else if (whence == SEEK_END) {
+            base = static_cast<int64_t>(asset.bytes.size());
+        } else {
+            return guest_negative_one();
+        }
+
+        int64_t next = base + offset;
+        if (next < 0 || static_cast<uint64_t>(next) > asset.bytes.size())
+            return guest_negative_one();
+
+        asset.offset = static_cast<size_t>(next);
+        return asset.offset;
+    };
+    add("libandroid.so", "AAsset_seek", HVC_ASSET_SEEK, asset_seek);
+    add("libandroid.so", "AAsset_seek64", HVC_ASSET_SEEK, asset_seek);
 
     // AInputQueue — minimal queued touch events routed through ALooper.
     add("libandroid.so", "AInputQueue_attachLooper", HVC_INPUT_QUEUE_ATTACH,

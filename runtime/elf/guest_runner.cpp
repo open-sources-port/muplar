@@ -10,13 +10,17 @@
 
 #include "guest_runner.h"
 
+#include <array>
+#include <algorithm>
 #include <stdexcept>
 #include <cctype>
 #include <cstring>
 #include <cstdlib>
 #include <cstdio>
 #include <chrono>
+#include <filesystem>
 #include <limits>
+#include <optional>
 #include <thread>
 #include <vector>
 
@@ -26,6 +30,7 @@
 #  undef PF_X
 #endif
 #include <elf.h>
+#include <libkern/OSCacheControl.h>
 
 extern "C" {
     #include "core/bootstrap.h"
@@ -33,6 +38,7 @@ extern "C" {
     #include "debug/log.h"
     #include "runtime/forkipc.h"
     #include "shim_blob.h"
+    #include "syscall/internal.h"
     #include "syscall/proc.h"
     extern char** environ;
 }
@@ -208,7 +214,8 @@ static void write_guest_string(guest_t* g, uint64_t gpa, const char* value)
 
 static uint64_t prepare_native_activity(guest_t* g,
                                         const jni::JniOnLoad& jni_onload,
-                                        uint64_t scratch_gpa)
+                                        uint64_t scratch_gpa,
+                                        uint64_t asset_manager_gpa)
 {
     constexpr uint64_t kActivitySize = 0x80;
     constexpr uint64_t kCallbacksSize = 16 * 8;
@@ -237,7 +244,7 @@ static uint64_t prepare_native_activity(guest_t* g,
     write_guest_u64(g, activity_gpa + 0x28, external_path_gpa);
     write_guest_i32(g, activity_gpa + 0x30, 35);
     write_guest_u64(g, activity_gpa + 0x38, 0);
-    write_guest_u64(g, activity_gpa + 0x40, 0);
+    write_guest_u64(g, activity_gpa + 0x40, asset_manager_gpa);
     write_guest_u64(g, activity_gpa + 0x48, obb_path_gpa);
 
     (void)kActivitySize;
@@ -291,6 +298,19 @@ struct DirectSoDyn {
     uint64_t jmprel_size = 0;
     uint64_t relr = 0;
     uint64_t relr_size = 0;
+    uint64_t soname_off = 0;
+    std::vector<uint32_t> needed_off;
+};
+
+struct DirectSoObject {
+    std::string path;
+    std::string soname;
+    uint64_t load_base = 0;
+    uint64_t load_min = 0;
+    uint64_t load_max = 0;
+    std::vector<Elf64_Phdr> phdrs;
+    DirectSoDyn dyn;
+    bool mapped_by_bootstrap = false;
 };
 
 static std::string read_dyn_string(FILE* f,
@@ -311,6 +331,319 @@ static std::string read_dyn_string(FILE* f,
     return out;
 }
 
+static uint64_t align_down_u64(uint64_t value, uint64_t align)
+{
+    return value & ~(align - 1);
+}
+
+static uint64_t align_up_u64(uint64_t value, uint64_t align)
+{
+    return (value + align - 1) & ~(align - 1);
+}
+
+static int phdr_mem_perms(uint32_t flags)
+{
+    int perms = MEM_PERM_R;
+    if (flags & PF_W) perms |= MEM_PERM_W;
+    if (flags & PF_X) perms |= MEM_PERM_X;
+    return perms;
+}
+
+static std::string path_filename(const std::string& path)
+{
+    return std::filesystem::path(path).filename().string();
+}
+
+static bool parse_direct_so_metadata(const std::string& path,
+                                     DirectSoObject* out)
+{
+    FILE* f = std::fopen(path.c_str(), "rb");
+    if (!f) return false;
+
+    Elf64_Ehdr ehdr{};
+    if (!read_at(f, 0, &ehdr, sizeof(ehdr)) ||
+        std::memcmp(ehdr.e_ident, ELFMAG, SELFMAG) != 0 ||
+        ehdr.e_ident[EI_CLASS] != ELFCLASS64 ||
+        ehdr.e_machine != EM_AARCH64) {
+        std::fclose(f);
+        return false;
+    }
+
+    DirectSoObject obj;
+    obj.path = path;
+    obj.phdrs.resize(ehdr.e_phnum);
+    if (!read_at(f, ehdr.e_phoff, obj.phdrs.data(),
+                 obj.phdrs.size() * sizeof(Elf64_Phdr))) {
+        std::fclose(f);
+        return false;
+    }
+
+    obj.load_min = UINT64_MAX;
+    obj.load_max = 0;
+    for (const auto& ph : obj.phdrs) {
+        if (ph.p_type != PT_LOAD) continue;
+        uint64_t start = align_down_u64(ph.p_vaddr, 0x1000);
+        uint64_t end = align_up_u64(ph.p_vaddr + ph.p_memsz, 0x1000);
+        obj.load_min = std::min(obj.load_min, start);
+        obj.load_max = std::max(obj.load_max, end);
+    }
+    if (obj.load_min == UINT64_MAX) {
+        std::fclose(f);
+        return false;
+    }
+
+    for (const auto& ph : obj.phdrs) {
+        if (ph.p_type != PT_DYNAMIC) continue;
+        size_t count = ph.p_filesz / sizeof(Elf64_Dyn);
+        for (size_t i = 0; i < count; ++i) {
+            Elf64_Dyn entry{};
+            if (!read_at(f, ph.p_offset + i * sizeof(entry), &entry, sizeof(entry)))
+                break;
+            uint64_t val = dyn_val(entry);
+            switch (entry.d_tag) {
+            case DT_STRTAB:   obj.dyn.strtab = val; break;
+            case DT_STRSZ:    obj.dyn.strsz = val; break;
+            case DT_SYMTAB:   obj.dyn.symtab = val; break;
+            case DT_RELA:     obj.dyn.rela = val; break;
+            case DT_RELASZ:   obj.dyn.rela_size = val; break;
+            case DT_JMPREL:   obj.dyn.jmprel = val; break;
+            case DT_PLTRELSZ: obj.dyn.jmprel_size = val; break;
+            case MU_DT_ANDROID_RELR:    obj.dyn.relr = val; break;
+            case MU_DT_ANDROID_RELRSZ:  obj.dyn.relr_size = val; break;
+            case MU_DT_ANDROID_RELRENT: break;
+            case DT_SONAME:   obj.dyn.soname_off = val; break;
+            case DT_NEEDED:
+                obj.dyn.needed_off.push_back(static_cast<uint32_t>(val));
+                break;
+            case DT_NULL:     i = count; break;
+            default: break;
+            }
+        }
+        break;
+    }
+
+    if (obj.dyn.soname_off)
+        obj.soname = read_dyn_string(f, obj.phdrs, obj.dyn,
+                                     static_cast<uint32_t>(obj.dyn.soname_off));
+    if (obj.soname.empty())
+        obj.soname = path_filename(path);
+
+    std::fclose(f);
+    *out = std::move(obj);
+    return true;
+}
+
+static std::vector<std::string> direct_so_needed_names(const DirectSoObject& obj)
+{
+    std::vector<std::string> out;
+    FILE* f = std::fopen(obj.path.c_str(), "rb");
+    if (!f) return out;
+    for (uint32_t off : obj.dyn.needed_off) {
+        std::string needed = read_dyn_string(f, obj.phdrs, obj.dyn, off);
+        if (!needed.empty())
+            out.push_back(needed);
+    }
+    std::fclose(f);
+    return out;
+}
+
+static bool android_builtin_soname(const android::AndroidRuntime& art,
+                                   const std::string& soname)
+{
+    if (!art.builtin_symbols(soname).empty())
+        return true;
+
+    for (const char* const* known = android::AndroidRuntime::KNOWN_SONAMES;
+         *known; ++known) {
+        if (soname == *known)
+            return true;
+    }
+
+    return soname == "libdl_android.so" ||
+           soname == "libc++_shared.so" ||
+           soname == "libz.so";
+}
+
+static bool direct_so_already_loaded(const std::vector<DirectSoObject>& objects,
+                                     const std::string& soname)
+{
+    for (const auto& obj : objects) {
+        if (obj.soname == soname || path_filename(obj.path) == soname)
+            return true;
+    }
+    return false;
+}
+
+static std::optional<std::string>
+find_direct_so_dependency(const std::vector<std::string>& search_dirs,
+                          const std::string& soname)
+{
+    for (const std::string& dir : search_dirs) {
+        if (dir.empty()) continue;
+        std::filesystem::path candidate = std::filesystem::path(dir) / soname;
+        if (std::filesystem::exists(candidate))
+            return candidate.string();
+    }
+    return std::nullopt;
+}
+
+static bool map_direct_so_object(guest_t* g,
+                                 DirectSoObject& obj,
+                                 uint64_t runtime_min)
+{
+    FILE* f = std::fopen(obj.path.c_str(), "rb");
+    if (!f) return false;
+
+    obj.load_base = runtime_min - obj.load_min;
+    uint64_t runtime_end = obj.load_base + obj.load_max;
+    uint64_t map_start = align_down_u64(runtime_min, BLOCK_2MIB);
+    uint64_t map_end = align_up_u64(runtime_end, BLOCK_2MIB);
+
+    if (map_end > g->guest_size) {
+        std::fprintf(stderr,
+            "[Muplar] direct .so dependency range exceeds guest memory: %s\n",
+            obj.path.c_str());
+        std::fclose(f);
+        return false;
+    }
+
+    pthread_mutex_lock(&mmap_lock);
+    int rc = guest_extend_page_tables(g, map_start, map_end, MEM_PERM_RW);
+    pthread_mutex_unlock(&mmap_lock);
+    if (rc < 0) {
+        std::fclose(f);
+        return false;
+    }
+
+    for (const auto& ph : obj.phdrs) {
+        if (ph.p_type != PT_LOAD) continue;
+
+        uint64_t dst_gpa = obj.load_base + ph.p_vaddr;
+        auto* dst = static_cast<uint8_t*>(g->host_base) + dst_gpa;
+        std::memset(dst, 0, static_cast<size_t>(ph.p_memsz));
+        if (ph.p_filesz &&
+            !read_at(f, ph.p_offset, dst, static_cast<size_t>(ph.p_filesz))) {
+            std::fclose(f);
+            return false;
+        }
+
+        if (ph.p_flags & PF_X)
+            sys_icache_invalidate(dst, static_cast<size_t>(ph.p_memsz));
+    }
+
+    for (const auto& ph : obj.phdrs) {
+        if (ph.p_type != PT_LOAD) continue;
+        uint64_t seg_start = align_down_u64(obj.load_base + ph.p_vaddr, 0x1000);
+        uint64_t seg_end = align_up_u64(obj.load_base + ph.p_vaddr + ph.p_memsz,
+                                        0x1000);
+        pthread_mutex_lock(&mmap_lock);
+        rc = guest_update_perms(g, seg_start, seg_end, phdr_mem_perms(ph.p_flags));
+        pthread_mutex_unlock(&mmap_lock);
+        if (rc < 0) {
+            std::fclose(f);
+            return false;
+        }
+    }
+
+    std::fclose(f);
+    return true;
+}
+
+static uint64_t lookup_direct_symbol(const std::vector<DirectSoObject>& objects,
+                                     const std::string& name)
+{
+    for (const auto& obj : objects) {
+        if (!obj.dyn.symtab || !obj.dyn.strtab || !obj.dyn.strsz)
+            continue;
+
+        FILE* f = std::fopen(obj.path.c_str(), "rb");
+        if (!f) continue;
+
+        for (uint32_t i = 1; i < 8192; ++i) {
+            uint64_t sym_off = 0;
+            if (!vaddr_to_file_offset(obj.phdrs,
+                                      obj.dyn.symtab + i * sizeof(Elf64_Sym),
+                                      sizeof(Elf64_Sym),
+                                      &sym_off)) {
+                break;
+            }
+
+            Elf64_Sym sym{};
+            if (!read_at(f, sym_off, &sym, sizeof(sym)))
+                break;
+            if (sym.st_name >= obj.dyn.strsz)
+                continue;
+            if (sym.st_shndx == SHN_UNDEF)
+                continue;
+
+            std::string sym_name = read_dyn_string(f, obj.phdrs, obj.dyn,
+                                                   sym.st_name);
+            if (sym_name == name) {
+                std::fclose(f);
+                return obj.load_base + sym.st_value;
+            }
+        }
+
+        std::fclose(f);
+    }
+
+    return 0;
+}
+
+static bool load_direct_so_dependencies(guest_t* g,
+                                        std::vector<DirectSoObject>& objects,
+                                        const std::vector<std::string>& search_dirs,
+                                        const android::AndroidRuntime& art)
+{
+    uint64_t next_base = 0x180000000ULL;
+    for (const auto& obj : objects) {
+        next_base = std::max(next_base,
+            align_up_u64(obj.load_base + obj.load_max, BLOCK_2MIB));
+    }
+
+    for (size_t i = 0; i < objects.size(); ++i) {
+        for (const std::string& needed : direct_so_needed_names(objects[i])) {
+            if (direct_so_already_loaded(objects, needed))
+                continue;
+
+            auto dep_path = find_direct_so_dependency(search_dirs, needed);
+            if (!dep_path) {
+                if (android_builtin_soname(art, needed))
+                    continue;
+                std::fprintf(stderr,
+                    "[Muplar] direct .so dependency not found locally: %s\n",
+                    needed.c_str());
+                continue;
+            }
+
+            DirectSoObject dep;
+            if (!parse_direct_so_metadata(*dep_path, &dep)) {
+                std::fprintf(stderr,
+                    "[Muplar] failed to parse dependency %s\n",
+                    dep_path->c_str());
+                return false;
+            }
+
+            uint64_t runtime_min = align_up_u64(next_base, BLOCK_2MIB);
+            if (!map_direct_so_object(g, dep, runtime_min)) {
+                std::fprintf(stderr,
+                    "[Muplar] failed to map dependency %s\n",
+                    dep.path.c_str());
+                return false;
+            }
+
+            next_base = align_up_u64(dep.load_base + dep.load_max, BLOCK_2MIB);
+            std::fprintf(stderr,
+                "[Muplar] loaded direct .so dependency %s at GPA 0x%llx\n",
+                dep.soname.c_str(),
+                (unsigned long long)(dep.load_base + dep.load_min));
+            objects.push_back(std::move(dep));
+        }
+    }
+
+    return true;
+}
+
 static uint64_t resolve_android_symbol(const android::AndroidRuntime& art,
                                        const std::string& name)
 {
@@ -324,10 +657,9 @@ static uint64_t resolve_android_symbol(const android::AndroidRuntime& art,
 }
 
 static void apply_direct_so_rela(FILE* f,
-                                 const std::vector<Elf64_Phdr>& phdrs,
-                                 const DirectSoDyn& dyn,
+                                 const DirectSoObject& obj,
+                                 const std::vector<DirectSoObject>& objects,
                                  guest_t* g,
-                                 uint64_t load_base,
                                  uint64_t rela_vaddr,
                                  uint64_t rela_size,
                                  const android::AndroidRuntime& art,
@@ -335,7 +667,7 @@ static void apply_direct_so_rela(FILE* f,
 {
     if (!rela_vaddr || !rela_size) return;
     uint64_t rela_off = 0;
-    if (!vaddr_to_file_offset(phdrs, rela_vaddr, rela_size, &rela_off)) return;
+    if (!vaddr_to_file_offset(obj.phdrs, rela_vaddr, rela_size, &rela_off)) return;
 
     size_t count = rela_size / sizeof(Elf64_Rela);
     for (size_t i = 0; i < count; ++i) {
@@ -344,25 +676,25 @@ static void apply_direct_so_rela(FILE* f,
 
         uint32_t sym_idx = ELF64_R_SYM(rela.r_info);
         uint32_t type = ELF64_R_TYPE(rela.r_info);
-        uint64_t slot_gpa = load_base + rela.r_offset;
+        uint64_t slot_gpa = obj.load_base + rela.r_offset;
         uint64_t value = 0;
         bool should_write = true;
 
         switch (type) {
         case R_AARCH64_RELATIVE:
-            value = load_base + static_cast<uint64_t>(rela.r_addend);
+            value = obj.load_base + static_cast<uint64_t>(rela.r_addend);
             break;
         case R_AARCH64_GLOB_DAT:
         case R_AARCH64_JUMP_SLOT:
         case R_AARCH64_ABS64: {
-            if (!sym_idx || !dyn.symtab) {
+            if (!sym_idx || !obj.dyn.symtab) {
                 should_write = false;
                 break;
             }
 
             uint64_t sym_off = 0;
-            if (!vaddr_to_file_offset(phdrs,
-                                      dyn.symtab + sym_idx * sizeof(Elf64_Sym),
+            if (!vaddr_to_file_offset(obj.phdrs,
+                                      obj.dyn.symtab + sym_idx * sizeof(Elf64_Sym),
                                       sizeof(Elf64_Sym),
                                       &sym_off)) {
                 should_write = false;
@@ -376,10 +708,12 @@ static void apply_direct_so_rela(FILE* f,
             }
 
             if (sym.st_shndx != SHN_UNDEF) {
-                value = load_base + sym.st_value + static_cast<uint64_t>(rela.r_addend);
+                value = obj.load_base + sym.st_value + static_cast<uint64_t>(rela.r_addend);
             } else {
-                std::string name = read_dyn_string(f, phdrs, dyn, sym.st_name);
-                uint64_t resolved = resolve_android_symbol(art, name);
+                std::string name = read_dyn_string(f, obj.phdrs, obj.dyn, sym.st_name);
+                uint64_t resolved = lookup_direct_symbol(objects, name);
+                if (!resolved)
+                    resolved = resolve_android_symbol(art, name);
                 if (!resolved) {
                     should_write = false;
                     break;
@@ -449,65 +783,24 @@ static size_t apply_direct_so_relr(FILE* f,
 }
 
 static bool apply_direct_so_relocations(guest_t* g,
-                                        const std::string& so_path,
-                                        uint64_t load_base,
+                                        const DirectSoObject& obj,
+                                        const std::vector<DirectSoObject>& objects,
                                         const android::AndroidRuntime& art)
 {
-    FILE* f = std::fopen(so_path.c_str(), "rb");
+    FILE* f = std::fopen(obj.path.c_str(), "rb");
     if (!f) return false;
 
-    Elf64_Ehdr ehdr{};
-    if (!read_at(f, 0, &ehdr, sizeof(ehdr)) ||
-        std::memcmp(ehdr.e_ident, ELFMAG, SELFMAG) != 0 ||
-        ehdr.e_ident[EI_CLASS] != ELFCLASS64 ||
-        ehdr.e_machine != EM_AARCH64) {
-        std::fclose(f);
-        return false;
-    }
-
-    std::vector<Elf64_Phdr> phdrs(ehdr.e_phnum);
-    if (!read_at(f, ehdr.e_phoff, phdrs.data(), phdrs.size() * sizeof(Elf64_Phdr))) {
-        std::fclose(f);
-        return false;
-    }
-
-    DirectSoDyn dyn{};
-    for (const auto& ph : phdrs) {
-        if (ph.p_type != PT_DYNAMIC) continue;
-        size_t count = ph.p_filesz / sizeof(Elf64_Dyn);
-        for (size_t i = 0; i < count; ++i) {
-            Elf64_Dyn entry{};
-            if (!read_at(f, ph.p_offset + i * sizeof(entry), &entry, sizeof(entry))) break;
-            uint64_t val = dyn_val(entry);
-            switch (entry.d_tag) {
-            case DT_STRTAB:   dyn.strtab = val; break;
-            case DT_STRSZ:    dyn.strsz = val; break;
-            case DT_SYMTAB:   dyn.symtab = val; break;
-            case DT_RELA:     dyn.rela = val; break;
-            case DT_RELASZ:   dyn.rela_size = val; break;
-            case DT_JMPREL:   dyn.jmprel = val; break;
-            case DT_PLTRELSZ: dyn.jmprel_size = val; break;
-            case MU_DT_ANDROID_RELR:    dyn.relr = val; break;
-            case MU_DT_ANDROID_RELRSZ:  dyn.relr_size = val; break;
-            case MU_DT_ANDROID_RELRENT: break;
-            case DT_NULL:     i = count; break;
-            default: break;
-            }
-        }
-        break;
-    }
-
-    size_t relr_applied = apply_direct_so_relr(f, phdrs, g, load_base,
-                                               dyn.relr, dyn.relr_size);
+    size_t relr_applied = apply_direct_so_relr(f, obj.phdrs, g, obj.load_base,
+                                               obj.dyn.relr, obj.dyn.relr_size);
     size_t rela_applied = 0;
-    apply_direct_so_rela(f, phdrs, dyn, g, load_base, dyn.rela, dyn.rela_size,
+    apply_direct_so_rela(f, obj, objects, g, obj.dyn.rela, obj.dyn.rela_size,
                          art, &rela_applied);
-    apply_direct_so_rela(f, phdrs, dyn, g, load_base, dyn.jmprel, dyn.jmprel_size,
-                         art, &rela_applied);
+    apply_direct_so_rela(f, obj, objects, g, obj.dyn.jmprel,
+                         obj.dyn.jmprel_size, art, &rela_applied);
 
     std::fprintf(stderr,
-        "[Muplar] direct .so relocations applied: RELR=%zu RELA/PLT=%zu\n",
-        relr_applied, rela_applied);
+        "[Muplar] direct .so relocations applied for %s: RELR=%zu RELA/PLT=%zu\n",
+        obj.soname.c_str(), relr_applied, rela_applied);
     std::fclose(f);
     return true;
 }
@@ -552,7 +845,7 @@ int GuestRunner::run(const GuestRunnerConfig& cfg)
     guest_bootstrap_t boot;
 
     std::printf("[Muplar] guest_bootstrap_prepare...\n");
-    int rc = guest_bootstrap_prepare(&g, elf_path, sysroot,
+    int rc = guest_bootstrap_prepare(&g, elf_path, false, elf_path, sysroot,
                                       guest_argc, guest_argv, environ,
                                       shim_bin, shim_bin_len,
                                       cfg.verbose, &guest_initialized, &boot);
@@ -588,6 +881,7 @@ int GuestRunner::run(const GuestRunnerConfig& cfg)
     jni_onload.install();
 
     android::AndroidRuntime art(&g, android_stubs_gpa, cfg.host_window);
+    art.set_asset_root(cfg.apk_assets_dir);
     art.install();
 
     // ── Register HVC #6 hook ──────────────────────────────────────────────────
@@ -662,16 +956,201 @@ int GuestRunner::run(const GuestRunnerConfig& cfg)
     // ── Run via elfuse's own vcpu_run_loop ────────────────────────────────────
     int exit_code = 0;
     bool host_app_loop_ran = false;
+    bool direct_so_ready = true;
 
     if (is_shared_lib) {
         // For .so files: run Android/JNI entrypoints directly.
         std::printf("[Muplar] detected shared library — running Android .so path\n");
-        apply_direct_so_relocations(&g, cfg.elf_path, g.elf_load_min, art);
+
+        DirectSoObject main_so;
+        if (parse_direct_so_metadata(cfg.elf_path, &main_so)) {
+            main_so.load_base = g.elf_load_min - main_so.load_min;
+            main_so.mapped_by_bootstrap = true;
+
+            std::vector<DirectSoObject> direct_objects;
+            direct_objects.push_back(main_so);
+
+            std::vector<std::string> lib_search_dirs = cfg.native_lib_search_dirs;
+            std::string main_dir =
+                std::filesystem::path(cfg.elf_path).parent_path().string();
+            if (!main_dir.empty() &&
+                std::find(lib_search_dirs.begin(), lib_search_dirs.end(), main_dir) ==
+                    lib_search_dirs.end()) {
+                lib_search_dirs.push_back(main_dir);
+            }
+
+            if (!load_direct_so_dependencies(&g, direct_objects, lib_search_dirs, art)) {
+                exit_code = 1;
+                direct_so_ready = false;
+            } else {
+                for (const auto& obj : direct_objects) {
+                    if (!apply_direct_so_relocations(&g, obj, direct_objects, art)) {
+                        exit_code = 1;
+                        direct_so_ready = false;
+                    }
+                }
+            }
+        } else {
+            std::fprintf(stderr,
+                "[Muplar] WARNING: unable to parse direct .so metadata for %s\n",
+                cfg.elf_path.c_str());
+            exit_code = 1;
+            direct_so_ready = false;
+        }
 
         auto run_current_vcpu = [&](hv_vcpu_t v,
                                     hv_vcpu_exit_t* ve,
                                     guest_t* gst) {
             return vcpu_run_loop(v, ve, gst, cfg.verbose, cfg.timeout_sec);
+        };
+
+        struct VcpuContext {
+            std::array<uint64_t, 31> x{};
+            uint64_t pc = 0;
+            uint64_t fpcr = 0;
+            uint64_t fpsr = 0;
+            uint64_t cpsr = 0;
+            uint64_t sp_el0 = 0;
+            uint64_t sp_el1 = 0;
+            uint64_t spsr_el1 = 0;
+        };
+
+        auto save_context = [&](VcpuContext& ctx) {
+            for (size_t i = 0; i < 29; ++i) {
+                hv_vcpu_get_reg(vcpu,
+                    static_cast<hv_reg_t>(HV_REG_X0 + i), &ctx.x[i]);
+            }
+            hv_vcpu_get_reg(vcpu, HV_REG_X29, &ctx.x[29]);
+            hv_vcpu_get_reg(vcpu, HV_REG_LR, &ctx.x[30]);
+            hv_vcpu_get_reg(vcpu, HV_REG_PC, &ctx.pc);
+            hv_vcpu_get_reg(vcpu, HV_REG_FPCR, &ctx.fpcr);
+            hv_vcpu_get_reg(vcpu, HV_REG_FPSR, &ctx.fpsr);
+            hv_vcpu_get_reg(vcpu, HV_REG_CPSR, &ctx.cpsr);
+            hv_vcpu_get_sys_reg(vcpu, HV_SYS_REG_SP_EL0, &ctx.sp_el0);
+            hv_vcpu_get_sys_reg(vcpu, HV_SYS_REG_SP_EL1, &ctx.sp_el1);
+            hv_vcpu_get_sys_reg(vcpu, HV_SYS_REG_SPSR_EL1, &ctx.spsr_el1);
+        };
+
+        auto restore_context = [&](const VcpuContext& ctx) {
+            for (size_t i = 0; i < 29; ++i) {
+                hv_vcpu_set_reg(vcpu,
+                    static_cast<hv_reg_t>(HV_REG_X0 + i), ctx.x[i]);
+            }
+            hv_vcpu_set_reg(vcpu, HV_REG_X29, ctx.x[29]);
+            hv_vcpu_set_reg(vcpu, HV_REG_LR, ctx.x[30]);
+            hv_vcpu_set_reg(vcpu, HV_REG_PC, ctx.pc);
+            hv_vcpu_set_reg(vcpu, HV_REG_FPCR, ctx.fpcr);
+            hv_vcpu_set_reg(vcpu, HV_REG_FPSR, ctx.fpsr);
+            hv_vcpu_set_reg(vcpu, HV_REG_CPSR, ctx.cpsr);
+            hv_vcpu_set_sys_reg(vcpu, HV_SYS_REG_SP_EL0, ctx.sp_el0);
+            hv_vcpu_set_sys_reg(vcpu, HV_SYS_REG_SP_EL1, ctx.sp_el1);
+            hv_vcpu_set_sys_reg(vcpu, HV_SYS_REG_SPSR_EL1, ctx.spsr_el1);
+        };
+
+        struct ManagedGuestThread {
+            uint64_t handle = 0;
+            uint64_t start_routine = 0;
+            uint64_t arg = 0;
+            uint64_t stack_top = 0;
+            bool started = false;
+            bool yielded = false;
+            bool finished = false;
+            VcpuContext ctx;
+        };
+
+        std::vector<ManagedGuestThread> guest_threads;
+
+        auto run_managed_thread = [&](ManagedGuestThread& thread) -> bool {
+            if (thread.finished || !thread.start_routine)
+                return false;
+
+            VcpuContext caller;
+            save_context(caller);
+
+            if (!thread.started) {
+                thread.ctx = caller;
+                for (size_t i = 0; i < 8; ++i)
+                    thread.ctx.x[i] = 0;
+                thread.ctx.x[0] = thread.arg;
+                thread.ctx.x[30] = jni_onload.return_sentinel_gpa();
+                thread.ctx.pc = thread.start_routine;
+                if (thread.stack_top) {
+                    thread.ctx.sp_el0 = thread.stack_top;
+                    thread.ctx.sp_el1 = thread.stack_top;
+                }
+                thread.started = true;
+                std::printf(
+                    "[Muplar] starting managed guest pthread handle=0x%llx start=0x%llx arg=0x%llx sp=0x%llx\n",
+                    (unsigned long long)thread.handle,
+                    (unsigned long long)thread.start_routine,
+                    (unsigned long long)thread.arg,
+                    (unsigned long long)thread.ctx.sp_el1);
+            } else {
+                std::printf(
+                    "[Muplar] resuming managed guest pthread handle=0x%llx pc=0x%llx\n",
+                    (unsigned long long)thread.handle,
+                    (unsigned long long)thread.ctx.pc);
+            }
+
+            thread.yielded = false;
+            restore_context(thread.ctx);
+            art.set_thread_yield_enabled(true);
+            run_current_vcpu(vcpu, vexit, &g);
+            bool yielded = art.consume_thread_yield();
+            art.set_thread_yield_enabled(false);
+
+            if (yielded) {
+                save_context(thread.ctx);
+                thread.ctx.pc += 4; // Resume after the trapping HVC insn.
+                thread.yielded = true;
+                std::printf(
+                    "[Muplar] guest pthread yielded handle=0x%llx pc=0x%llx\n",
+                    (unsigned long long)thread.handle,
+                    (unsigned long long)thread.ctx.pc);
+            } else {
+                thread.finished = true;
+                uint64_t retval = jni_onload.last_return_value();
+                art.complete_pthread_call(thread.handle, retval);
+                std::printf(
+                    "[Muplar] guest pthread returned handle=0x%llx ret=0x%llx\n",
+                    (unsigned long long)thread.handle,
+                    (unsigned long long)retval);
+            }
+
+            restore_context(caller);
+            return true;
+        };
+
+        auto run_pending_pthread_calls = [&]() -> bool {
+            bool did_work = false;
+            auto calls = art.take_pending_pthread_calls();
+            for (const auto& call : calls) {
+                did_work = true;
+                if (!call.start_routine) {
+                    art.complete_pthread_call(call.handle, 0);
+                    continue;
+                }
+
+                ManagedGuestThread thread;
+                thread.handle = call.handle;
+                thread.start_routine = call.start_routine;
+                thread.arg = call.arg;
+                thread.stack_top = call.stack_top;
+                run_managed_thread(thread);
+                if (!thread.finished)
+                    guest_threads.push_back(thread);
+            }
+            return did_work;
+        };
+
+        auto resume_yielded_threads_once = [&]() -> bool {
+            bool did_work = false;
+            for (auto& thread : guest_threads) {
+                if (thread.finished || !thread.yielded)
+                    continue;
+                did_work |= run_managed_thread(thread);
+            }
+            return did_work;
         };
 
         auto run_frame_callbacks_once = [&]() -> bool {
@@ -693,10 +1172,13 @@ int GuestRunner::run(const GuestRunnerConfig& cfg)
             return did_work;
         };
 
-        auto drain_guest_events = [&](bool include_frame_callbacks = true) -> bool {
+        auto drain_guest_events = [&](bool include_frame_callbacks = true,
+                                      bool resume_guest_threads = true) -> bool {
             constexpr size_t kMaxDrainRounds = 64;
             size_t rounds = 0;
             bool did_any_work = false;
+            bool resumed_threads = false;
+            bool ran_new_threads = false;
             for (;;) {
                 if (++rounds > kMaxDrainRounds) {
                     std::fprintf(stderr,
@@ -707,24 +1189,16 @@ int GuestRunner::run(const GuestRunnerConfig& cfg)
 
                 bool did_work = false;
 
-                auto calls = art.take_pending_pthread_calls();
-                for (const auto& call : calls) {
+                bool ran_pending = run_pending_pthread_calls();
+                if (ran_pending) {
                     did_work = true;
-                    if (!call.start_routine) {
-                        art.complete_pthread_call(call.handle, 0);
-                        continue;
-                    }
+                    ran_new_threads = true;
+                }
 
-                    std::printf(
-                        "[Muplar] running guest pthread start=0x%llx arg=0x%llx handle=0x%llx\n",
-                        (unsigned long long)call.start_routine,
-                        (unsigned long long)call.arg,
-                        (unsigned long long)call.handle);
-                    int64_t ret = jni_onload.call_guest_function(
-                        call.start_routine, { call.arg }, vcpu, vexit,
-                        run_current_vcpu);
-                    art.complete_pthread_call(call.handle,
-                                              static_cast<uint64_t>(ret));
+                if (resume_guest_threads && !ran_new_threads &&
+                    !resumed_threads) {
+                    did_work |= resume_yielded_threads_once();
+                    resumed_threads = true;
                 }
 
                 auto looper_callbacks = art.take_pending_looper_callbacks();
@@ -758,11 +1232,13 @@ int GuestRunner::run(const GuestRunnerConfig& cfg)
         auto call_guest_and_drain =
             [&](uint64_t fn,
                 const std::vector<uint64_t>& args,
-                bool include_frame_callbacks = true) -> int64_t {
+                bool include_frame_callbacks = true,
+                bool resume_guest_threads = true) -> int64_t {
                 if (!fn) return 0;
                 int64_t ret = jni_onload.call_guest_function(
                     fn, args, vcpu, vexit, run_current_vcpu);
-                drain_guest_events(include_frame_callbacks);
+                drain_guest_events(include_frame_callbacks,
+                                   resume_guest_threads);
                 return ret;
             };
 
@@ -788,10 +1264,10 @@ int GuestRunner::run(const GuestRunnerConfig& cfg)
                 if (!art.host_window_active())
                     break;
 
-                did_work |= drain_guest_events(false);
+                did_work |= drain_guest_events(false, did_work);
                 did_work |= run_frame_callbacks_once();
                 if (did_work)
-                    drain_guest_events(false);
+                    drain_guest_events(false, false);
 
                 ++ticks;
                 if (bounded && clock::now() >= deadline)
@@ -806,8 +1282,10 @@ int GuestRunner::run(const GuestRunnerConfig& cfg)
             return true;
         };
 
-        uint64_t jni_onload_gpa = jni_onload.find_jni_onload(g.elf_load_min, cfg.elf_path);
-        if (jni_onload_gpa) {
+        uint64_t jni_onload_gpa = direct_so_ready
+            ? jni_onload.find_jni_onload(g.elf_load_min, cfg.elf_path)
+            : 0;
+        if (direct_so_ready && jni_onload_gpa) {
             int jni_ret = jni_onload.call_jni_onload(
                 jni_onload_gpa, vcpu, vexit, run_current_vcpu);
             drain_guest_events();
@@ -832,9 +1310,11 @@ int GuestRunner::run(const GuestRunnerConfig& cfg)
                     exit_code = 1;
                 } else {
                     uint64_t activity = prepare_native_activity(
-                        &g, jni_onload, g.shim_data_base + 0x004000);
+                        &g, jni_onload, g.shim_data_base + 0x004000,
+                        art.asset_manager_handle());
 
-                    call_guest_and_drain(on_create, { activity, 0, 0 });
+                    call_guest_and_drain(on_create, { activity, 0, 0 },
+                                         true, false);
 
                     std::printf("[Muplar] ANativeActivity_onCreate returned ✓\n");
 
@@ -854,18 +1334,26 @@ int GuestRunner::run(const GuestRunnerConfig& cfg)
                     uint64_t on_input_destroyed = read_guest_u64_or_zero(&g, callbacks + 0x60);
 
                     bool drain_frames_inline = !cfg.host_window;
+                    bool resume_bootstrap_threads_inline = !cfg.host_window;
 
-                    call_guest_and_drain(on_start, { activity }, drain_frames_inline);
-                    call_guest_and_drain(on_resume, { activity }, drain_frames_inline);
+                    call_guest_and_drain(on_start, { activity },
+                                         drain_frames_inline,
+                                         resume_bootstrap_threads_inline);
+                    call_guest_and_drain(on_resume, { activity },
+                                         drain_frames_inline,
+                                         resume_bootstrap_threads_inline);
 
                     uint64_t window = art.native_window_handle();
                     uint64_t input_queue = art.input_queue_handle();
-                    call_guest_and_drain(on_focus, { activity, 1 }, drain_frames_inline);
+                    call_guest_and_drain(on_focus, { activity, 1 },
+                                         drain_frames_inline,
+                                         resume_bootstrap_threads_inline);
                     if (on_input_created) {
                         std::printf("[Muplar] dispatching onInputQueueCreated(queue=0x%llx)\n",
                                     (unsigned long long)input_queue);
                         call_guest_and_drain(on_input_created,
                                              { activity, input_queue },
+                                             drain_frames_inline,
                                              drain_frames_inline);
                     }
                     if (on_window_created) {
@@ -873,13 +1361,16 @@ int GuestRunner::run(const GuestRunnerConfig& cfg)
                                     (unsigned long long)window);
                         call_guest_and_drain(on_window_created,
                                              { activity, window },
+                                             drain_frames_inline,
                                              drain_frames_inline);
                     }
                     call_guest_and_drain(on_window_resized,
                                          { activity, window },
+                                         drain_frames_inline,
                                          drain_frames_inline);
                     call_guest_and_drain(on_window_redraw,
                                          { activity, window },
+                                         drain_frames_inline,
                                          drain_frames_inline);
 
                     if (cfg.host_window)
@@ -890,15 +1381,19 @@ int GuestRunner::run(const GuestRunnerConfig& cfg)
                                     (unsigned long long)input_queue);
                         call_guest_and_drain(on_input_destroyed,
                                              { activity, input_queue },
-                                             drain_frames_inline);
+                                             drain_frames_inline,
+                                             true);
                     }
                     call_guest_and_drain(on_window_destroyed,
                                          { activity, window },
-                                         drain_frames_inline);
+                                         drain_frames_inline, true);
 
-                    call_guest_and_drain(on_pause, { activity }, drain_frames_inline);
-                    call_guest_and_drain(on_stop, { activity }, drain_frames_inline);
-                    call_guest_and_drain(on_destroy, { activity }, drain_frames_inline);
+                    call_guest_and_drain(on_pause, { activity },
+                                         drain_frames_inline, true);
+                    call_guest_and_drain(on_stop, { activity },
+                                         drain_frames_inline, true);
+                    call_guest_and_drain(on_destroy, { activity },
+                                         drain_frames_inline, true);
                 }
             } else if (cfg.jni_call.enabled) {
                 if (cfg.jni_call.int_args.size() > 6) {

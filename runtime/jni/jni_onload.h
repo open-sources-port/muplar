@@ -79,6 +79,12 @@ public:
     // Returns the GPA the guest sees as JNIEnv** (second arg to JNI_OnLoad).
     uint64_t jni_env_ptr_gpa() const { return jni_env_ptr_gpa_; }
 
+    // Return stub used as LR when the host calls a guest function directly.
+    uint64_t return_sentinel_gpa() const { return sentinel_stub_gpa_; }
+
+    // Last value captured by the return sentinel.
+    uint64_t last_return_value() const { return onload_retval_; }
+
     // Locate JNI_OnLoad in a loaded .so.
     // so_load_base : the GPA at which the .so was loaded by the dynamic linker.
     // so_path      : path on the host to the .so file (for symbol lookup).

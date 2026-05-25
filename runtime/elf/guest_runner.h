@@ -62,6 +62,15 @@ namespace muplar::runtime::elf {
         // Optional host-visible window for NativeActivity / GLES smoke runs.
         bool host_window = false;
 
+        // Optional host directories containing APK-local native libraries.
+        // Used by the direct Android .so path to satisfy DT_NEEDED entries
+        // before invoking JNI_OnLoad or ANativeActivity_onCreate.
+        std::vector<std::string> native_lib_search_dirs;
+
+        // Optional host directory containing extracted APK assets.
+        // Exposed to the guest through libandroid AAssetManager/AAsset stubs.
+        std::string apk_assets_dir;
+
         // Negative means wait until the window closes. Non-negative means
         // pump the host window for that many milliseconds before exiting.
         int host_window_linger_ms = -1;
