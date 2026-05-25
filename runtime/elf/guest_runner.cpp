@@ -15,7 +15,9 @@
 #include <cstring>
 #include <cstdlib>
 #include <cstdio>
+#include <chrono>
 #include <limits>
+#include <thread>
 #include <vector>
 
 #ifdef PF_R
@@ -524,7 +526,7 @@ static uint64_t hvc6_handler(uint64_t call_nr, const uint64_t args[8], void* use
         ctx->jni_onload->try_intercept(static_cast<uint32_t>(call_nr), args, &out);
         return out;
     }
-    if (call_nr >= 0x2000 && call_nr <= 0x23FF) {
+    if (call_nr >= 0x2000 && call_nr <= 0x2FFF) {
         ctx->art->try_dispatch(static_cast<uint32_t>(call_nr), args, &out);
         return out;
     }
@@ -585,7 +587,7 @@ int GuestRunner::run(const GuestRunnerConfig& cfg)
     jni::JniOnLoad jni_onload(&g, &jni_bridge, &jni_env, java_vm_gpa);
     jni_onload.install();
 
-    android::AndroidRuntime art(&g, android_stubs_gpa);
+    android::AndroidRuntime art(&g, android_stubs_gpa, cfg.host_window);
     art.install();
 
     // ── Register HVC #6 hook ──────────────────────────────────────────────────
@@ -659,6 +661,7 @@ int GuestRunner::run(const GuestRunnerConfig& cfg)
 
     // ── Run via elfuse's own vcpu_run_loop ────────────────────────────────────
     int exit_code = 0;
+    bool host_app_loop_ran = false;
 
     if (is_shared_lib) {
         // For .so files: run Android/JNI entrypoints directly.
@@ -671,10 +674,143 @@ int GuestRunner::run(const GuestRunnerConfig& cfg)
             return vcpu_run_loop(v, ve, gst, cfg.verbose, cfg.timeout_sec);
         };
 
+        auto run_frame_callbacks_once = [&]() -> bool {
+            bool did_work = false;
+            auto frame_callbacks = art.take_pending_frame_callbacks();
+            for (const auto& callback : frame_callbacks) {
+                if (!callback.callback) continue;
+                did_work = true;
+                std::printf(
+                    "[Muplar] running Choreographer frame callback frame=%llu data=0x%llx callback=0x%llx\n",
+                    (unsigned long long)callback.frame_time_nanos,
+                    (unsigned long long)callback.data,
+                    (unsigned long long)callback.callback);
+                jni_onload.call_guest_function(
+                    callback.callback,
+                    { callback.frame_time_nanos, callback.data },
+                    vcpu, vexit, run_current_vcpu);
+            }
+            return did_work;
+        };
+
+        auto drain_guest_events = [&](bool include_frame_callbacks = true) -> bool {
+            constexpr size_t kMaxDrainRounds = 64;
+            size_t rounds = 0;
+            bool did_any_work = false;
+            for (;;) {
+                if (++rounds > kMaxDrainRounds) {
+                    std::fprintf(stderr,
+                        "[Muplar] guest event drain budget exhausted (%zu rounds)\n",
+                        kMaxDrainRounds);
+                    break;
+                }
+
+                bool did_work = false;
+
+                auto calls = art.take_pending_pthread_calls();
+                for (const auto& call : calls) {
+                    did_work = true;
+                    if (!call.start_routine) {
+                        art.complete_pthread_call(call.handle, 0);
+                        continue;
+                    }
+
+                    std::printf(
+                        "[Muplar] running guest pthread start=0x%llx arg=0x%llx handle=0x%llx\n",
+                        (unsigned long long)call.start_routine,
+                        (unsigned long long)call.arg,
+                        (unsigned long long)call.handle);
+                    int64_t ret = jni_onload.call_guest_function(
+                        call.start_routine, { call.arg }, vcpu, vexit,
+                        run_current_vcpu);
+                    art.complete_pthread_call(call.handle,
+                                              static_cast<uint64_t>(ret));
+                }
+
+                auto looper_callbacks = art.take_pending_looper_callbacks();
+                for (const auto& callback : looper_callbacks) {
+                    if (!callback.callback) continue;
+                    did_work = true;
+                    std::printf(
+                        "[Muplar] running ALooper callback fd=%d events=0x%x data=0x%llx callback=0x%llx\n",
+                        callback.fd, callback.events,
+                        (unsigned long long)callback.data,
+                        (unsigned long long)callback.callback);
+                    jni_onload.call_guest_function(
+                        callback.callback,
+                        {
+                            static_cast<uint64_t>(static_cast<int64_t>(callback.fd)),
+                            static_cast<uint64_t>(static_cast<int64_t>(callback.events)),
+                            callback.data
+                        },
+                        vcpu, vexit, run_current_vcpu);
+                }
+
+                if (include_frame_callbacks)
+                    did_work |= run_frame_callbacks_once();
+
+                if (!did_work) break;
+                did_any_work = true;
+            }
+            return did_any_work;
+        };
+
+        auto call_guest_and_drain =
+            [&](uint64_t fn,
+                const std::vector<uint64_t>& args,
+                bool include_frame_callbacks = true) -> int64_t {
+                if (!fn) return 0;
+                int64_t ret = jni_onload.call_guest_function(
+                    fn, args, vcpu, vexit, run_current_vcpu);
+                drain_guest_events(include_frame_callbacks);
+                return ret;
+            };
+
+        auto run_host_app_loop = [&]() {
+            if (!cfg.host_window)
+                return false;
+
+            using clock = std::chrono::steady_clock;
+            using namespace std::chrono_literals;
+
+            const bool bounded = cfg.host_window_linger_ms >= 0;
+            const auto start = clock::now();
+            const auto deadline = start +
+                std::chrono::milliseconds(
+                    bounded ? cfg.host_window_linger_ms : 0);
+
+            std::printf("[Muplar] entering host app loop%s\n",
+                        bounded ? " (bounded)" : " (close window to exit)");
+
+            size_t ticks = 0;
+            for (;;) {
+                bool did_work = art.pump_host_app_events();
+                if (!art.host_window_active())
+                    break;
+
+                did_work |= drain_guest_events(false);
+                did_work |= run_frame_callbacks_once();
+                if (did_work)
+                    drain_guest_events(false);
+
+                ++ticks;
+                if (bounded && clock::now() >= deadline)
+                    break;
+                if (!art.host_window_active())
+                    break;
+
+                std::this_thread::sleep_for(16ms);
+            }
+
+            std::printf("[Muplar] host app loop exited after %zu ticks\n", ticks);
+            return true;
+        };
+
         uint64_t jni_onload_gpa = jni_onload.find_jni_onload(g.elf_load_min, cfg.elf_path);
         if (jni_onload_gpa) {
             int jni_ret = jni_onload.call_jni_onload(
                 jni_onload_gpa, vcpu, vexit, run_current_vcpu);
+            drain_guest_events();
             std::printf("[Muplar] JNI_OnLoad returned 0x%x (%s)\n",
                         jni_ret,
                         jni_ret == jni::JNI_VERSION_1_6 ? "JNI_VERSION_1_6 ✓" :
@@ -698,9 +834,7 @@ int GuestRunner::run(const GuestRunnerConfig& cfg)
                     uint64_t activity = prepare_native_activity(
                         &g, jni_onload, g.shim_data_base + 0x004000);
 
-                    jni_onload.call_guest_function(
-                        on_create, { activity, 0, 0 }, vcpu, vexit,
-                        run_current_vcpu);
+                    call_guest_and_drain(on_create, { activity, 0, 0 });
 
                     std::printf("[Muplar] ANativeActivity_onCreate returned ✓\n");
 
@@ -711,26 +845,60 @@ int GuestRunner::run(const GuestRunnerConfig& cfg)
                     uint64_t on_pause = read_guest_u64_or_zero(&g, callbacks + 0x18);
                     uint64_t on_stop = read_guest_u64_or_zero(&g, callbacks + 0x20);
                     uint64_t on_destroy = read_guest_u64_or_zero(&g, callbacks + 0x28);
+                    uint64_t on_focus = read_guest_u64_or_zero(&g, callbacks + 0x30);
+                    uint64_t on_window_created = read_guest_u64_or_zero(&g, callbacks + 0x38);
+                    uint64_t on_window_resized = read_guest_u64_or_zero(&g, callbacks + 0x40);
+                    uint64_t on_window_redraw = read_guest_u64_or_zero(&g, callbacks + 0x48);
+                    uint64_t on_window_destroyed = read_guest_u64_or_zero(&g, callbacks + 0x50);
+                    uint64_t on_input_created = read_guest_u64_or_zero(&g, callbacks + 0x58);
+                    uint64_t on_input_destroyed = read_guest_u64_or_zero(&g, callbacks + 0x60);
 
-                    if (on_start)
-                        jni_onload.call_guest_function(
-                            on_start, { activity }, vcpu, vexit, run_current_vcpu);
+                    bool drain_frames_inline = !cfg.host_window;
 
-                    if (on_resume)
-                        jni_onload.call_guest_function(
-                            on_resume, { activity }, vcpu, vexit, run_current_vcpu);
+                    call_guest_and_drain(on_start, { activity }, drain_frames_inline);
+                    call_guest_and_drain(on_resume, { activity }, drain_frames_inline);
 
-                    if (on_pause)
-                        jni_onload.call_guest_function(
-                            on_pause, { activity }, vcpu, vexit, run_current_vcpu);
+                    uint64_t window = art.native_window_handle();
+                    uint64_t input_queue = art.input_queue_handle();
+                    call_guest_and_drain(on_focus, { activity, 1 }, drain_frames_inline);
+                    if (on_input_created) {
+                        std::printf("[Muplar] dispatching onInputQueueCreated(queue=0x%llx)\n",
+                                    (unsigned long long)input_queue);
+                        call_guest_and_drain(on_input_created,
+                                             { activity, input_queue },
+                                             drain_frames_inline);
+                    }
+                    if (on_window_created) {
+                        std::printf("[Muplar] dispatching onNativeWindowCreated(window=0x%llx)\n",
+                                    (unsigned long long)window);
+                        call_guest_and_drain(on_window_created,
+                                             { activity, window },
+                                             drain_frames_inline);
+                    }
+                    call_guest_and_drain(on_window_resized,
+                                         { activity, window },
+                                         drain_frames_inline);
+                    call_guest_and_drain(on_window_redraw,
+                                         { activity, window },
+                                         drain_frames_inline);
 
-                    if (on_stop)
-                        jni_onload.call_guest_function(
-                            on_stop, { activity }, vcpu, vexit, run_current_vcpu);
+                    if (cfg.host_window)
+                        host_app_loop_ran = run_host_app_loop();
 
-                    if (on_destroy)
-                        jni_onload.call_guest_function(
-                            on_destroy, { activity }, vcpu, vexit, run_current_vcpu);
+                    if (on_input_destroyed) {
+                        std::printf("[Muplar] dispatching onInputQueueDestroyed(queue=0x%llx)\n",
+                                    (unsigned long long)input_queue);
+                        call_guest_and_drain(on_input_destroyed,
+                                             { activity, input_queue },
+                                             drain_frames_inline);
+                    }
+                    call_guest_and_drain(on_window_destroyed,
+                                         { activity, window },
+                                         drain_frames_inline);
+
+                    call_guest_and_drain(on_pause, { activity }, drain_frames_inline);
+                    call_guest_and_drain(on_stop, { activity }, drain_frames_inline);
+                    call_guest_and_drain(on_destroy, { activity }, drain_frames_inline);
                 }
             } else if (cfg.jni_call.enabled) {
                 if (cfg.jni_call.int_args.size() > 6) {
@@ -772,6 +940,9 @@ int GuestRunner::run(const GuestRunnerConfig& cfg)
         std::printf("[Muplar] entering vcpu_run_loop...\n");
         exit_code = vcpu_run_loop(vcpu, vexit, &g, cfg.verbose, cfg.timeout_sec);
     }
+
+    if (cfg.host_window && !host_app_loop_ran)
+        art.run_host_window_after_guest(cfg.host_window_linger_ms);
 
     std::printf("[Muplar] exit code: %d\n", exit_code);
 

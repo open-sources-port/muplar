@@ -40,11 +40,28 @@ $CC -shared -fPIC \
     -isystem "$NDK_SYSROOT/usr/include" \
     -isystem "$NDK_SYSROOT/usr/include/aarch64-linux-android" \
     "$ROOT_DIR/tests/assets/elf/libnativeactivitytest.c" \
+    -lEGL \
+    -lGLESv2 \
+    -landroid \
     -llog \
     -o "$SYSROOT_TMP/libnativeactivitytest.so"
 
 echo "[compile] Built: $SYSROOT_TMP/libnativeactivitytest.so"
 file "$SYSROOT_TMP/libnativeactivitytest.so"
+
+# --- libnativegluethreadtest.so ---
+echo "[compile] Building libnativegluethreadtest.so ..."
+$CC -shared -fPIC \
+    -Wl,-z,max-page-size=4096 \
+    -isystem "$NDK_SYSROOT/usr/include" \
+    -isystem "$NDK_SYSROOT/usr/include/aarch64-linux-android" \
+    "$ROOT_DIR/tests/assets/elf/libnativegluethreadtest.c" \
+    -landroid \
+    -llog \
+    -o "$SYSROOT_TMP/libnativegluethreadtest.so"
+
+echo "[compile] Built: $SYSROOT_TMP/libnativegluethreadtest.so"
+file "$SYSROOT_TMP/libnativegluethreadtest.so"
 
 # --- test_shared ---
 # -nostartfiles: skip crtbegin_dynamic.o which calls __libc_init (needs real libc)

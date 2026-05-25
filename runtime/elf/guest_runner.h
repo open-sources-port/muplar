@@ -58,6 +58,13 @@ namespace muplar::runtime::elf {
 
         // Optional phase-5 NativeActivity bootstrap entry.
         bool native_activity = false;
+
+        // Optional host-visible window for NativeActivity / GLES smoke runs.
+        bool host_window = false;
+
+        // Negative means wait until the window closes. Non-negative means
+        // pump the host window for that many milliseconds before exiting.
+        int host_window_linger_ms = -1;
     };
 
     class GuestRunner {
