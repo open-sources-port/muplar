@@ -49,6 +49,7 @@ public:
         uint64_t handle = 0;
         uint64_t start_routine = 0;
         uint64_t arg = 0;
+        uint64_t stack_top = 0;
     };
 
     struct PendingLooperCallback {
@@ -69,6 +70,8 @@ public:
                    uint64_t stub_arena_gpa,
                    bool host_window_enabled = false);
     ~AndroidRuntime();
+
+    void set_asset_root(std::string asset_root);
 
     // Write HVC shim stubs into guest memory and build the symbol tables.
     void install();
@@ -92,9 +95,12 @@ public:
     EGLSurface egl_surface() const { return egl_surface_; }
     uint64_t native_window_handle() const { return GUEST_NATIVE_WINDOW; }
     uint64_t input_queue_handle() const { return GUEST_INPUT_QUEUE; }
+    uint64_t asset_manager_handle() const { return GUEST_ASSET_MANAGER; }
     bool host_window_active() const;
     void run_host_window_after_guest(int linger_ms);
     bool pump_host_app_events();
+    void set_thread_yield_enabled(bool enabled);
+    bool consume_thread_yield();
     std::vector<PendingPthreadCall> take_pending_pthread_calls();
     void complete_pthread_call(uint64_t handle, uint64_t retval);
     std::vector<PendingLooperCallback> take_pending_looper_callbacks();
@@ -156,6 +162,17 @@ private:
     std::vector<LooperRegistration> looper_regs_;
     std::vector<PendingLooperCallback> pending_looper_callbacks_;
 
+    // ── Guest pipe state used by native_app_glue-style command queues ────────
+    struct HostPipe {
+        int32_t read_fd = -1;
+        int32_t write_fd = -1;
+        bool read_open = true;
+        bool write_open = true;
+        std::vector<uint8_t> buffer;
+    };
+    std::vector<HostPipe> pipes_;
+    int32_t next_pipe_fd_ = 200;
+
     // ── Input queue state ────────────────────────────────────────────────────
     struct InputQueueState {
         bool attached = false;
@@ -184,9 +201,22 @@ private:
     static constexpr uint64_t GUEST_INPUT_EVENT_BASE = 0xA11E1000ULL;
     static constexpr int32_t INPUT_QUEUE_FD = 91;
 
+    // ── AssetManager state ───────────────────────────────────────────────────
+    struct AssetState {
+        std::string name;
+        std::vector<uint8_t> bytes;
+        size_t offset = 0;
+    };
+    std::string asset_root_;
+    std::unordered_map<uint64_t, AssetState> assets_;
+    uint64_t next_asset_handle_ = 0xA5511000ULL;
+    static constexpr uint64_t GUEST_ASSET_MANAGER = 0xA5510001ULL;
+
     // ── Choreographer state ──────────────────────────────────────────────────
     std::vector<PendingFrameCallback> pending_frame_callbacks_;
     uint64_t next_frame_time_nanos_ = 16'666'666ULL;
+    bool thread_yield_enabled_ = false;
+    bool thread_yielded_ = false;
 
     // ── dlopen handle table ───────────────────────────────────────────────────
     struct DlopenEntry { std::string path; uint64_t load_base; };
@@ -240,6 +270,9 @@ private:
     bool collect_host_input_events();
     bool queue_ready_looper_callbacks();
     void rearm_looper_fd(int32_t fd);
+    HostPipe* pipe_for_fd(int32_t fd);
+    const HostPipe* pipe_for_fd(int32_t fd) const;
+    bool looper_fd_ready(int32_t fd) const;
     void present_native_window_buffer();
     void present_egl_surface();
 

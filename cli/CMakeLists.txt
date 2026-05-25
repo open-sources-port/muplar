@@ -16,6 +16,7 @@ target_link_libraries(mup
     muplar_runtime_elf
     muplar_runtime_jni
     muplar_runtime_android
+    muplar_runtime_apk
 )
 
 target_include_directories(mup PUBLIC
@@ -25,6 +26,7 @@ target_include_directories(mup PUBLIC
     ${CMAKE_SOURCE_DIR}/runtime/elf
     ${CMAKE_SOURCE_DIR}/runtime/memory
     ${CMAKE_SOURCE_DIR}/runtime/jni
+    ${CMAKE_SOURCE_DIR}/runtime/apk
     ${CMAKE_SOURCE_DIR}/third_party/angle-include
 )
 

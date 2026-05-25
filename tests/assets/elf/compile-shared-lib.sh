@@ -63,6 +63,59 @@ $CC -shared -fPIC \
 echo "[compile] Built: $SYSROOT_TMP/libnativegluethreadtest.so"
 file "$SYSROOT_TMP/libnativegluethreadtest.so"
 
+# --- libnativeappgluecmdtest.so ---
+echo "[compile] Building libnativeappgluecmdtest.so ..."
+$CC -shared -fPIC \
+    -Wl,-z,max-page-size=4096 \
+    -isystem "$NDK_SYSROOT/usr/include" \
+    -isystem "$NDK_SYSROOT/usr/include/aarch64-linux-android" \
+    "$ROOT_DIR/tests/assets/elf/libnativeappgluecmdtest.c" \
+    -landroid \
+    -llog \
+    -o "$SYSROOT_TMP/libnativeappgluecmdtest.so"
+
+echo "[compile] Built: $SYSROOT_TMP/libnativeappgluecmdtest.so"
+file "$SYSROOT_TMP/libnativeappgluecmdtest.so"
+
+# --- APK-local dependency fixture ---
+echo "[compile] Building libapkdephelper.so ..."
+$CC -shared -fPIC \
+    -Wl,-z,max-page-size=4096 \
+    "$ROOT_DIR/tests/assets/elf/libapkdephelper.c" \
+    -o "$SYSROOT_TMP/libapkdephelper.so"
+
+echo "[compile] Built: $SYSROOT_TMP/libapkdephelper.so"
+file "$SYSROOT_TMP/libapkdephelper.so"
+
+echo "[compile] Building libapkdeptest.so ..."
+$CC -shared -fPIC \
+    -Wl,-z,max-page-size=4096 \
+    -isystem "$NDK_SYSROOT/usr/include" \
+    -isystem "$NDK_SYSROOT/usr/include/aarch64-linux-android" \
+    "$ROOT_DIR/tests/assets/elf/libapkdeptest.c" \
+    -L "$SYSROOT_TMP" \
+    -lapkdephelper \
+    -landroid \
+    -llog \
+    -o "$SYSROOT_TMP/libapkdeptest.so"
+
+echo "[compile] Built: $SYSROOT_TMP/libapkdeptest.so"
+file "$SYSROOT_TMP/libapkdeptest.so"
+
+# --- APK asset fixture ---
+echo "[compile] Building libassettest.so ..."
+$CC -shared -fPIC \
+    -Wl,-z,max-page-size=4096 \
+    -isystem "$NDK_SYSROOT/usr/include" \
+    -isystem "$NDK_SYSROOT/usr/include/aarch64-linux-android" \
+    "$ROOT_DIR/tests/assets/elf/libassettest.c" \
+    -landroid \
+    -llog \
+    -o "$SYSROOT_TMP/libassettest.so"
+
+echo "[compile] Built: $SYSROOT_TMP/libassettest.so"
+file "$SYSROOT_TMP/libassettest.so"
+
 # --- test_shared ---
 # -nostartfiles: skip crtbegin_dynamic.o which calls __libc_init (needs real libc)
 # We supply our own _start in test_shared_start.S that calls main() directly.

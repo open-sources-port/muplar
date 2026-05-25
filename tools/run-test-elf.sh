@@ -49,6 +49,39 @@ fi
 echo "Building shared test binary done."
 
 echo "========================================="
+echo "Building APK launch-envelope test..."
+export scriptToRun=$ROOT_DIR/tests/assets/apk/create-native-activity-apk.sh
+sh ${scriptToRun}
+returnCode=$?
+if [ "$returnCode" -ne 0 ]; then
+    echo "Building APK launch-envelope test error."
+  exit 1
+fi
+echo "Building APK launch-envelope test done."
+
+echo "========================================="
+echo "Building APK dependency test..."
+export scriptToRun=$ROOT_DIR/tests/assets/apk/create-native-dependency-apk.sh
+sh ${scriptToRun}
+returnCode=$?
+if [ "$returnCode" -ne 0 ]; then
+    echo "Building APK dependency test error."
+  exit 1
+fi
+echo "Building APK dependency test done."
+
+echo "========================================="
+echo "Building APK asset test..."
+export scriptToRun=$ROOT_DIR/tests/assets/apk/create-native-assets-apk.sh
+sh ${scriptToRun}
+returnCode=$?
+if [ "$returnCode" -ne 0 ]; then
+    echo "Building APK asset test error."
+  exit 1
+fi
+echo "Building APK asset test done."
+
+echo "========================================="
 echo "Running Muplar ELF loader..."
 echo "codesign -d --entitlements - $ROOT_DIR/build/bin/mup"
 cat > $ROOT_DIR/mup.entitlements << 'EOF'
@@ -93,6 +126,26 @@ echo "Exit code: $?"
 ELF="$SYSROOT_TMP/libnativegluethreadtest.so"
 echo "========================\nCalling $ELF..."
 "$ROOT_DIR/build/bin/mup" --native-activity --sysroot "$ROOT_DIR/build/sysroot" "$ELF"
+echo "Exit code: $?"
+
+ELF="$SYSROOT_TMP/libnativeappgluecmdtest.so"
+echo "========================\nCalling $ELF..."
+"$ROOT_DIR/build/bin/mup" --native-activity --sysroot "$ROOT_DIR/build/sysroot" "$ELF"
+echo "Exit code: $?"
+
+APK="$SYSROOT_TMP/nativeappgluecmdtest.apk"
+echo "========================\nCalling $APK..."
+"$ROOT_DIR/build/bin/mup" --sysroot "$ROOT_DIR/build/sysroot" "$APK"
+echo "Exit code: $?"
+
+APK="$SYSROOT_TMP/nativeapkdeptest.apk"
+echo "========================\nCalling $APK..."
+"$ROOT_DIR/build/bin/mup" --sysroot "$ROOT_DIR/build/sysroot" "$APK"
+echo "Exit code: $?"
+
+APK="$SYSROOT_TMP/nativeassettest.apk"
+echo "========================\nCalling $APK..."
+"$ROOT_DIR/build/bin/mup" --sysroot "$ROOT_DIR/build/sysroot" "$APK"
 echo "Exit code: $?"
 
 echo "Script run finished!"

@@ -13,6 +13,7 @@ typedef struct GlueState {
     ANativeActivity *activity;
     AInputQueue *input_queue;
     pthread_t thread;
+    pthread_t input_thread;
     pthread_mutex_t mutex;
     pthread_cond_t cond;
     int thread_started;
@@ -39,12 +40,20 @@ typedef struct GlueState {
     int input_last_action;
     int input_last_source;
     int input_has_after;
+    int input_thread_started;
+    int input_thread_looper_ready;
+    int input_thread_polls;
+    int input_thread_timeouts;
+    int input_thread_events;
+    int input_thread_last_ident;
+    int input_thread_last_data_ok;
     int choreographer_ready;
     int frame_count;
     int frame_data_ok;
     int64_t first_frame_time;
     int64_t last_frame_time;
     uintptr_t thread_ret;
+    uintptr_t input_thread_ret;
 } GlueState;
 
 static int looper_callback(int fd, int events, void *data)
@@ -146,27 +155,22 @@ static void on_resume(ANativeActivity *activity)
                         state->choreographer_ready);
 }
 
-static void poll_input_once(GlueState *state, AInputQueue *queue)
+static void poll_input_once(GlueState *state, int timeout_ms)
 {
     int out_fd = -1;
     int out_events = 0;
     void *out_data = 0;
     AInputEvent *event = 0;
 
-    int ident = ALooper_pollOnce(0, &out_fd, &out_events, &out_data);
+    int ident = ALooper_pollOnce(timeout_ms, &out_fd, &out_events, &out_data);
     state->input_poll_count++;
     state->input_last_ident = ident;
     state->input_last_fd = out_fd;
     state->input_last_events = out_events;
     state->input_last_data_ok = out_data == state;
 
-    int has_before = AInputQueue_hasEvents(queue);
-    __android_log_print(ANDROID_LOG_INFO, TAG,
-                        "input poll ident=%d fd=%d events=0x%x data_ok=%d has=%d",
-                        ident, out_fd, out_events,
-                        state->input_last_data_ok, has_before);
-
-    if (ident != 234 || !state->input_last_data_ok)
+    AInputQueue *queue = state->input_queue;
+    if (ident != 234 || !state->input_last_data_ok || !queue)
         return;
 
     if (AInputQueue_getEvent(queue, &event) < 0 || !event)
@@ -184,11 +188,31 @@ static void poll_input_once(GlueState *state, AInputQueue *queue)
     state->input_event_count++;
     state->input_has_after = AInputQueue_hasEvents(queue);
 
-    __android_log_print(ANDROID_LOG_INFO, TAG,
-                        "input event type=%d action=%d source=0x%x pre=%d count=%d",
-                        state->input_last_type, state->input_last_action,
-                        state->input_last_source, pre,
-                        state->input_event_count);
+    (void)pre;
+}
+
+static void *input_thread_main(void *opaque)
+{
+    GlueState *state = (GlueState *)opaque;
+    state->input_thread_started = 1;
+
+    ALooper *looper = ALooper_prepare(0);
+    state->input_thread_looper_ready = looper != 0;
+
+    while (state->input_thread_events < 2 && state->input_thread_polls < 8) {
+        int before = state->input_event_count;
+        poll_input_once(state, -1);
+
+        state->input_thread_polls++;
+        state->input_thread_last_ident = state->input_last_ident;
+        state->input_thread_last_data_ok = state->input_last_data_ok;
+        if (state->input_last_ident == ALOOPER_POLL_TIMEOUT)
+            state->input_thread_timeouts++;
+        if (state->input_event_count > before)
+            state->input_thread_events += state->input_event_count - before;
+    }
+
+    return (void *)0x5a18;
 }
 
 static void on_input_queue_created(ANativeActivity *activity,
@@ -204,9 +228,6 @@ static void on_input_queue_created(ANativeActivity *activity,
     ALooper *looper = ALooper_prepare(0);
     AInputQueue_attachLooper(queue, looper, 234, 0, state);
     state->input_attached = 1;
-
-    poll_input_once(state, queue);
-    poll_input_once(state, queue);
 
     __android_log_print(ANDROID_LOG_INFO, TAG,
                         "input created attached=%d polls=%d events=%d last_action=%d has_after=%d",
@@ -234,10 +255,13 @@ static void on_destroy(ANativeActivity *activity)
 {
     GlueState *state = (GlueState *)activity->instance;
     void *ret = 0;
+    void *input_ret = 0;
 
     if (state) {
         pthread_join(state->thread, &ret);
+        pthread_join(state->input_thread, &input_ret);
         state->thread_ret = (uintptr_t)ret;
+        state->input_thread_ret = (uintptr_t)input_ret;
     }
 
     __android_log_print(ANDROID_LOG_INFO, TAG,
@@ -257,6 +281,16 @@ static void on_destroy(ANativeActivity *activity)
                         state ? state->input_destroyed : -1,
                         state ? state->input_event_count : -1,
                         state ? state->input_last_action : -1);
+    __android_log_print(ANDROID_LOG_INFO, TAG,
+                        "onDestroy input_thread started=%d looper=%d polls=%d timeouts=%d events=%d",
+                        state ? state->input_thread_started : -1,
+                        state ? state->input_thread_looper_ready : -1,
+                        state ? state->input_thread_polls : -1,
+                        state ? state->input_thread_timeouts : -1,
+                        state ? state->input_thread_events : -1);
+    __android_log_print(ANDROID_LOG_INFO, TAG,
+                        "onDestroy input_thread ret=0x%lx",
+                        state ? (unsigned long)state->input_thread_ret : 0UL);
     __android_log_print(ANDROID_LOG_INFO, TAG,
                         "onDestroy frames=%d data_ok=%d first=%lld last=%lld",
                         state ? state->frame_count : -1,
@@ -287,6 +321,9 @@ void ANativeActivity_onCreate(ANativeActivity *activity,
     activity->callbacks->onInputQueueDestroyed = on_input_queue_destroyed;
 
     int rc = pthread_create(&state.thread, 0, glue_thread_main, &state);
+    int input_rc = pthread_create(&state.input_thread, 0,
+                                  input_thread_main, &state);
     __android_log_print(ANDROID_LOG_INFO, TAG,
-                        "onCreate pthread_create rc=%d", rc);
+                        "onCreate pthread_create rc=%d input_rc=%d",
+                        rc, input_rc);
 }

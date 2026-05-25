@@ -1,4 +1,4 @@
-<svg width="100%" viewBox="0 0 680 1124" role="img" xmlns="http://www.w3.org/2000/svg">
+<svg width="100%" viewBox="0 0 680 1500" role="img" xmlns="http://www.w3.org/2000/svg">
 <title>Muplar roadmap from current state to running Android apps</title>
 <desc>A vertical flowchart showing 5 stages: current state, JNI_OnLoad, dynamic linker, Android runtime stubs, and full app execution.</desc>
 
@@ -125,16 +125,59 @@ text{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}
 <line class="arrow" x1="340" y1="916" x2="340" y2="944" marker-end="url(#arrow)"/>
 
 <g>
-<rect class="current" x="40" y="944" width="600" height="56" rx="8"/>
-<text class="current-title" x="60" y="968">→ Native app glue scheduler</text>
-<text class="current-subtitle" x="60" y="986">Resume long-running guest threads and ident-based ALooper polling</text>
-<text class="current-title phase-label" x="560" y="976" text-anchor="middle">Phase 5.8 (Current)</text>
+<rect class="done" x="40" y="944" width="600" height="56" rx="8"/>
+<text class="done-title" x="60" y="968">✓ Native app glue scheduler</text>
+<text class="done-subtitle" x="60" y="986">Guest pthreads yield on blocking ALooper polls and resume on host/input ticks</text>
+<text class="done-title phase-label" x="560" y="976" text-anchor="middle">Phase 5.8 (Done)</text>
 </g>
 
+<line class="arrow" x1="340" y1="1000" x2="340" y2="1016" marker-end="url(#arrow)"/>
+
 <g>
-<rect class="callout" x="40" y="1020" width="600" height="76" rx="8"/>
-<text class="callout-text" x="340" y="1044" text-anchor="middle">Next hard boundary:</text>
-<text class="callout-text" x="340" y="1062" text-anchor="middle">Run native_app_glue-style event loops without returning immediately,</text>
-<text class="callout-text" x="340" y="1080" text-anchor="middle">then expand Binder/services and APK compatibility.</text>
+<rect class="done" x="40" y="1020" width="600" height="76" rx="8"/>
+<text class="done-title" x="60" y="1044">✓ Native app glue command pipe</text>
+<text class="done-subtitle" x="60" y="1062">Deliver APP_CMD_* lifecycle/window/input messages through guest pipe + ALooper</text>
+<text class="done-subtitle" x="60" y="1080">libc pipe/read/write/close stubs wake persistent guest app threads</text>
+<text class="done-title phase-label" x="560" y="1054" text-anchor="middle">Phase 5.9 (Done)</text>
+</g>
+
+<line class="arrow" x1="340" y1="1096" x2="340" y2="1112" marker-end="url(#arrow)"/>
+
+<g>
+<rect class="done" x="40" y="1116" width="600" height="76" rx="8"/>
+<text class="done-title" x="60" y="1140">✓ APK launch envelope</text>
+<text class="done-subtitle" x="60" y="1158">Extract arm64-v8a native libraries and infer android.app.lib_name</text>
+<text class="done-subtitle" x="60" y="1176">Run APK NativeActivity path through existing guest bootstrap</text>
+<text class="done-title phase-label" x="560" y="1150" text-anchor="middle">Phase 5.10 (Done)</text>
+</g>
+
+<line class="arrow" x1="340" y1="1192" x2="340" y2="1208" marker-end="url(#arrow)"/>
+
+<g>
+<rect class="done" x="40" y="1212" width="600" height="76" rx="8"/>
+<text class="done-title" x="60" y="1236">✓ APK-local dependency loading</text>
+<text class="done-subtitle" x="60" y="1254">Map APK-local DT_NEEDED libraries into guest memory</text>
+<text class="done-subtitle" x="60" y="1272">Resolve direct .so relocations across selected lib + companion libs</text>
+<text class="done-title phase-label" x="560" y="1246" text-anchor="middle">Phase 5.11 (Done)</text>
+</g>
+
+<line class="arrow" x1="340" y1="1288" x2="340" y2="1304" marker-end="url(#arrow)"/>
+
+<g>
+<rect class="done" x="40" y="1308" width="600" height="76" rx="8"/>
+<text class="done-title" x="60" y="1332">✓ APK assets + AssetManager</text>
+<text class="done-subtitle" x="60" y="1350">Extract packaged assets and expose them through AAssetManager/AAsset stubs</text>
+<text class="done-subtitle" x="60" y="1368">NativeActivity receives a live assetManager and can read APK asset bytes</text>
+<text class="done-title phase-label" x="560" y="1342" text-anchor="middle">Phase 5.12 (Done)</text>
+</g>
+
+<line class="arrow" x1="340" y1="1384" x2="340" y2="1400" marker-end="url(#arrow)"/>
+
+<g>
+<rect class="current" x="40" y="1404" width="600" height="76" rx="8"/>
+<text class="current-title" x="60" y="1428">→ Package metadata + app context</text>
+<text class="current-subtitle" x="60" y="1446">Parse manifest package/config hints for runtime identity</text>
+<text class="current-subtitle" x="60" y="1464">Prepare Context/Binder-facing data before service expansion</text>
+<text class="current-title phase-label" x="560" y="1438" text-anchor="middle">Phase 5.13 (Current)</text>
 </g>
 </svg>

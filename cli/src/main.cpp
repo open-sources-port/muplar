@@ -11,10 +11,14 @@
 // syscall-translated run loop.
 
 #include <iostream>
+#include <cctype>
+#include <filesystem>
+#include <optional>
 #include <stdexcept>
 #include <string>
 #include <vector>
 
+#include "apk_envelope.h"
 #include "guest_runner.h"   // NEW: replaces ExecutionContext
 
 // Keep ElfLoader available for inspection/debug builds
@@ -24,11 +28,20 @@ static void print_usage(const char* prog)
 {
     std::cerr << "Usage: " << prog
               << " [--verbose] [--sysroot PATH]\n"
+              << "              [--apk] [--apk-lib NAME] [--apk-extract-dir PATH]\n"
               << "              [--native-activity]\n"
               << "              [--host-window] [--host-window-ms VALUE]\n"
               << "              [--jni-call CLASS METHOD SIGNATURE]"
               << " [--jni-int VALUE ...]\n"
-              << "              <elf-file> [args...]\n";
+              << "              <elf-file|apk-file> [args...]\n";
+}
+
+static std::string lower_ext(const std::string& path)
+{
+    std::string ext = std::filesystem::path(path).extension().string();
+    for (char& c : ext)
+        c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+    return ext;
 }
 
 int main(int argc, char** argv)
@@ -45,6 +58,9 @@ int main(int argc, char** argv)
     // -----------------------------------------------------------------------
     muplar::runtime::elf::GuestRunnerConfig cfg;
     int arg_start = 1;
+    bool apk_mode = false;
+    std::optional<std::string> apk_lib_name;
+    std::filesystem::path apk_extract_dir;
 
     while (arg_start < argc && argv[arg_start][0] == '-') {
         std::string flag = argv[arg_start];
@@ -52,6 +68,17 @@ int main(int argc, char** argv)
         if (flag == "--verbose" || flag == "-v") {
             cfg.verbose = true;
             ++arg_start;
+        } else if (flag == "--apk") {
+            apk_mode = true;
+            ++arg_start;
+        } else if ((flag == "--apk-lib") && arg_start + 1 < argc) {
+            apk_mode = true;
+            apk_lib_name = argv[arg_start + 1];
+            arg_start += 2;
+        } else if ((flag == "--apk-extract-dir") && arg_start + 1 < argc) {
+            apk_mode = true;
+            apk_extract_dir = argv[arg_start + 1];
+            arg_start += 2;
         } else if ((flag == "--sysroot") && arg_start + 1 < argc) {
             cfg.sysroot = argv[arg_start + 1];
             arg_start  += 2;
@@ -106,11 +133,47 @@ int main(int argc, char** argv)
     // -----------------------------------------------------------------------
     // Build the guest config
     // -----------------------------------------------------------------------
-    cfg.elf_path = argv[arg_start];
+    std::string input_path = argv[arg_start];
+    cfg.elf_path = input_path;
     cfg.verbose = true;
 
-    // argv[0] inside the guest = the binary path; followed by any user args.
-    for (int i = arg_start; i < argc; ++i) {
+    if (apk_mode || lower_ext(input_path) == ".apk") {
+        try {
+            muplar::runtime::apk::ApkLaunchConfig apk_cfg;
+            apk_cfg.apk_path = input_path;
+            apk_cfg.lib_name = apk_lib_name;
+            apk_cfg.output_dir = apk_extract_dir;
+
+            auto apk = muplar::runtime::apk::prepare_apk_launch(apk_cfg);
+            cfg.elf_path = apk.so_path.string();
+            cfg.native_activity = true;
+            cfg.native_lib_search_dirs.push_back(
+                (apk.extract_dir / "lib" / "arm64-v8a").string());
+            cfg.apk_assets_dir = apk.assets_dir.string();
+
+            std::cerr << "[APK] extracted " << apk.extracted_libs.size()
+                      << " arm64-v8a lib(s) to "
+                      << apk.extract_dir.string() << "\n";
+            if (!apk.extracted_assets.empty()) {
+                std::cerr << "[APK] extracted " << apk.extracted_assets.size()
+                          << " asset(s) to "
+                          << apk.assets_dir.string() << "\n";
+            }
+            if (apk.manifest_lib) {
+                std::cerr << "[APK] manifest lib_name="
+                          << *apk.manifest_lib << "\n";
+            }
+            std::cerr << "[APK] selected lib " << apk.selected_lib
+                      << ".so -> " << cfg.elf_path << "\n";
+        } catch (const std::exception& e) {
+            std::cerr << "APK error: " << e.what() << "\n";
+            return 1;
+        }
+    }
+
+    // argv[0] inside the guest = the executable path; followed by user args.
+    cfg.argv.push_back(cfg.elf_path);
+    for (int i = arg_start + 1; i < argc; ++i) {
         cfg.argv.push_back(argv[i]);
     }
 
