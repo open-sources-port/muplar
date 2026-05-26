@@ -71,6 +71,11 @@ namespace muplar::runtime::elf {
         // Exposed to the guest through libandroid AAssetManager/AAsset stubs.
         std::string apk_assets_dir;
 
+        // Optional APK/package identity used to populate NativeActivity paths
+        // and lightweight Java Context methods such as getPackageName().
+        std::string package_name;
+        std::string package_code_path;
+
         // Negative means wait until the window closes. Non-negative means
         // pump the host window for that many milliseconds before exiting.
         int host_window_linger_ms = -1;

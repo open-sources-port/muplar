@@ -73,13 +73,15 @@ struct JClass {
 //   0x100D  ExceptionCheck
 //   0x100E  ExceptionClear
 //   0x100F  DeleteLocalRef
+//   0x1010  GetObjectClass
+//   0x1011  CallObjectMethod
 // ────────────────────────────────────────────────────────────────────────────
 class JniEnv {
 public:
     JniEnv();
 
     // Dispatch a JNI call from the guest.
-    // call_nr  : JNI call number (0x1000 … 0x100F)
+    // call_nr  : JNI call number (0x1000 … 0x1011)
     // args[0..7]: guest X0..X7 at the point of the HVC
     // Returns the value to write back into guest X0.
     uint64_t dispatch(uint32_t call_nr, const uint64_t args[8]);
@@ -97,9 +99,13 @@ public:
     // ── Host-side helpers called by the Android framework layer ─────────
     void   register_class(const std::string& descriptor);
     jclass find_class(const std::string& descriptor);
+    jobject register_object(const std::string& class_descriptor);
+    void set_app_context(std::string package_name,
+                         std::string package_code_path);
 
     // Called by JniBridge to resolve char* GPAs before dispatch
     void intern_string(uint64_t gpa, const std::string& value);
+    const std::string* get_string(uint64_t handle) const;
 
     // Called by JniBridge after RegisterNatives to walk guest array
     void register_native(uint64_t class_handle,
@@ -142,6 +148,8 @@ private:
     uint64_t jni_ExceptionCheck(const uint64_t* a);
     uint64_t jni_ExceptionClear(const uint64_t* a);
     uint64_t jni_DeleteLocalRef(const uint64_t* a);
+    uint64_t jni_GetObjectClass(const uint64_t* a);
+    uint64_t jni_CallObjectMethod(const uint64_t* a);
 
     // ── Object / handle tables ────────────────────────────────────────────
     // Classes indexed by a host-assigned handle (= jclass value seen by guest)
@@ -151,6 +159,10 @@ private:
     // Methods indexed by a host-assigned handle (= jmethodID seen by guest)
     struct MethodEntry { uint64_t class_handle; std::string name; std::string sig; };
     std::unordered_map<uint64_t, MethodEntry> methods_;
+
+    // Objects indexed by a host-assigned handle (= jobject seen by guest)
+    struct ObjectEntry { uint64_t class_handle; };
+    std::unordered_map<uint64_t, ObjectEntry> objects_;
 
     // Strings: jstring handle → UTF-8 content
     std::unordered_map<uint64_t, std::string> strings_;
@@ -166,6 +178,10 @@ private:
     // Monotonically increasing handle allocator
     uint64_t next_handle_ = 0x7000'0001ULL;
     uint64_t alloc_handle() { return next_handle_++; }
+    uint64_t make_string(const std::string& value);
+
+    std::string package_name_ = "muplar";
+    std::string package_code_path_;
 };
 
 } // namespace muplar::runtime::jni

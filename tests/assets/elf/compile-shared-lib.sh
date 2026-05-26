@@ -116,6 +116,125 @@ $CC -shared -fPIC \
 echo "[compile] Built: $SYSROOT_TMP/libassettest.so"
 file "$SYSROOT_TMP/libassettest.so"
 
+# --- APK context fixture ---
+echo "[compile] Building libcontexttest.so ..."
+$CC -shared -fPIC \
+    -Wl,-z,max-page-size=4096 \
+    -isystem "$NDK_SYSROOT/usr/include" \
+    -isystem "$NDK_SYSROOT/usr/include/aarch64-linux-android" \
+    "$ROOT_DIR/tests/assets/elf/libcontexttest.c" \
+    -landroid \
+    -llog \
+    -o "$SYSROOT_TMP/libcontexttest.so"
+
+echo "[compile] Built: $SYSROOT_TMP/libcontexttest.so"
+file "$SYSROOT_TMP/libcontexttest.so"
+
+# --- APK binder/service-manager fixture ---
+echo "[compile] Building libbindertest.so ..."
+$CC -shared -fPIC \
+    -Wl,-z,max-page-size=4096 \
+    -isystem "$NDK_SYSROOT/usr/include" \
+    -isystem "$NDK_SYSROOT/usr/include/aarch64-linux-android" \
+    "$ROOT_DIR/tests/assets/elf/libbindertest.c" \
+    -lbinder_ndk \
+    -landroid \
+    -llog \
+    -o "$SYSROOT_TMP/libbindertest.so"
+
+echo "[compile] Built: $SYSROOT_TMP/libbindertest.so"
+file "$SYSROOT_TMP/libbindertest.so"
+
+# --- APK binder transaction/parcel fixture ---
+echo "[compile] Building libbindertranstest.so ..."
+$CC -shared -fPIC \
+    -Wl,-z,max-page-size=4096 \
+    -isystem "$NDK_SYSROOT/usr/include" \
+    -isystem "$NDK_SYSROOT/usr/include/aarch64-linux-android" \
+    "$ROOT_DIR/tests/assets/elf/libbindertranstest.c" \
+    -lbinder_ndk \
+    -landroid \
+    -llog \
+    -o "$SYSROOT_TMP/libbindertranstest.so"
+
+echo "[compile] Built: $SYSROOT_TMP/libbindertranstest.so"
+file "$SYSROOT_TMP/libbindertranstest.so"
+
+# --- APK local binder onTransact fixture ---
+echo "[compile] Building libbinderlocaltest.so ..."
+$CC -shared -fPIC \
+    -Wl,-z,max-page-size=4096 \
+    -isystem "$NDK_SYSROOT/usr/include" \
+    -isystem "$NDK_SYSROOT/usr/include/aarch64-linux-android" \
+    "$ROOT_DIR/tests/assets/elf/libbinderlocaltest.c" \
+    -lbinder_ndk \
+    -landroid \
+    -llog \
+    -o "$SYSROOT_TMP/libbinderlocaltest.so"
+
+echo "[compile] Built: $SYSROOT_TMP/libbinderlocaltest.so"
+file "$SYSROOT_TMP/libbinderlocaltest.so"
+
+# --- APK binder string/allocator fixture ---
+echo "[compile] Building libbinderstringtest.so ..."
+$CC -shared -fPIC \
+    -Wl,-z,max-page-size=4096 \
+    -isystem "$NDK_SYSROOT/usr/include" \
+    -isystem "$NDK_SYSROOT/usr/include/aarch64-linux-android" \
+    "$ROOT_DIR/tests/assets/elf/libbinderstringtest.c" \
+    -lbinder_ndk \
+    -landroid \
+    -llog \
+    -o "$SYSROOT_TMP/libbinderstringtest.so"
+
+echo "[compile] Built: $SYSROOT_TMP/libbinderstringtest.so"
+file "$SYSROOT_TMP/libbinderstringtest.so"
+
+# --- APK binder array/allocator fixture ---
+echo "[compile] Building libbinderarraytest.so ..."
+$CC -shared -fPIC \
+    -Wl,-z,max-page-size=4096 \
+    -isystem "$NDK_SYSROOT/usr/include" \
+    -isystem "$NDK_SYSROOT/usr/include/aarch64-linux-android" \
+    "$ROOT_DIR/tests/assets/elf/libbinderarraytest.c" \
+    -lbinder_ndk \
+    -landroid \
+    -llog \
+    -o "$SYSROOT_TMP/libbinderarraytest.so"
+
+echo "[compile] Built: $SYSROOT_TMP/libbinderarraytest.so"
+file "$SYSROOT_TMP/libbinderarraytest.so"
+
+# --- APK binder parcelable/fd fixture ---
+echo "[compile] Building libbinderparcelabletest.so ..."
+$CC -shared -fPIC \
+    -Wl,-z,max-page-size=4096 \
+    -isystem "$NDK_SYSROOT/usr/include" \
+    -isystem "$NDK_SYSROOT/usr/include/aarch64-linux-android" \
+    "$ROOT_DIR/tests/assets/elf/libbinderparcelabletest.c" \
+    -lbinder_ndk \
+    -landroid \
+    -llog \
+    -o "$SYSROOT_TMP/libbinderparcelabletest.so"
+
+echo "[compile] Built: $SYSROOT_TMP/libbinderparcelabletest.so"
+file "$SYSROOT_TMP/libbinderparcelabletest.so"
+
+# --- APK binder lifecycle fixture ---
+echo "[compile] Building libbinderlifecycletest.so ..."
+$CC -shared -fPIC \
+    -Wl,-z,max-page-size=4096 \
+    -isystem "$NDK_SYSROOT/usr/include" \
+    -isystem "$NDK_SYSROOT/usr/include/aarch64-linux-android" \
+    "$ROOT_DIR/tests/assets/elf/libbinderlifecycletest.c" \
+    -lbinder_ndk \
+    -landroid \
+    -llog \
+    -o "$SYSROOT_TMP/libbinderlifecycletest.so"
+
+echo "[compile] Built: $SYSROOT_TMP/libbinderlifecycletest.so"
+file "$SYSROOT_TMP/libbinderlifecycletest.so"
+
 # --- test_shared ---
 # -nostartfiles: skip crtbegin_dynamic.o which calls __libc_init (needs real libc)
 # We supply our own _start in test_shared_start.S that calls main() directly.

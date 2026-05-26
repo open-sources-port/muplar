@@ -9,6 +9,7 @@
 //   0x2300–0x23FF : libdl       (dlopen, dlsym, dlclose, dlerror)
 //   0x2400–0x24FF : libEGL      (eglGetDisplay, eglInitialize, …)
 //   0x2500–0x25FF : libGLESv2   (eglGetProcAddress passthrough + GLES dispatch)
+//   0x2700–0x27FF : libbinder_ndk (AServiceManager/AIBinder basics)
 #pragma once
 
 #include <cstdint>
@@ -35,6 +36,8 @@ namespace muplar::runtime::android {
 using BuiltinSymbols = std::unordered_map<std::string, uint64_t>;
 
 using StubHandler = std::function<uint64_t(guest_t*, const uint64_t[8])>;
+using GuestFunctionInvoker =
+    std::function<int64_t(uint64_t, const std::vector<uint64_t>&)>;
 
 struct StubEntry {
     std::string  soname;
@@ -72,6 +75,7 @@ public:
     ~AndroidRuntime();
 
     void set_asset_root(std::string asset_root);
+    void set_guest_function_invoker(GuestFunctionInvoker invoker);
 
     // Write HVC shim stubs into guest memory and build the symbol tables.
     void install();
@@ -81,7 +85,7 @@ public:
 
     static constexpr const char* KNOWN_SONAMES[] = {
         "libc.so", "libm.so", "libdl.so", "libdl_android.so", "liblog.so",
-        "libandroid.so", "libstdc++.so",
+        "libandroid.so", "libbinder_ndk.so", "libstdc++.so",
         "libEGL.so", "libGLESv2.so", "libGLESv3.so",
         nullptr
     };
@@ -111,6 +115,7 @@ private:
     void register_liblog_stubs();
     void register_libandroid_stubs();
     void register_libdl_stubs();
+    void register_libbinder_stubs();
     void register_libegl_stubs();
     void register_libgles_stubs();
 
@@ -223,6 +228,83 @@ private:
     std::unordered_map<uint64_t, DlopenEntry> dl_handles_;
     uint64_t next_dl_handle_ = 0x9000'0001ULL;
 
+    // ── Binder/service-manager state ─────────────────────────────────────────
+    struct BinderService {
+        std::string name;
+        uint32_t ref_count = 1;
+        bool alive = true;
+        bool remote = true;
+        uint64_t class_handle = 0;
+        uint64_t user_data = 0;
+        struct DeathLink {
+            uint64_t recipient_handle = 0;
+            uint64_t cookie = 0;
+            uint64_t on_unlinked = 0;
+        };
+        std::vector<DeathLink> death_links;
+    };
+    struct BinderClass {
+        std::string descriptor;
+        uint64_t descriptor_gpa = 0;
+        uint64_t on_create = 0;
+        uint64_t on_destroy = 0;
+        uint64_t on_transact = 0;
+    };
+    enum class BinderParcelKind {
+        Int32,
+        Uint32,
+        Int64,
+        Uint64,
+        Float,
+        Double,
+        Bool,
+        Byte,
+        Char,
+        StrongBinder,
+        Status,
+        String,
+        Int32Array,
+        StringArray,
+        ParcelableArray,
+        ParcelFileDescriptor,
+    };
+    struct BinderParcelValue {
+        BinderParcelKind kind = BinderParcelKind::Int32;
+        uint64_t value = 0;
+        std::string text;
+        std::vector<uint64_t> elements;
+        std::vector<std::string> strings;
+    };
+    struct BinderParcel {
+        uint64_t target_binder = 0;
+        uint32_t transaction_code = 0;
+        bool reply = false;
+        size_t cursor = 0;
+        std::vector<BinderParcelValue> values;
+    };
+    struct BinderStatus {
+        int32_t exception = 0;
+        int32_t service_error = 0;
+        int32_t status = 0;
+        std::string message;
+    };
+    struct BinderDeathRecipient {
+        uint64_t on_binder_died = 0;
+        uint64_t on_unlinked = 0;
+    };
+    std::unordered_map<uint64_t, BinderService> binder_services_;
+    std::unordered_map<std::string, uint64_t> binder_service_by_name_;
+    uint64_t next_binder_handle_ = 0xB1D0'0001ULL;
+    std::unordered_map<uint64_t, BinderClass> binder_classes_;
+    uint64_t next_binder_class_handle_ = 0xB1C0'0001ULL;
+    std::unordered_map<uint64_t, BinderParcel> binder_parcels_;
+    uint64_t next_binder_parcel_handle_ = 0xB1D1'0001ULL;
+    std::unordered_map<uint64_t, BinderStatus> binder_statuses_;
+    uint64_t next_binder_status_handle_ = 0xB1D2'0001ULL;
+    std::unordered_map<uint64_t, BinderDeathRecipient> binder_death_recipients_;
+    uint64_t next_binder_death_handle_ = 0xB1D3'0001ULL;
+    GuestFunctionInvoker guest_function_invoker_;
+
     // ── Native window state ───────────────────────────────────────────────────
     struct NativeWindowState {
         int32_t width = 320;
@@ -259,7 +341,7 @@ private:
 
     // eglGetProcAddress dispatch: guest hvc_nr → host fn ptr
     // Allocated dynamically starting at HVC_GL_PROC_BASE.
-    static constexpr uint32_t HVC_GL_PROC_BASE = 0x2600;
+    static constexpr uint32_t HVC_GL_PROC_BASE = 0x2800;
     std::unordered_map<uint32_t, void*> proc_addr_handlers_;
     uint32_t next_proc_hvc_ = HVC_GL_PROC_BASE;
 

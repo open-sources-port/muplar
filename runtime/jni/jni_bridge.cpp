@@ -1,6 +1,7 @@
 // runtime/jni/jni_bridge.cpp
 #include "jni_bridge.h"
 
+#include <algorithm>
 #include <cstdio>
 #include <cstring>
 
@@ -32,6 +33,7 @@ JniBridge::JniBridge(guest_t* guest,
     , env_(jni_env)
     , table_gpa_(jni_table_gpa)
     , stub_base_gpa_(jni_stub_base_gpa)
+    , string_chars_base_gpa_(jni_stub_base_gpa + 0x800)
 {}
 
 // ────────────────────────────────────────────────────────────────────────────
@@ -99,6 +101,28 @@ void JniBridge::intern_char_arg(uint64_t gpa)
     env_->intern_string(gpa, s);
 }
 
+uint64_t JniBridge::materialize_string_chars(uint64_t string_handle)
+{
+    const std::string* value = env_->get_string(string_handle);
+    if (!value)
+        return 0;
+
+    constexpr uint64_t kStringScratchSize = 0x700;
+    uint64_t len = static_cast<uint64_t>(value->size() + 1);
+    if (len > kStringScratchSize)
+        len = kStringScratchSize;
+    if (string_chars_bump_ + len > kStringScratchSize)
+        string_chars_bump_ = 0;
+
+    uint64_t gpa = string_chars_base_gpa_ + string_chars_bump_;
+    std::string tmp = value->substr(0, static_cast<size_t>(len - 1));
+    tmp.push_back('\0');
+    guest_write(guest_, gpa, tmp.data(), tmp.size());
+
+    string_chars_bump_ += (len + 7) & ~7ULL;
+    return gpa;
+}
+
 // ────────────────────────────────────────────────────────────────────────────
 // register_natives_from_guest — walk a guest JNINativeMethod[] array.
 //
@@ -136,7 +160,7 @@ void JniBridge::register_natives_from_guest(uint64_t class_handle,
 // ────────────────────────────────────────────────────────────────────────────
 // handle_hvc — main dispatch called from the HVC exit handler.
 //
-// call_nr: X8 at the HVC site (0x1000–0x100F)
+// call_nr: X8 at the HVC site (0x1000–0x10FF)
 // regs:    X0..X7 at the HVC site
 // Returns: value to write back into X0.
 // ────────────────────────────────────────────────────────────────────────────
@@ -161,6 +185,14 @@ uint64_t JniBridge::handle_hvc(uint32_t call_nr, uint64_t regs[8])
 
     // ── Dispatch ─────────────────────────────────────────────────────────
     uint64_t ret = env_->dispatch(call_nr, regs);
+
+    if (call_nr == 0x1007) { // GetStringUTFChars(env, jstring, isCopy*)
+        if (regs[2]) {
+            uint8_t is_copy = 0;
+            guest_write(guest_, regs[2], &is_copy, sizeof(is_copy));
+        }
+        ret = materialize_string_chars(ret);
+    }
 
     // ── Post-dispatch: RegisterNatives needs guest memory walk ────────────
     if (call_nr == 0x1002) { // RegisterNatives(env, class, methods*, count)

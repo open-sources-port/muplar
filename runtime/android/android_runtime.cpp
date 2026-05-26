@@ -32,7 +32,8 @@ namespace muplar::runtime::android {
 // libdl     : 0x2300–0x23FF
 // libEGL    : 0x2400–0x24FF
 // libGLESv2 : 0x2500–0x25FF
-// procaddr  : 0x2600–0x2FFF  (dynamic, one per eglGetProcAddress result)
+// libbinder_ndk: 0x2700–0x27FF
+// procaddr  : 0x2800–0x2FFF  (dynamic, one per eglGetProcAddress result)
 
 // libc
 static constexpr uint32_t HVC_MALLOC              = 0x2000;
@@ -167,7 +168,7 @@ static constexpr uint32_t HVC_EGL_RELEASE_THREAD       = 0x240F;
 static constexpr uint32_t HVC_EGL_GET_PROC_ADDRESS     = 0x2410;
 
 // libGLESv2 — direct wrappers for the most common draw-loop calls.
-// Less common calls come through eglGetProcAddress (0x2600+).
+// Less common calls come through eglGetProcAddress (0x2800+).
 static constexpr uint32_t HVC_GL_GET_ERROR            = 0x2500;
 static constexpr uint32_t HVC_GL_VIEWPORT             = 0x2501;
 static constexpr uint32_t HVC_GL_CLEAR                = 0x2502;
@@ -227,6 +228,82 @@ static constexpr uint32_t HVC_GL_GET_SHADER_IV        = 0x2537;
 static constexpr uint32_t HVC_GL_GET_PROGRAM_IV       = 0x2538;
 static constexpr uint32_t HVC_GL_GET_SHADER_INFO_LOG  = 0x2539;
 static constexpr uint32_t HVC_GL_GET_PROGRAM_INFO_LOG = 0x253A;
+
+// libbinder_ndk
+static constexpr uint32_t HVC_SERVICE_CHECK           = 0x2700;
+static constexpr uint32_t HVC_SERVICE_GET             = 0x2701;
+static constexpr uint32_t HVC_SERVICE_WAIT            = 0x2702;
+static constexpr uint32_t HVC_SERVICE_IS_DECLARED     = 0x2703;
+static constexpr uint32_t HVC_SERVICE_ADD             = 0x2704;
+static constexpr uint32_t HVC_BINDER_IS_REMOTE        = 0x2710;
+static constexpr uint32_t HVC_BINDER_IS_ALIVE         = 0x2711;
+static constexpr uint32_t HVC_BINDER_PING             = 0x2712;
+static constexpr uint32_t HVC_BINDER_INC_STRONG       = 0x2713;
+static constexpr uint32_t HVC_BINDER_DEC_STRONG       = 0x2714;
+static constexpr uint32_t HVC_BINDER_REF_COUNT        = 0x2715;
+static constexpr uint32_t HVC_BINDER_CALLING_UID      = 0x2716;
+static constexpr uint32_t HVC_BINDER_CALLING_PID      = 0x2717;
+static constexpr uint32_t HVC_BINDER_HANDLING_TX      = 0x2718;
+static constexpr uint32_t HVC_BINDER_DUMP             = 0x2719;
+static constexpr uint32_t HVC_BINDER_LINK_DEATH       = 0x271A;
+static constexpr uint32_t HVC_BINDER_UNLINK_DEATH     = 0x271B;
+static constexpr uint32_t HVC_BINDER_PREPARE_TX       = 0x271C;
+static constexpr uint32_t HVC_BINDER_TRANSACT         = 0x271D;
+static constexpr uint32_t HVC_PARCEL_DELETE           = 0x2720;
+static constexpr uint32_t HVC_PARCEL_SET_POS          = 0x2721;
+static constexpr uint32_t HVC_PARCEL_GET_POS          = 0x2722;
+static constexpr uint32_t HVC_PARCEL_WRITE_BINDER     = 0x2723;
+static constexpr uint32_t HVC_PARCEL_READ_BINDER      = 0x2724;
+static constexpr uint32_t HVC_PARCEL_WRITE_STATUS     = 0x2725;
+static constexpr uint32_t HVC_PARCEL_READ_STATUS      = 0x2726;
+static constexpr uint32_t HVC_PARCEL_WRITE_STRING     = 0x2727;
+static constexpr uint32_t HVC_PARCEL_READ_STRING      = 0x2728;
+static constexpr uint32_t HVC_PARCEL_WRITE_STRING_ARRAY = 0x2729;
+static constexpr uint32_t HVC_PARCEL_READ_STRING_ARRAY  = 0x272A;
+static constexpr uint32_t HVC_PARCEL_WRITE_PARCELABLE_ARRAY = 0x272B;
+static constexpr uint32_t HVC_PARCEL_READ_PARCELABLE_ARRAY  = 0x272C;
+static constexpr uint32_t HVC_PARCEL_WRITE_FD        = 0x272D;
+static constexpr uint32_t HVC_PARCEL_READ_FD         = 0x272E;
+static constexpr uint32_t HVC_PARCEL_WRITE_I32        = 0x2730;
+static constexpr uint32_t HVC_PARCEL_WRITE_U32        = 0x2731;
+static constexpr uint32_t HVC_PARCEL_WRITE_I64        = 0x2732;
+static constexpr uint32_t HVC_PARCEL_WRITE_U64        = 0x2733;
+static constexpr uint32_t HVC_PARCEL_WRITE_FLOAT      = 0x2734;
+static constexpr uint32_t HVC_PARCEL_WRITE_DOUBLE     = 0x2735;
+static constexpr uint32_t HVC_PARCEL_WRITE_BOOL       = 0x2736;
+static constexpr uint32_t HVC_PARCEL_WRITE_CHAR       = 0x2737;
+static constexpr uint32_t HVC_PARCEL_WRITE_BYTE       = 0x2738;
+static constexpr uint32_t HVC_PARCEL_WRITE_I32_ARRAY  = 0x2739;
+static constexpr uint32_t HVC_PARCEL_READ_I32         = 0x2740;
+static constexpr uint32_t HVC_PARCEL_READ_U32         = 0x2741;
+static constexpr uint32_t HVC_PARCEL_READ_I64         = 0x2742;
+static constexpr uint32_t HVC_PARCEL_READ_U64         = 0x2743;
+static constexpr uint32_t HVC_PARCEL_READ_FLOAT       = 0x2744;
+static constexpr uint32_t HVC_PARCEL_READ_DOUBLE      = 0x2745;
+static constexpr uint32_t HVC_PARCEL_READ_BOOL        = 0x2746;
+static constexpr uint32_t HVC_PARCEL_READ_CHAR        = 0x2747;
+static constexpr uint32_t HVC_PARCEL_READ_BYTE        = 0x2748;
+static constexpr uint32_t HVC_PARCEL_READ_I32_ARRAY   = 0x2749;
+static constexpr uint32_t HVC_BINDER_CLASS_DEFINE     = 0x2750;
+static constexpr uint32_t HVC_BINDER_CLASS_SET_DUMP   = 0x2751;
+static constexpr uint32_t HVC_BINDER_CLASS_SET_NAMES  = 0x2752;
+static constexpr uint32_t HVC_BINDER_CLASS_GET_NAME   = 0x2753;
+static constexpr uint32_t HVC_BINDER_NEW              = 0x2754;
+static constexpr uint32_t HVC_BINDER_ASSOC_CLASS      = 0x2755;
+static constexpr uint32_t HVC_BINDER_GET_CLASS        = 0x2756;
+static constexpr uint32_t HVC_BINDER_GET_USER_DATA    = 0x2757;
+static constexpr uint32_t HVC_BINDER_CLASS_GET_FN_NAME = 0x2758;
+static constexpr uint32_t HVC_STATUS_NEW_OK           = 0x2760;
+static constexpr uint32_t HVC_STATUS_FROM_STATUS      = 0x2761;
+static constexpr uint32_t HVC_STATUS_IS_OK            = 0x2762;
+static constexpr uint32_t HVC_STATUS_EXCEPTION        = 0x2763;
+static constexpr uint32_t HVC_STATUS_SERVICE_ERR      = 0x2764;
+static constexpr uint32_t HVC_STATUS_STATUS           = 0x2765;
+static constexpr uint32_t HVC_STATUS_MESSAGE          = 0x2766;
+static constexpr uint32_t HVC_STATUS_DELETE           = 0x2767;
+static constexpr uint32_t HVC_BINDER_DEATH_NEW        = 0x2768;
+static constexpr uint32_t HVC_BINDER_DEATH_SET_UNLINK = 0x2769;
+static constexpr uint32_t HVC_BINDER_DEATH_DELETE     = 0x276A;
 
 // ── AArch64 HVC shim stub layout ─────────────────────────────────────────────
 //   movz x8, #<hvc_nr>   ; 4 bytes
@@ -414,6 +491,11 @@ AndroidRuntime::~AndroidRuntime()
 void AndroidRuntime::set_asset_root(std::string asset_root)
 {
     asset_root_ = std::move(asset_root);
+}
+
+void AndroidRuntime::set_guest_function_invoker(GuestFunctionInvoker invoker)
+{
+    guest_function_invoker_ = std::move(invoker);
 }
 
 bool AndroidRuntime::load_angle()
@@ -732,6 +814,7 @@ void AndroidRuntime::install()
     register_liblog_stubs();
     register_libandroid_stubs();
     register_libdl_stubs();
+    register_libbinder_stubs();
     register_libegl_stubs();
     register_libgles_stubs();
 
@@ -1699,6 +1782,1252 @@ void AndroidRuntime::register_libdl_stubs()
         [](guest_t*, const uint64_t[8]) -> uint64_t { return 0; });
 
     sym_tables_["libdl_android.so"] = sym_tables_["libdl.so"];
+}
+
+// ── libbinder_ndk stubs ──────────────────────────────────────────────────────
+
+void AndroidRuntime::register_libbinder_stubs()
+{
+    constexpr uint64_t STATUS_OK = 0;
+    constexpr uint64_t STATUS_BAD_VALUE =
+        static_cast<uint64_t>(static_cast<int64_t>(-22));
+    constexpr uint64_t STATUS_INVALID_OPERATION =
+        static_cast<uint64_t>(static_cast<int64_t>(-38));
+    constexpr uint64_t STATUS_NO_MEMORY =
+        static_cast<uint64_t>(static_cast<int64_t>(-12));
+    constexpr uint64_t STATUS_NAME_NOT_FOUND =
+        static_cast<uint64_t>(static_cast<int64_t>(-2));
+    constexpr uint64_t STATUS_ALREADY_EXISTS =
+        static_cast<uint64_t>(static_cast<int64_t>(-17));
+    constexpr uint64_t STATUS_DEAD_OBJECT =
+        static_cast<uint64_t>(static_cast<int64_t>(-32));
+    constexpr uint64_t STATUS_NOT_ENOUGH_DATA =
+        static_cast<uint64_t>(static_cast<int64_t>(-61));
+
+    auto find_service = [this](uint64_t handle) -> BinderService* {
+        auto it = binder_services_.find(handle);
+        return it == binder_services_.end() ? nullptr : &it->second;
+    };
+    auto make_binder_service =
+        [](std::string name,
+           uint32_t ref_count,
+           bool alive,
+           bool remote,
+           uint64_t class_handle,
+           uint64_t user_data) -> BinderService {
+            BinderService service;
+            service.name = std::move(name);
+            service.ref_count = ref_count;
+            service.alive = alive;
+            service.remote = remote;
+            service.class_handle = class_handle;
+            service.user_data = user_data;
+            return service;
+        };
+    auto find_death_recipient =
+        [this](uint64_t handle) -> BinderDeathRecipient* {
+            auto it = binder_death_recipients_.find(handle);
+            return it == binder_death_recipients_.end() ? nullptr : &it->second;
+        };
+    auto notify_death_unlinked =
+        [this](const BinderService::DeathLink& link) {
+            if (link.on_unlinked && guest_function_invoker_)
+                guest_function_invoker_(link.on_unlinked, { link.cookie });
+        };
+
+    auto service_handle_for_name =
+        [this, make_binder_service](const std::string& name) -> uint64_t {
+            if (name.empty())
+                return 0;
+
+            auto existing = binder_service_by_name_.find(name);
+            if (existing != binder_service_by_name_.end())
+                return existing->second;
+
+            uint64_t handle = next_binder_handle_++;
+            binder_services_[handle] =
+                make_binder_service(name, 1, true, true, 0, 0);
+            binder_service_by_name_[name] = handle;
+            return handle;
+        };
+
+    auto service_lookup =
+        [service_handle_for_name](const char* op,
+                                  guest_t* g,
+                                  const uint64_t a[8]) -> uint64_t {
+            std::string name = guest_read_string(g, a[0]);
+            uint64_t handle = service_handle_for_name(name);
+            std::fprintf(stderr, "[Binder] %s(%s) -> 0x%llx\n",
+                         op,
+                         name.empty() ? "<empty>" : name.c_str(),
+                         (unsigned long long)handle);
+            return handle;
+        };
+
+    add("libbinder_ndk.so", "AServiceManager_checkService", HVC_SERVICE_CHECK,
+        [service_lookup](guest_t* g, const uint64_t a[8]) -> uint64_t {
+            return service_lookup("checkService", g, a);
+        });
+    add("libbinder_ndk.so", "AServiceManager_getService", HVC_SERVICE_GET,
+        [service_lookup](guest_t* g, const uint64_t a[8]) -> uint64_t {
+            return service_lookup("getService", g, a);
+        });
+    add("libbinder_ndk.so", "AServiceManager_waitForService", HVC_SERVICE_WAIT,
+        [service_lookup](guest_t* g, const uint64_t a[8]) -> uint64_t {
+            return service_lookup("waitForService", g, a);
+        });
+    add("libbinder_ndk.so", "AServiceManager_isDeclared", HVC_SERVICE_IS_DECLARED,
+        [](guest_t* g, const uint64_t a[8]) -> uint64_t {
+            std::string name = guest_read_string(g, a[0]);
+            uint64_t declared = name.empty() ? 0 : 1;
+            std::fprintf(stderr, "[Binder] isDeclared(%s) -> %llu\n",
+                         name.empty() ? "<empty>" : name.c_str(),
+                         (unsigned long long)declared);
+            return declared;
+        });
+    add("libbinder_ndk.so", "AServiceManager_addService", HVC_SERVICE_ADD,
+        [this, service_handle_for_name, make_binder_service]
+        (guest_t* g, const uint64_t a[8]) -> uint64_t {
+            std::string name = guest_read_string(g, a[1]);
+            uint64_t handle = a[0] ? a[0] : service_handle_for_name(name);
+            if (name.empty() || !handle)
+                return STATUS_BAD_VALUE;
+
+            if (binder_services_.find(handle) == binder_services_.end())
+                binder_services_[handle] =
+                    make_binder_service(name, 1, true, true, 0, 0);
+            binder_service_by_name_[name] = handle;
+            std::fprintf(stderr, "[Binder] addService(%s, 0x%llx) -> OK\n",
+                         name.c_str(), (unsigned long long)handle);
+            return STATUS_OK;
+        });
+
+    add("libbinder_ndk.so", "AIBinder_isRemote", HVC_BINDER_IS_REMOTE,
+        [find_service](guest_t*, const uint64_t a[8]) -> uint64_t {
+            BinderService* service = find_service(a[0]);
+            return service && service->remote ? 1 : 0;
+        });
+    add("libbinder_ndk.so", "AIBinder_isAlive", HVC_BINDER_IS_ALIVE,
+        [find_service](guest_t*, const uint64_t a[8]) -> uint64_t {
+            BinderService* service = find_service(a[0]);
+            return service && service->alive ? 1 : 0;
+        });
+    add("libbinder_ndk.so", "AIBinder_ping", HVC_BINDER_PING,
+        [find_service](guest_t*, const uint64_t a[8]) -> uint64_t {
+            BinderService* service = find_service(a[0]);
+            if (!service)
+                return STATUS_BAD_VALUE;
+            return service->alive ? STATUS_OK : STATUS_DEAD_OBJECT;
+        });
+    add("libbinder_ndk.so", "AIBinder_incStrong", HVC_BINDER_INC_STRONG,
+        [find_service](guest_t*, const uint64_t a[8]) -> uint64_t {
+            if (BinderService* service = find_service(a[0]))
+                service->ref_count++;
+            return 0;
+        });
+    add("libbinder_ndk.so", "AIBinder_decStrong", HVC_BINDER_DEC_STRONG,
+        [this, find_service, notify_death_unlinked]
+        (guest_t*, const uint64_t a[8]) -> uint64_t {
+            BinderService* service = find_service(a[0]);
+            if (!service)
+                return 0;
+
+            if (service->remote) {
+                if (service->ref_count > 1)
+                    service->ref_count--;
+                return 0;
+            }
+
+            if (service->ref_count > 1) {
+                service->ref_count--;
+                return 0;
+            }
+
+            uint64_t on_destroy = 0;
+            uint64_t user_data = service->user_data;
+            auto class_it = binder_classes_.find(service->class_handle);
+            if (class_it != binder_classes_.end())
+                on_destroy = class_it->second.on_destroy;
+            if (on_destroy && guest_function_invoker_)
+                guest_function_invoker_(on_destroy, { user_data });
+            for (const BinderService::DeathLink& link : service->death_links)
+                notify_death_unlinked(link);
+            binder_services_.erase(a[0]);
+            return 0;
+        });
+    add("libbinder_ndk.so", "AIBinder_debugGetRefCount", HVC_BINDER_REF_COUNT,
+        [find_service](guest_t*, const uint64_t a[8]) -> uint64_t {
+            BinderService* service = find_service(a[0]);
+            if (!a[0])
+                return static_cast<uint64_t>(static_cast<int64_t>(-1));
+            return service ? service->ref_count : 0;
+        });
+    add("libbinder_ndk.so", "AIBinder_getCallingUid", HVC_BINDER_CALLING_UID,
+        [](guest_t*, const uint64_t[8]) -> uint64_t { return 10000; });
+    add("libbinder_ndk.so", "AIBinder_getCallingPid", HVC_BINDER_CALLING_PID,
+        [](guest_t*, const uint64_t[8]) -> uint64_t { return 1; });
+    add("libbinder_ndk.so", "AIBinder_isHandlingTransaction",
+        HVC_BINDER_HANDLING_TX,
+        [](guest_t*, const uint64_t[8]) -> uint64_t { return 0; });
+    add("libbinder_ndk.so", "AIBinder_dump", HVC_BINDER_DUMP,
+        [find_service](guest_t*, const uint64_t a[8]) -> uint64_t {
+            return find_service(a[0]) ? STATUS_OK : STATUS_BAD_VALUE;
+        });
+
+    constexpr int32_t EX_NONE = 0;
+    constexpr int32_t EX_TRANSACTION_FAILED = -129;
+    constexpr uint32_t FLAG_ONEWAY = 0x01;
+    constexpr int32_t MAX_PARCEL_ARRAY_LENGTH = 1024;
+    constexpr int32_t MAX_PARCEL_STRING_LENGTH = 4096;
+
+    auto find_parcel = [this](uint64_t handle) -> BinderParcel* {
+        auto it = binder_parcels_.find(handle);
+        return it == binder_parcels_.end() ? nullptr : &it->second;
+    };
+    auto create_parcel =
+        [this](uint64_t target_binder, uint32_t code, bool reply) -> uint64_t {
+            uint64_t handle = next_binder_parcel_handle_++;
+            binder_parcels_[handle] = { target_binder, code, reply, 0, {} };
+            return handle;
+        };
+    auto create_status =
+        [this](int32_t exception,
+               int32_t service_error,
+               int32_t status,
+               std::string message) -> uint64_t {
+            uint64_t handle = next_binder_status_handle_++;
+            binder_statuses_[handle] = {
+                exception, service_error, status, std::move(message)
+            };
+            return handle;
+        };
+    auto find_status = [this](uint64_t handle) -> BinderStatus* {
+        auto it = binder_statuses_.find(handle);
+        return it == binder_statuses_.end() ? nullptr : &it->second;
+    };
+    auto find_class = [this](uint64_t handle) -> BinderClass* {
+        auto it = binder_classes_.find(handle);
+        return it == binder_classes_.end() ? nullptr : &it->second;
+    };
+    auto remove_death_link =
+        [notify_death_unlinked](BinderService* service,
+                                uint64_t recipient_handle,
+                                uint64_t cookie) -> bool {
+            if (!service)
+                return false;
+            for (auto it = service->death_links.begin();
+                 it != service->death_links.end();
+                 ++it) {
+                if (it->recipient_handle == recipient_handle &&
+                    it->cookie == cookie) {
+                    BinderService::DeathLink link = *it;
+                    service->death_links.erase(it);
+                    notify_death_unlinked(link);
+                    return true;
+                }
+            }
+            return false;
+        };
+    auto remove_recipient_links =
+        [this, notify_death_unlinked](uint64_t recipient_handle) {
+            for (auto& entry : binder_services_) {
+                auto& links = entry.second.death_links;
+                for (auto it = links.begin(); it != links.end();) {
+                    if (it->recipient_handle == recipient_handle) {
+                        BinderService::DeathLink link = *it;
+                        it = links.erase(it);
+                        notify_death_unlinked(link);
+                    } else {
+                        ++it;
+                    }
+                }
+            }
+        };
+    auto alloc_guest = [this](size_t size, size_t align = 16) -> uint64_t {
+        uint64_t mask = static_cast<uint64_t>(align ? align - 1 : 0);
+        uint64_t ptr = (heap_bump_ + mask) & ~mask;
+        size_t aligned_size = (size + static_cast<size_t>(mask)) &
+                              ~static_cast<size_t>(mask);
+        if (ptr + aligned_size > heap_base_ + HEAP_SIZE)
+            return 0;
+        heap_bump_ = ptr + aligned_size;
+        return ptr;
+    };
+    auto alloc_guest_string = [alloc_guest](guest_t* g, const std::string& text) -> uint64_t {
+        size_t size = text.size() + 1;
+        uint64_t ptr = alloc_guest(size);
+        if (!ptr)
+            return 0;
+        guest_write(g, ptr, text.c_str(), size);
+        return ptr;
+    };
+    auto append_value =
+        [find_parcel](uint64_t parcel_handle,
+                      BinderParcelKind kind,
+                      uint64_t value,
+                      std::string text = {}) -> uint64_t {
+            BinderParcel* parcel = find_parcel(parcel_handle);
+            if (!parcel)
+                return STATUS_BAD_VALUE;
+            BinderParcelValue parcel_value;
+            parcel_value.kind = kind;
+            parcel_value.value = value;
+            parcel_value.text = std::move(text);
+            parcel->values.push_back(std::move(parcel_value));
+            parcel->cursor = parcel->values.size();
+            return STATUS_OK;
+        };
+    auto append_parcel_value =
+        [find_parcel](uint64_t parcel_handle,
+                      BinderParcelValue value) -> uint64_t {
+            BinderParcel* parcel = find_parcel(parcel_handle);
+            if (!parcel)
+                return STATUS_BAD_VALUE;
+            parcel->values.push_back(std::move(value));
+            parcel->cursor = parcel->values.size();
+            return STATUS_OK;
+        };
+    auto read_value =
+        [find_parcel](uint64_t parcel_handle,
+                      BinderParcelKind expected,
+                      BinderParcelValue* out) -> uint64_t {
+            BinderParcel* parcel = find_parcel(parcel_handle);
+            if (!parcel)
+                return STATUS_BAD_VALUE;
+            if (parcel->cursor >= parcel->values.size())
+                return STATUS_NOT_ENOUGH_DATA;
+            BinderParcelValue value = parcel->values[parcel->cursor];
+            if (value.kind != expected)
+                return STATUS_BAD_VALUE;
+            parcel->cursor++;
+            if (out)
+                *out = std::move(value);
+            return STATUS_OK;
+        };
+
+    add("libbinder_ndk.so", "AIBinder_DeathRecipient_new",
+        HVC_BINDER_DEATH_NEW,
+        [this](guest_t*, const uint64_t a[8]) -> uint64_t {
+            if (!a[0])
+                return 0;
+            uint64_t handle = next_binder_death_handle_++;
+            binder_death_recipients_[handle] = { a[0], 0 };
+            std::fprintf(stderr,
+                "[Binder] DeathRecipient_new -> 0x%llx onDied=0x%llx\n",
+                (unsigned long long)handle,
+                (unsigned long long)a[0]);
+            return handle;
+        });
+    add("libbinder_ndk.so", "AIBinder_DeathRecipient_setOnUnlinked",
+        HVC_BINDER_DEATH_SET_UNLINK,
+        [find_death_recipient](guest_t*, const uint64_t a[8]) -> uint64_t {
+            if (BinderDeathRecipient* recipient = find_death_recipient(a[0]))
+                recipient->on_unlinked = a[1];
+            return 0;
+        });
+    add("libbinder_ndk.so", "AIBinder_DeathRecipient_delete",
+        HVC_BINDER_DEATH_DELETE,
+        [this, find_death_recipient, remove_recipient_links]
+        (guest_t*, const uint64_t a[8]) -> uint64_t {
+            if (!find_death_recipient(a[0]))
+                return 0;
+            remove_recipient_links(a[0]);
+            binder_death_recipients_.erase(a[0]);
+            std::fprintf(stderr,
+                "[Binder] DeathRecipient_delete 0x%llx\n",
+                (unsigned long long)a[0]);
+            return 0;
+        });
+    add("libbinder_ndk.so", "AIBinder_linkToDeath", HVC_BINDER_LINK_DEATH,
+        [find_service, find_death_recipient, notify_death_unlinked]
+        (guest_t*, const uint64_t a[8]) -> uint64_t {
+            BinderService* service = find_service(a[0]);
+            BinderDeathRecipient* recipient = find_death_recipient(a[1]);
+            if (!service || !recipient)
+                return STATUS_BAD_VALUE;
+
+            BinderService::DeathLink link = {
+                a[1],
+                a[2],
+                recipient->on_unlinked,
+            };
+            if (!service->alive) {
+                notify_death_unlinked(link);
+                return STATUS_DEAD_OBJECT;
+            }
+            if (!service->remote) {
+                notify_death_unlinked(link);
+                return STATUS_INVALID_OPERATION;
+            }
+            for (const BinderService::DeathLink& existing :
+                 service->death_links) {
+                if (existing.recipient_handle == a[1] &&
+                    existing.cookie == a[2]) {
+                    notify_death_unlinked(link);
+                    return STATUS_ALREADY_EXISTS;
+                }
+            }
+
+            service->death_links.push_back(link);
+            std::fprintf(stderr,
+                "[Binder] linkToDeath binder=0x%llx recipient=0x%llx cookie=0x%llx\n",
+                (unsigned long long)a[0],
+                (unsigned long long)a[1],
+                (unsigned long long)a[2]);
+            return STATUS_OK;
+        });
+    add("libbinder_ndk.so", "AIBinder_unlinkToDeath", HVC_BINDER_UNLINK_DEATH,
+        [find_service, find_death_recipient, remove_death_link]
+        (guest_t*, const uint64_t a[8]) -> uint64_t {
+            BinderService* service = find_service(a[0]);
+            if (!service || !find_death_recipient(a[1]))
+                return STATUS_BAD_VALUE;
+            if (remove_death_link(service, a[1], a[2])) {
+                std::fprintf(stderr,
+                    "[Binder] unlinkToDeath binder=0x%llx recipient=0x%llx cookie=0x%llx\n",
+                    (unsigned long long)a[0],
+                    (unsigned long long)a[1],
+                    (unsigned long long)a[2]);
+                return STATUS_OK;
+            }
+            return STATUS_NAME_NOT_FOUND;
+        });
+
+    add("libbinder_ndk.so", "AIBinder_Class_define", HVC_BINDER_CLASS_DEFINE,
+        [this](guest_t* g, const uint64_t a[8]) -> uint64_t {
+            std::string descriptor = guest_read_string(g, a[0]);
+            if (descriptor.empty())
+                return 0;
+
+            uint64_t handle = next_binder_class_handle_++;
+            binder_classes_[handle] = {
+                descriptor,
+                0,
+                a[1],
+                a[2],
+                a[3]
+            };
+            std::fprintf(stderr,
+                "[Binder] Class_define(%s) -> 0x%llx onTransact=0x%llx\n",
+                descriptor.c_str(),
+                (unsigned long long)handle,
+                (unsigned long long)a[3]);
+            return handle;
+        });
+    add("libbinder_ndk.so", "AIBinder_Class_setOnDump",
+        HVC_BINDER_CLASS_SET_DUMP,
+        [](guest_t*, const uint64_t[8]) -> uint64_t { return 0; });
+    add("libbinder_ndk.so", "AIBinder_Class_setTransactionCodeToFunctionNameMap",
+        HVC_BINDER_CLASS_SET_NAMES,
+        [](guest_t*, const uint64_t[8]) -> uint64_t { return 0; });
+    add("libbinder_ndk.so", "AIBinder_Class_getDescriptor",
+        HVC_BINDER_CLASS_GET_NAME,
+        [find_class, alloc_guest_string](guest_t* g, const uint64_t a[8]) -> uint64_t {
+            BinderClass* clazz = find_class(a[0]);
+            if (!clazz)
+                return 0;
+            if (!clazz->descriptor_gpa)
+                clazz->descriptor_gpa = alloc_guest_string(g, clazz->descriptor);
+            return clazz->descriptor_gpa;
+        });
+    add("libbinder_ndk.so", "AIBinder_Class_getFunctionName",
+        HVC_BINDER_CLASS_GET_FN_NAME,
+        [](guest_t*, const uint64_t[8]) -> uint64_t { return 0; });
+
+    add("libbinder_ndk.so", "AIBinder_new", HVC_BINDER_NEW,
+        [this, find_class, make_binder_service]
+        (guest_t*, const uint64_t a[8]) -> uint64_t {
+            BinderClass* clazz = find_class(a[0]);
+            if (!clazz)
+                return 0;
+
+            uint64_t user_data = a[1];
+            if (clazz->on_create && guest_function_invoker_)
+                user_data = static_cast<uint64_t>(
+                    guest_function_invoker_(clazz->on_create, { a[1] }));
+
+            uint64_t handle = next_binder_handle_++;
+            binder_services_[handle] =
+                make_binder_service(clazz->descriptor, 1, true, false,
+                                    a[0], user_data);
+            std::fprintf(stderr,
+                "[Binder] AIBinder_new class=0x%llx -> binder=0x%llx user=0x%llx\n",
+                (unsigned long long)a[0],
+                (unsigned long long)handle,
+                (unsigned long long)user_data);
+            return handle;
+        });
+    add("libbinder_ndk.so", "AIBinder_associateClass", HVC_BINDER_ASSOC_CLASS,
+        [find_service, find_class](guest_t*, const uint64_t a[8]) -> uint64_t {
+            BinderService* service = find_service(a[0]);
+            if (!service || !find_class(a[1]))
+                return 0;
+            service->class_handle = a[1];
+            return 1;
+        });
+    add("libbinder_ndk.so", "AIBinder_getClass", HVC_BINDER_GET_CLASS,
+        [find_service](guest_t*, const uint64_t a[8]) -> uint64_t {
+            BinderService* service = find_service(a[0]);
+            return service ? service->class_handle : 0;
+        });
+    add("libbinder_ndk.so", "AIBinder_getUserData", HVC_BINDER_GET_USER_DATA,
+        [find_service](guest_t*, const uint64_t a[8]) -> uint64_t {
+            BinderService* service = find_service(a[0]);
+            return service ? service->user_data : 0;
+        });
+
+    add("libbinder_ndk.so", "AIBinder_prepareTransaction", HVC_BINDER_PREPARE_TX,
+        [find_service, create_parcel](guest_t* g, const uint64_t a[8]) -> uint64_t {
+            if (!find_service(a[0]) || !a[1])
+                return STATUS_BAD_VALUE;
+            uint64_t parcel = create_parcel(a[0], 0, false);
+            guest_write_u64(g, a[1], parcel);
+            std::fprintf(stderr,
+                "[Binder] prepareTransaction binder=0x%llx parcel=0x%llx\n",
+                (unsigned long long)a[0],
+                (unsigned long long)parcel);
+            return STATUS_OK;
+        });
+
+    add("libbinder_ndk.so", "AIBinder_transact", HVC_BINDER_TRANSACT,
+        [this, find_service, find_parcel, create_parcel]
+        (guest_t* g, const uint64_t a[8]) -> uint64_t {
+            uint64_t binder = a[0];
+            uint32_t code = static_cast<uint32_t>(a[1]);
+            uint64_t in_handle = a[2] ? guest_read_u64(g, a[2]) : 0;
+            uint64_t out_gpa = a[3];
+            uint32_t flags = static_cast<uint32_t>(a[4]);
+
+            BinderService* service = find_service(binder);
+            if (!service)
+                return STATUS_BAD_VALUE;
+            BinderParcel* in = in_handle ? find_parcel(in_handle) : nullptr;
+            if (in_handle && !in)
+                return STATUS_BAD_VALUE;
+
+            uint64_t out_handle = 0;
+            uint64_t status = STATUS_OK;
+
+            if (!service->remote &&
+                service->class_handle &&
+                guest_function_invoker_) {
+                auto class_it = binder_classes_.find(service->class_handle);
+                if (class_it == binder_classes_.end() ||
+                    !class_it->second.on_transact) {
+                    return STATUS_INVALID_OPERATION;
+                }
+
+                if (!(flags & FLAG_ONEWAY) && out_gpa) {
+                    out_handle = create_parcel(binder, code, true);
+                    guest_write_u64(g, out_gpa, out_handle);
+                } else if (out_gpa) {
+                    guest_write_u64(g, out_gpa, 0);
+                }
+
+                if (in)
+                    in->cursor = 0;
+
+                status = static_cast<uint64_t>(guest_function_invoker_(
+                    class_it->second.on_transact,
+                    { binder, code, in_handle, out_handle }));
+
+                if (out_handle)
+                    binder_parcels_[out_handle].cursor = 0;
+
+                if (in_handle) {
+                    binder_parcels_.erase(in_handle);
+                    if (a[2])
+                        guest_write_u64(g, a[2], 0);
+                }
+
+                std::fprintf(stderr,
+                    "[Binder] local transact binder=0x%llx code=%u in=0x%llx out=0x%llx status=%lld\n",
+                    (unsigned long long)binder,
+                    code,
+                    (unsigned long long)in_handle,
+                    (unsigned long long)out_handle,
+                    (long long)static_cast<int64_t>(status));
+                return status;
+            }
+
+            if (!(flags & FLAG_ONEWAY) && out_gpa) {
+                out_handle = create_parcel(binder, code, true);
+                BinderParcel& out = binder_parcels_[out_handle];
+                BinderParcelValue status_value;
+                status_value.kind = BinderParcelKind::Status;
+                out.values.push_back(std::move(status_value));
+
+                bool have_i32 = false;
+                int32_t first_i32 = 0;
+                if (in) {
+                    for (const BinderParcelValue& value : in->values) {
+                        if (value.kind == BinderParcelKind::Int32 ||
+                            value.kind == BinderParcelKind::Uint32) {
+                            first_i32 = static_cast<int32_t>(value.value);
+                            have_i32 = true;
+                            break;
+                        }
+                    }
+                }
+
+                int32_t reply_value = have_i32
+                    ? first_i32 + static_cast<int32_t>(code)
+                    : static_cast<int32_t>(code);
+                BinderParcelValue reply;
+                reply.kind = BinderParcelKind::Int32;
+                reply.value =
+                    static_cast<uint64_t>(static_cast<int64_t>(reply_value));
+                out.values.push_back(std::move(reply));
+                out.cursor = 0;
+                guest_write_u64(g, out_gpa, out_handle);
+            } else if (out_gpa) {
+                guest_write_u64(g, out_gpa, 0);
+            }
+
+            if (in_handle) {
+                binder_parcels_.erase(in_handle);
+                if (a[2])
+                    guest_write_u64(g, a[2], 0);
+            }
+
+            std::fprintf(stderr,
+                "[Binder] transact binder=0x%llx code=%u in=0x%llx out=0x%llx flags=0x%x\n",
+                (unsigned long long)binder,
+                code,
+                (unsigned long long)in_handle,
+                (unsigned long long)out_handle,
+                flags);
+            return STATUS_OK;
+        });
+
+    add("libbinder_ndk.so", "AParcel_delete", HVC_PARCEL_DELETE,
+        [this](guest_t*, const uint64_t a[8]) -> uint64_t {
+            binder_parcels_.erase(a[0]);
+            return 0;
+        });
+    add("libbinder_ndk.so", "AParcel_setDataPosition", HVC_PARCEL_SET_POS,
+        [find_parcel](guest_t*, const uint64_t a[8]) -> uint64_t {
+            BinderParcel* parcel = find_parcel(a[0]);
+            int32_t position = static_cast<int32_t>(a[1]);
+            if (!parcel || position < 0 ||
+                static_cast<size_t>(position) > parcel->values.size()) {
+                return STATUS_BAD_VALUE;
+            }
+            parcel->cursor = static_cast<size_t>(position);
+            return STATUS_OK;
+        });
+    add("libbinder_ndk.so", "AParcel_getDataPosition", HVC_PARCEL_GET_POS,
+        [find_parcel](guest_t*, const uint64_t a[8]) -> uint64_t {
+            BinderParcel* parcel = find_parcel(a[0]);
+            return parcel ? parcel->cursor : 0;
+        });
+
+    add("libbinder_ndk.so", "AParcel_writeStrongBinder", HVC_PARCEL_WRITE_BINDER,
+        [append_value](guest_t*, const uint64_t a[8]) -> uint64_t {
+            return append_value(a[0], BinderParcelKind::StrongBinder, a[1]);
+        });
+    add("libbinder_ndk.so", "AParcel_readStrongBinder", HVC_PARCEL_READ_BINDER,
+        [read_value, find_service](guest_t* g, const uint64_t a[8]) -> uint64_t {
+            BinderParcelValue value;
+            uint64_t rc = read_value(a[0], BinderParcelKind::StrongBinder, &value);
+            if (rc != STATUS_OK)
+                return rc;
+            if (BinderService* service = find_service(value.value))
+                service->ref_count++;
+            if (a[1])
+                guest_write_u64(g, a[1], value.value);
+            return STATUS_OK;
+        });
+    add("libbinder_ndk.so", "AParcel_writeParcelFileDescriptor",
+        HVC_PARCEL_WRITE_FD,
+        [append_value](guest_t*, const uint64_t a[8]) -> uint64_t {
+            int32_t fd = static_cast<int32_t>(a[1]);
+            return append_value(
+                a[0],
+                BinderParcelKind::ParcelFileDescriptor,
+                static_cast<uint64_t>(static_cast<int64_t>(fd)));
+        });
+    add("libbinder_ndk.so", "AParcel_readParcelFileDescriptor",
+        HVC_PARCEL_READ_FD,
+        [read_value](guest_t* g, const uint64_t a[8]) -> uint64_t {
+            if (!a[1])
+                return STATUS_BAD_VALUE;
+
+            BinderParcelValue value;
+            uint64_t rc = read_value(
+                a[0], BinderParcelKind::ParcelFileDescriptor, &value);
+            if (rc == STATUS_OK) {
+                int32_t fd =
+                    static_cast<int32_t>(static_cast<int64_t>(value.value));
+                guest_write_u32(g, a[1], static_cast<uint32_t>(fd));
+            }
+            return rc;
+        });
+    add("libbinder_ndk.so", "AParcel_writeStatusHeader", HVC_PARCEL_WRITE_STATUS,
+        [append_value, find_status](guest_t*, const uint64_t a[8]) -> uint64_t {
+            BinderStatus* status = find_status(a[1]);
+            int32_t low_status = status ? status->status : 0;
+            return append_value(
+                a[0],
+                BinderParcelKind::Status,
+                static_cast<uint64_t>(static_cast<int64_t>(low_status)));
+        });
+    add("libbinder_ndk.so", "AParcel_readStatusHeader", HVC_PARCEL_READ_STATUS,
+        [find_parcel, create_status](guest_t* g, const uint64_t a[8]) -> uint64_t {
+            BinderParcel* parcel = find_parcel(a[0]);
+            if (!parcel || !a[1])
+                return STATUS_BAD_VALUE;
+            int32_t low_status = 0;
+            if (parcel->cursor < parcel->values.size() &&
+                parcel->values[parcel->cursor].kind == BinderParcelKind::Status) {
+                low_status = static_cast<int32_t>(parcel->values[parcel->cursor].value);
+                parcel->cursor++;
+            }
+            int32_t exception = low_status == 0 ? EX_NONE : EX_TRANSACTION_FAILED;
+            uint64_t status_handle = create_status(exception, 0, low_status, {});
+            guest_write_u64(g, a[1], status_handle);
+            return STATUS_OK;
+        });
+    add("libbinder_ndk.so", "AParcel_writeString", HVC_PARCEL_WRITE_STRING,
+        [append_value](guest_t* g, const uint64_t a[8]) -> uint64_t {
+            int32_t length = static_cast<int32_t>(a[2]);
+            if (length < 0)
+                return append_value(a[0], BinderParcelKind::String, 1, {});
+            if (!a[1])
+                return STATUS_BAD_VALUE;
+            size_t size = static_cast<size_t>(std::min<int32_t>(length, 4096));
+            std::string text(size, '\0');
+            if (size > 0 && guest_read(g, a[1], text.data(), size) != 0)
+                return STATUS_BAD_VALUE;
+            return append_value(a[0], BinderParcelKind::String, 0, std::move(text));
+        });
+    add("libbinder_ndk.so", "AParcel_readString", HVC_PARCEL_READ_STRING,
+        [read_value, alloc_guest, this](guest_t* g, const uint64_t a[8]) -> uint64_t {
+            if (!a[2] || !guest_function_invoker_)
+                return STATUS_BAD_VALUE;
+
+            BinderParcelValue value;
+            uint64_t rc = read_value(a[0], BinderParcelKind::String, &value);
+            if (rc != STATUS_OK)
+                return rc;
+
+            bool is_null = value.value != 0;
+            int32_t length = is_null
+                ? -1
+                : static_cast<int32_t>(std::min<size_t>(
+                      value.text.size() + 1,
+                      static_cast<size_t>(INT32_MAX)));
+            uint64_t out_buffer_gpa = alloc_guest(sizeof(uint64_t), alignof(uint64_t));
+            if (!out_buffer_gpa)
+                return STATUS_NO_MEMORY;
+            guest_write_u64(g, out_buffer_gpa, 0);
+
+            int64_t ok = guest_function_invoker_(
+                a[2],
+                {
+                    a[1],
+                    static_cast<uint64_t>(static_cast<int64_t>(length)),
+                    out_buffer_gpa,
+                });
+            if (!ok)
+                return STATUS_NO_MEMORY;
+
+            uint64_t buffer_gpa = guest_read_u64(g, out_buffer_gpa);
+            if (!is_null) {
+                if (!buffer_gpa)
+                    return STATUS_NO_MEMORY;
+                if (guest_write(g, buffer_gpa, value.text.c_str(), value.text.size()) != 0)
+                    return STATUS_BAD_VALUE;
+                char nul = '\0';
+                if (guest_write(g, buffer_gpa + value.text.size(), &nul, sizeof(nul)) != 0)
+                    return STATUS_BAD_VALUE;
+            }
+
+            std::fprintf(stderr,
+                "[Binder] readString parcel=0x%llx len=%d buffer=0x%llx\n",
+                (unsigned long long)a[0],
+                length,
+                (unsigned long long)buffer_gpa);
+            return STATUS_OK;
+        });
+    add("libbinder_ndk.so", "AParcel_writeStringArray",
+        HVC_PARCEL_WRITE_STRING_ARRAY,
+        [append_parcel_value, alloc_guest, this](guest_t* g, const uint64_t a[8]) -> uint64_t {
+            int32_t length = static_cast<int32_t>(a[2]);
+            if (length < -1 || length > MAX_PARCEL_ARRAY_LENGTH)
+                return STATUS_BAD_VALUE;
+
+            BinderParcelValue value;
+            value.kind = BinderParcelKind::StringArray;
+            if (length < 0) {
+                value.value = 1;
+                return append_parcel_value(a[0], std::move(value));
+            }
+            if (length == 0)
+                return append_parcel_value(a[0], std::move(value));
+            if (!a[3] || !guest_function_invoker_)
+                return STATUS_BAD_VALUE;
+
+            uint64_t out_length_gpa = alloc_guest(sizeof(uint32_t), alignof(uint32_t));
+            if (!out_length_gpa)
+                return STATUS_NO_MEMORY;
+
+            value.elements.reserve(static_cast<size_t>(length));
+            value.strings.reserve(static_cast<size_t>(length));
+            for (int32_t i = 0; i < length; ++i) {
+                guest_write_u32(g, out_length_gpa, 0);
+                int64_t buffer_gpa = guest_function_invoker_(
+                    a[3],
+                    {
+                        a[1],
+                        static_cast<uint64_t>(static_cast<size_t>(i)),
+                        out_length_gpa,
+                    });
+                int32_t element_length =
+                    static_cast<int32_t>(guest_read_u32(g, out_length_gpa));
+                if (element_length == -1) {
+                    value.elements.push_back(1);
+                    value.strings.emplace_back();
+                    continue;
+                }
+                if (element_length < 0 || element_length > MAX_PARCEL_STRING_LENGTH)
+                    return STATUS_BAD_VALUE;
+                if (element_length > 0 && buffer_gpa == 0)
+                    return STATUS_BAD_VALUE;
+
+                std::string text(static_cast<size_t>(element_length), '\0');
+                if (element_length > 0 &&
+                    guest_read(g,
+                               static_cast<uint64_t>(buffer_gpa),
+                               text.data(),
+                               text.size()) != 0) {
+                    return STATUS_BAD_VALUE;
+                }
+                value.elements.push_back(0);
+                value.strings.push_back(std::move(text));
+            }
+
+            return append_parcel_value(a[0], std::move(value));
+        });
+    add("libbinder_ndk.so", "AParcel_readStringArray",
+        HVC_PARCEL_READ_STRING_ARRAY,
+        [read_value, alloc_guest, this](guest_t* g, const uint64_t a[8]) -> uint64_t {
+            if (!a[2] || !a[3] || !guest_function_invoker_)
+                return STATUS_BAD_VALUE;
+
+            BinderParcelValue value;
+            uint64_t rc = read_value(a[0], BinderParcelKind::StringArray, &value);
+            if (rc != STATUS_OK)
+                return rc;
+
+            bool is_null = value.value != 0;
+            int32_t length = is_null
+                ? -1
+                : static_cast<int32_t>(std::min<size_t>(
+                      value.strings.size(),
+                      static_cast<size_t>(INT32_MAX)));
+            int64_t array_ok = guest_function_invoker_(
+                a[2],
+                {
+                    a[1],
+                    static_cast<uint64_t>(static_cast<int64_t>(length)),
+                });
+            if (!array_ok)
+                return STATUS_NO_MEMORY;
+            if (is_null)
+                return STATUS_OK;
+
+            uint64_t out_buffer_gpa = alloc_guest(sizeof(uint64_t), alignof(uint64_t));
+            if (!out_buffer_gpa)
+                return STATUS_NO_MEMORY;
+
+            for (int32_t i = 0; i < length; ++i) {
+                bool element_null =
+                    i < static_cast<int32_t>(value.elements.size()) &&
+                    value.elements[static_cast<size_t>(i)] != 0;
+                int32_t element_length = element_null
+                    ? -1
+                    : static_cast<int32_t>(std::min<size_t>(
+                          value.strings[static_cast<size_t>(i)].size() + 1,
+                          static_cast<size_t>(INT32_MAX)));
+                guest_write_u64(g, out_buffer_gpa, 0);
+                int64_t element_ok = guest_function_invoker_(
+                    a[3],
+                    {
+                        a[1],
+                        static_cast<uint64_t>(static_cast<size_t>(i)),
+                        static_cast<uint64_t>(static_cast<int64_t>(element_length)),
+                        out_buffer_gpa,
+                    });
+                if (!element_ok)
+                    return STATUS_NO_MEMORY;
+                if (element_null)
+                    continue;
+
+                uint64_t buffer_gpa = guest_read_u64(g, out_buffer_gpa);
+                if (!buffer_gpa)
+                    return STATUS_NO_MEMORY;
+                const std::string& text = value.strings[static_cast<size_t>(i)];
+                if (!text.empty() &&
+                    guest_write(g, buffer_gpa, text.data(), text.size()) != 0) {
+                    return STATUS_BAD_VALUE;
+                }
+                char nul = '\0';
+                if (guest_write(g, buffer_gpa + text.size(), &nul, sizeof(nul)) != 0)
+                    return STATUS_BAD_VALUE;
+            }
+
+            std::fprintf(stderr,
+                "[Binder] readStringArray parcel=0x%llx len=%d\n",
+                (unsigned long long)a[0],
+                length);
+            return STATUS_OK;
+        });
+    add("libbinder_ndk.so", "AParcel_writeParcelableArray",
+        HVC_PARCEL_WRITE_PARCELABLE_ARRAY,
+        [append_parcel_value, this](guest_t*, const uint64_t a[8]) -> uint64_t {
+            int32_t length = static_cast<int32_t>(a[2]);
+            if (length < -1 || length > MAX_PARCEL_ARRAY_LENGTH)
+                return STATUS_BAD_VALUE;
+
+            BinderParcelValue marker;
+            marker.kind = BinderParcelKind::ParcelableArray;
+            if (length < 0) {
+                marker.value = 1;
+                return append_parcel_value(a[0], std::move(marker));
+            }
+            if (length > 0 && (!a[3] || !guest_function_invoker_))
+                return STATUS_BAD_VALUE;
+
+            marker.elements.resize(static_cast<size_t>(length));
+            uint64_t rc = append_parcel_value(a[0], std::move(marker));
+            if (rc != STATUS_OK)
+                return rc;
+            if (length == 0)
+                return STATUS_OK;
+
+            for (int32_t i = 0; i < length; ++i) {
+                int64_t element_status = guest_function_invoker_(
+                    a[3],
+                    {
+                        a[0],
+                        a[1],
+                        static_cast<uint64_t>(static_cast<size_t>(i)),
+                    });
+                if (element_status != static_cast<int64_t>(STATUS_OK))
+                    return static_cast<uint64_t>(element_status);
+            }
+
+            std::fprintf(stderr,
+                "[Binder] writeParcelableArray parcel=0x%llx len=%d\n",
+                (unsigned long long)a[0],
+                length);
+            return STATUS_OK;
+        });
+    add("libbinder_ndk.so", "AParcel_readParcelableArray",
+        HVC_PARCEL_READ_PARCELABLE_ARRAY,
+        [read_value, this](guest_t*, const uint64_t a[8]) -> uint64_t {
+            if (!a[2] || !a[3] || !guest_function_invoker_)
+                return STATUS_BAD_VALUE;
+
+            BinderParcelValue marker;
+            uint64_t rc = read_value(a[0], BinderParcelKind::ParcelableArray,
+                                     &marker);
+            if (rc != STATUS_OK)
+                return rc;
+
+            bool is_null = marker.value != 0;
+            int32_t length = is_null
+                ? -1
+                : static_cast<int32_t>(std::min<size_t>(
+                      marker.elements.size(),
+                      static_cast<size_t>(INT32_MAX)));
+            int64_t array_ok = guest_function_invoker_(
+                a[2],
+                {
+                    a[1],
+                    static_cast<uint64_t>(static_cast<int64_t>(length)),
+                });
+            if (!array_ok)
+                return STATUS_NO_MEMORY;
+            if (is_null)
+                return STATUS_OK;
+
+            for (int32_t i = 0; i < length; ++i) {
+                int64_t element_status = guest_function_invoker_(
+                    a[3],
+                    {
+                        a[0],
+                        a[1],
+                        static_cast<uint64_t>(static_cast<size_t>(i)),
+                    });
+                if (element_status != static_cast<int64_t>(STATUS_OK))
+                    return static_cast<uint64_t>(element_status);
+            }
+
+            std::fprintf(stderr,
+                "[Binder] readParcelableArray parcel=0x%llx len=%d\n",
+                (unsigned long long)a[0],
+                length);
+            return STATUS_OK;
+        });
+
+    add("libbinder_ndk.so", "AParcel_writeInt32", HVC_PARCEL_WRITE_I32,
+        [append_value](guest_t*, const uint64_t a[8]) -> uint64_t {
+            return append_value(a[0], BinderParcelKind::Int32,
+                static_cast<uint64_t>(static_cast<int64_t>(static_cast<int32_t>(a[1]))));
+        });
+    add("libbinder_ndk.so", "AParcel_writeUint32", HVC_PARCEL_WRITE_U32,
+        [append_value](guest_t*, const uint64_t a[8]) -> uint64_t {
+            return append_value(a[0], BinderParcelKind::Uint32,
+                static_cast<uint32_t>(a[1]));
+        });
+    add("libbinder_ndk.so", "AParcel_writeInt64", HVC_PARCEL_WRITE_I64,
+        [append_value](guest_t*, const uint64_t a[8]) -> uint64_t {
+            return append_value(a[0], BinderParcelKind::Int64, a[1]);
+        });
+    add("libbinder_ndk.so", "AParcel_writeUint64", HVC_PARCEL_WRITE_U64,
+        [append_value](guest_t*, const uint64_t a[8]) -> uint64_t {
+            return append_value(a[0], BinderParcelKind::Uint64, a[1]);
+        });
+    add("libbinder_ndk.so", "AParcel_writeFloat", HVC_PARCEL_WRITE_FLOAT,
+        [append_value](guest_t*, const uint64_t a[8]) -> uint64_t {
+            return append_value(a[0], BinderParcelKind::Float,
+                static_cast<uint32_t>(a[1]));
+        });
+    add("libbinder_ndk.so", "AParcel_writeDouble", HVC_PARCEL_WRITE_DOUBLE,
+        [append_value](guest_t*, const uint64_t a[8]) -> uint64_t {
+            return append_value(a[0], BinderParcelKind::Double, a[1]);
+        });
+    add("libbinder_ndk.so", "AParcel_writeBool", HVC_PARCEL_WRITE_BOOL,
+        [append_value](guest_t*, const uint64_t a[8]) -> uint64_t {
+            return append_value(a[0], BinderParcelKind::Bool, a[1] ? 1 : 0);
+        });
+    add("libbinder_ndk.so", "AParcel_writeChar", HVC_PARCEL_WRITE_CHAR,
+        [append_value](guest_t*, const uint64_t a[8]) -> uint64_t {
+            return append_value(a[0], BinderParcelKind::Char,
+                static_cast<uint16_t>(a[1]));
+        });
+    add("libbinder_ndk.so", "AParcel_writeByte", HVC_PARCEL_WRITE_BYTE,
+        [append_value](guest_t*, const uint64_t a[8]) -> uint64_t {
+            return append_value(a[0], BinderParcelKind::Byte,
+                static_cast<uint8_t>(a[1]));
+        });
+    add("libbinder_ndk.so", "AParcel_writeInt32Array",
+        HVC_PARCEL_WRITE_I32_ARRAY,
+        [append_parcel_value](guest_t* g, const uint64_t a[8]) -> uint64_t {
+            int32_t length = static_cast<int32_t>(a[2]);
+            if (length < -1 || length > MAX_PARCEL_ARRAY_LENGTH)
+                return STATUS_BAD_VALUE;
+
+            BinderParcelValue value;
+            value.kind = BinderParcelKind::Int32Array;
+            if (length < 0) {
+                value.value = 1;
+                return append_parcel_value(a[0], std::move(value));
+            }
+            if (length > 0 && !a[1])
+                return STATUS_BAD_VALUE;
+
+            value.elements.reserve(static_cast<size_t>(length));
+            for (int32_t i = 0; i < length; ++i) {
+                int32_t item =
+                    static_cast<int32_t>(guest_read_u32(
+                        g, a[1] + static_cast<uint64_t>(i) * sizeof(uint32_t)));
+                value.elements.push_back(
+                    static_cast<uint64_t>(static_cast<int64_t>(item)));
+            }
+            return append_parcel_value(a[0], std::move(value));
+        });
+
+    add("libbinder_ndk.so", "AParcel_readInt32", HVC_PARCEL_READ_I32,
+        [read_value](guest_t* g, const uint64_t a[8]) -> uint64_t {
+            BinderParcelValue value;
+            uint64_t rc = read_value(a[0], BinderParcelKind::Int32, &value);
+            if (rc == STATUS_OK && a[1])
+                guest_write_u32(g, a[1], static_cast<uint32_t>(value.value));
+            return rc;
+        });
+    add("libbinder_ndk.so", "AParcel_readUint32", HVC_PARCEL_READ_U32,
+        [read_value](guest_t* g, const uint64_t a[8]) -> uint64_t {
+            BinderParcelValue value;
+            uint64_t rc = read_value(a[0], BinderParcelKind::Uint32, &value);
+            if (rc == STATUS_OK && a[1])
+                guest_write_u32(g, a[1], static_cast<uint32_t>(value.value));
+            return rc;
+        });
+    add("libbinder_ndk.so", "AParcel_readInt64", HVC_PARCEL_READ_I64,
+        [read_value](guest_t* g, const uint64_t a[8]) -> uint64_t {
+            BinderParcelValue value;
+            uint64_t rc = read_value(a[0], BinderParcelKind::Int64, &value);
+            if (rc == STATUS_OK && a[1])
+                guest_write_u64(g, a[1], value.value);
+            return rc;
+        });
+    add("libbinder_ndk.so", "AParcel_readUint64", HVC_PARCEL_READ_U64,
+        [read_value](guest_t* g, const uint64_t a[8]) -> uint64_t {
+            BinderParcelValue value;
+            uint64_t rc = read_value(a[0], BinderParcelKind::Uint64, &value);
+            if (rc == STATUS_OK && a[1])
+                guest_write_u64(g, a[1], value.value);
+            return rc;
+        });
+    add("libbinder_ndk.so", "AParcel_readFloat", HVC_PARCEL_READ_FLOAT,
+        [read_value](guest_t* g, const uint64_t a[8]) -> uint64_t {
+            BinderParcelValue value;
+            uint64_t rc = read_value(a[0], BinderParcelKind::Float, &value);
+            if (rc == STATUS_OK && a[1]) {
+                uint32_t bits = static_cast<uint32_t>(value.value);
+                guest_write(g, a[1], &bits, sizeof(bits));
+            }
+            return rc;
+        });
+    add("libbinder_ndk.so", "AParcel_readDouble", HVC_PARCEL_READ_DOUBLE,
+        [read_value](guest_t* g, const uint64_t a[8]) -> uint64_t {
+            BinderParcelValue value;
+            uint64_t rc = read_value(a[0], BinderParcelKind::Double, &value);
+            if (rc == STATUS_OK && a[1])
+                guest_write_u64(g, a[1], value.value);
+            return rc;
+        });
+    add("libbinder_ndk.so", "AParcel_readBool", HVC_PARCEL_READ_BOOL,
+        [read_value](guest_t* g, const uint64_t a[8]) -> uint64_t {
+            BinderParcelValue value;
+            uint64_t rc = read_value(a[0], BinderParcelKind::Bool, &value);
+            if (rc == STATUS_OK && a[1]) {
+                uint8_t b = value.value ? 1 : 0;
+                guest_write(g, a[1], &b, sizeof(b));
+            }
+            return rc;
+        });
+    add("libbinder_ndk.so", "AParcel_readChar", HVC_PARCEL_READ_CHAR,
+        [read_value](guest_t* g, const uint64_t a[8]) -> uint64_t {
+            BinderParcelValue value;
+            uint64_t rc = read_value(a[0], BinderParcelKind::Char, &value);
+            if (rc == STATUS_OK && a[1]) {
+                uint16_t ch = static_cast<uint16_t>(value.value);
+                guest_write(g, a[1], &ch, sizeof(ch));
+            }
+            return rc;
+        });
+    add("libbinder_ndk.so", "AParcel_readByte", HVC_PARCEL_READ_BYTE,
+        [read_value](guest_t* g, const uint64_t a[8]) -> uint64_t {
+            BinderParcelValue value;
+            uint64_t rc = read_value(a[0], BinderParcelKind::Byte, &value);
+            if (rc == STATUS_OK && a[1]) {
+                uint8_t b = static_cast<uint8_t>(value.value);
+                guest_write(g, a[1], &b, sizeof(b));
+            }
+            return rc;
+        });
+    add("libbinder_ndk.so", "AParcel_readInt32Array",
+        HVC_PARCEL_READ_I32_ARRAY,
+        [read_value, alloc_guest, this](guest_t* g, const uint64_t a[8]) -> uint64_t {
+            if (!a[2] || !guest_function_invoker_)
+                return STATUS_BAD_VALUE;
+
+            BinderParcelValue value;
+            uint64_t rc = read_value(a[0], BinderParcelKind::Int32Array, &value);
+            if (rc != STATUS_OK)
+                return rc;
+
+            bool is_null = value.value != 0;
+            int32_t length = is_null
+                ? -1
+                : static_cast<int32_t>(std::min<size_t>(
+                      value.elements.size(),
+                      static_cast<size_t>(INT32_MAX)));
+            uint64_t out_buffer_gpa = alloc_guest(sizeof(uint64_t), alignof(uint64_t));
+            if (!out_buffer_gpa)
+                return STATUS_NO_MEMORY;
+            guest_write_u64(g, out_buffer_gpa, 0);
+
+            int64_t ok = guest_function_invoker_(
+                a[2],
+                {
+                    a[1],
+                    static_cast<uint64_t>(static_cast<int64_t>(length)),
+                    out_buffer_gpa,
+                });
+            if (!ok)
+                return STATUS_NO_MEMORY;
+            if (is_null || length == 0)
+                return STATUS_OK;
+
+            uint64_t buffer_gpa = guest_read_u64(g, out_buffer_gpa);
+            if (!buffer_gpa)
+                return STATUS_NO_MEMORY;
+            for (int32_t i = 0; i < length; ++i) {
+                uint32_t item = static_cast<uint32_t>(
+                    static_cast<int32_t>(
+                        static_cast<int64_t>(value.elements[static_cast<size_t>(i)])));
+                guest_write_u32(
+                    g,
+                    buffer_gpa + static_cast<uint64_t>(i) * sizeof(uint32_t),
+                    item);
+            }
+
+            std::fprintf(stderr,
+                "[Binder] readInt32Array parcel=0x%llx len=%d\n",
+                (unsigned long long)a[0],
+                length);
+            return STATUS_OK;
+        });
+
+    add("libbinder_ndk.so", "AStatus_newOk", HVC_STATUS_NEW_OK,
+        [create_status](guest_t*, const uint64_t[8]) -> uint64_t {
+            return create_status(EX_NONE, 0, 0, {});
+        });
+    add("libbinder_ndk.so", "AStatus_fromStatus", HVC_STATUS_FROM_STATUS,
+        [create_status](guest_t*, const uint64_t a[8]) -> uint64_t {
+            int32_t status = static_cast<int32_t>(a[0]);
+            int32_t exception = status == 0 ? EX_NONE : EX_TRANSACTION_FAILED;
+            return create_status(exception, 0, status, {});
+        });
+    add("libbinder_ndk.so", "AStatus_isOk", HVC_STATUS_IS_OK,
+        [find_status](guest_t*, const uint64_t a[8]) -> uint64_t {
+            BinderStatus* status = find_status(a[0]);
+            return status && status->exception == 0 && status->status == 0 ? 1 : 0;
+        });
+    add("libbinder_ndk.so", "AStatus_getExceptionCode", HVC_STATUS_EXCEPTION,
+        [find_status](guest_t*, const uint64_t a[8]) -> uint64_t {
+            BinderStatus* status = find_status(a[0]);
+            return status ? static_cast<uint64_t>(static_cast<int64_t>(status->exception))
+                          : static_cast<uint64_t>(static_cast<int64_t>(EX_TRANSACTION_FAILED));
+        });
+    add("libbinder_ndk.so", "AStatus_getServiceSpecificError",
+        HVC_STATUS_SERVICE_ERR,
+        [find_status](guest_t*, const uint64_t a[8]) -> uint64_t {
+            BinderStatus* status = find_status(a[0]);
+            return status ? static_cast<uint64_t>(static_cast<int64_t>(status->service_error))
+                          : 0;
+        });
+    add("libbinder_ndk.so", "AStatus_getStatus", HVC_STATUS_STATUS,
+        [find_status](guest_t*, const uint64_t a[8]) -> uint64_t {
+            BinderStatus* status = find_status(a[0]);
+            return status ? static_cast<uint64_t>(static_cast<int64_t>(status->status))
+                          : STATUS_BAD_VALUE;
+        });
+    add("libbinder_ndk.so", "AStatus_getMessage", HVC_STATUS_MESSAGE,
+        [this, find_status](guest_t* g, const uint64_t a[8]) -> uint64_t {
+            BinderStatus* status = find_status(a[0]);
+            if (!status)
+                return 0;
+            std::string message = status->message;
+            size_t size = message.size() + 1;
+            size_t aligned = (size + 15) & ~15ULL;
+            if (heap_bump_ + aligned > heap_base_ + HEAP_SIZE)
+                return 0;
+            uint64_t ptr = heap_bump_;
+            heap_bump_ += aligned;
+            guest_write(g, ptr, message.c_str(), size);
+            return ptr;
+        });
+    add("libbinder_ndk.so", "AStatus_delete", HVC_STATUS_DELETE,
+        [this](guest_t*, const uint64_t a[8]) -> uint64_t {
+            binder_statuses_.erase(a[0]);
+            return 0;
+        });
 }
 
 // ── libEGL stubs ──────────────────────────────────────────────────────────────

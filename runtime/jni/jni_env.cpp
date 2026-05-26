@@ -4,6 +4,7 @@
 #include <cstdio>
 #include <cstring>
 #include <stdexcept>
+#include <utility>
 
 namespace muplar::runtime::jni {
 
@@ -26,6 +27,8 @@ static constexpr uint32_t JNI_ReleaseByteArrayElements = 0x100C;
 static constexpr uint32_t JNI_ExceptionCheck         = 0x100D;
 static constexpr uint32_t JNI_ExceptionClear         = 0x100E;
 static constexpr uint32_t JNI_DeleteLocalRef         = 0x100F;
+static constexpr uint32_t JNI_GetObjectClass         = 0x1010;
+static constexpr uint32_t JNI_CallObjectMethod       = 0x1011;
 
 // ────────────────────────────────────────────────────────────────────────────
 JniEnv::JniEnv() = default;
@@ -50,6 +53,8 @@ uint64_t JniEnv::dispatch(uint32_t call_nr, const uint64_t args[8])
     case JNI_ExceptionCheck:         return jni_ExceptionCheck(args);
     case JNI_ExceptionClear:         return jni_ExceptionClear(args);
     case JNI_DeleteLocalRef:         return jni_DeleteLocalRef(args);
+    case JNI_GetObjectClass:         return jni_GetObjectClass(args);
+    case JNI_CallObjectMethod:       return jni_CallObjectMethod(args);
     default:
         std::fprintf(stderr, "[JNI] Unknown call 0x%X\n", call_nr);
         return static_cast<uint64_t>(-1);
@@ -72,7 +77,9 @@ uint64_t JniEnv::dispatch(uint32_t call_nr, const uint64_t args[8])
 //   slot 6  : FindClass         stub GPA
 //   slot 17 : ExceptionClear    stub GPA
 //   slot 23 : DeleteLocalRef    stub GPA
+//   slot 31 : GetObjectClass    stub GPA
 //   slot 33 : GetMethodID       stub GPA
+//   slot 34 : CallObjectMethod  stub GPA
 //   slot 49 : CallIntMethod     stub GPA
 //   slot 61 : CallVoidMethod    stub GPA
 //   slot 167: NewStringUTF      stub GPA
@@ -126,7 +133,9 @@ JniEnv::install_entries(uint64_t stub_base_gpa) const
         {  6, stub(JNI_FindClass)               },
         { 17, stub(JNI_ExceptionClear)          },
         { 23, stub(JNI_DeleteLocalRef)          },
+        { 31, stub(JNI_GetObjectClass)          },
         { 33, stub(JNI_GetMethodID)             },
+        { 34, stub(JNI_CallObjectMethod)        },
         { 49, stub(JNI_CallIntMethod)           },
         { 61, stub(JNI_CallVoidMethod)          },
         {167, stub(JNI_NewStringUTF)            },
@@ -158,6 +167,36 @@ jclass JniEnv::find_class(const std::string& descriptor)
 {
     auto it = class_by_desc_.find(descriptor);
     return (it != class_by_desc_.end()) ? it->second : JNI_NULL;
+}
+
+jobject JniEnv::register_object(const std::string& class_descriptor)
+{
+    register_class(class_descriptor);
+    uint64_t cls = find_class(class_descriptor);
+    uint64_t obj = alloc_handle();
+    objects_[obj] = { cls };
+    return obj;
+}
+
+void JniEnv::set_app_context(std::string package_name,
+                             std::string package_code_path)
+{
+    if (!package_name.empty())
+        package_name_ = std::move(package_name);
+    package_code_path_ = std::move(package_code_path);
+}
+
+uint64_t JniEnv::make_string(const std::string& value)
+{
+    uint64_t h = alloc_handle();
+    strings_[h] = value;
+    return h;
+}
+
+const std::string* JniEnv::get_string(uint64_t handle) const
+{
+    auto it = strings_.find(handle);
+    return it == strings_.end() ? nullptr : &it->second;
 }
 
 // ────────────────────────────────────────────────────────────────────────────
@@ -317,6 +356,46 @@ uint64_t JniEnv::jni_CallIntMethod(const uint64_t* a)
     return 0;
 }
 
+uint64_t JniEnv::jni_GetObjectClass(const uint64_t* a)
+{
+    uint64_t obj = a[1];
+    auto oit = objects_.find(obj);
+    if (oit == objects_.end()) {
+        std::fprintf(stderr, "[JNI] GetObjectClass: unknown object 0x%llx\n",
+                     (unsigned long long)obj);
+        pending_exception_ = true;
+        return JNI_NULL;
+    }
+    return oit->second.class_handle;
+}
+
+uint64_t JniEnv::jni_CallObjectMethod(const uint64_t* a)
+{
+    uint64_t mid = a[2];
+    auto mit = methods_.find(mid);
+    if (mit == methods_.end()) {
+        std::fprintf(stderr, "[JNI] CallObjectMethod: unknown methodID\n");
+        pending_exception_ = true;
+        return JNI_NULL;
+    }
+
+    const MethodEntry& method = mit->second;
+    if (method.name == "getPackageName" &&
+        method.sig == "()Ljava/lang/String;") {
+        return make_string(package_name_);
+    }
+    if ((method.name == "getPackageCodePath" ||
+         method.name == "getPackageResourcePath") &&
+        method.sig == "()Ljava/lang/String;") {
+        return make_string(package_code_path_);
+    }
+
+    std::fprintf(stderr, "[JNI] CallObjectMethod: unsupported %s%s\n",
+                 method.name.c_str(), method.sig.c_str());
+    pending_exception_ = true;
+    return JNI_NULL;
+}
+
 // args[1] = GPA of null-terminated UTF-8 string
 uint64_t JniEnv::jni_NewStringUTF(const uint64_t* a)
 {
@@ -327,9 +406,7 @@ uint64_t JniEnv::jni_NewStringUTF(const uint64_t* a)
     if (!strings_.count(str_gpa)) {
         strings_[str_gpa] = "(unresolved)";
     }
-    uint64_t h = alloc_handle();
-    strings_[h] = strings_[str_gpa];
-    return h;
+    return make_string(strings_[str_gpa]);
 }
 
 void JniEnv::intern_string(uint64_t gpa, const std::string& value)
