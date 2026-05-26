@@ -215,7 +215,9 @@ static void write_guest_string(guest_t* g, uint64_t gpa, const char* value)
 static uint64_t prepare_native_activity(guest_t* g,
                                         const jni::JniOnLoad& jni_onload,
                                         uint64_t scratch_gpa,
-                                        uint64_t asset_manager_gpa)
+                                        uint64_t asset_manager_gpa,
+                                        uint64_t activity_object,
+                                        const std::string& package_name)
 {
     constexpr uint64_t kActivitySize = 0x80;
     constexpr uint64_t kCallbacksSize = 16 * 8;
@@ -223,15 +225,20 @@ static uint64_t prepare_native_activity(guest_t* g,
     uint64_t activity_gpa = scratch_gpa;
     uint64_t callbacks_gpa = scratch_gpa + 0x100;
     uint64_t internal_path_gpa = scratch_gpa + 0x200;
-    uint64_t external_path_gpa = scratch_gpa + 0x240;
-    uint64_t obb_path_gpa = scratch_gpa + 0x280;
+    uint64_t external_path_gpa = scratch_gpa + 0x300;
+    uint64_t obb_path_gpa = scratch_gpa + 0x400;
 
-    std::vector<uint8_t> zeroes(0x300, 0);
+    std::vector<uint8_t> zeroes(0x500, 0);
     guest_write(g, scratch_gpa, zeroes.data(), zeroes.size());
 
-    write_guest_string(g, internal_path_gpa, "/data/data/muplar");
-    write_guest_string(g, external_path_gpa, "/sdcard/Android/data/muplar");
-    write_guest_string(g, obb_path_gpa, "/sdcard/Android/obb/muplar");
+    std::string package = package_name.empty() ? "muplar" : package_name;
+    std::string internal_path = "/data/data/" + package;
+    std::string external_path = "/sdcard/Android/data/" + package + "/files";
+    std::string obb_path = "/sdcard/Android/obb/" + package;
+
+    write_guest_string(g, internal_path_gpa, internal_path.c_str());
+    write_guest_string(g, external_path_gpa, external_path.c_str());
+    write_guest_string(g, obb_path_gpa, obb_path.c_str());
 
     // NDK ANativeActivity layout on arm64:
     // callbacks, vm, env, clazz, internalDataPath, externalDataPath,
@@ -239,7 +246,7 @@ static uint64_t prepare_native_activity(guest_t* g,
     write_guest_u64(g, activity_gpa + 0x00, callbacks_gpa);
     write_guest_u64(g, activity_gpa + 0x08, jni_onload.java_vm_ptr_gpa());
     write_guest_u64(g, activity_gpa + 0x10, jni_onload.jni_env_ptr_gpa());
-    write_guest_u64(g, activity_gpa + 0x18, 0x70000002ULL);
+    write_guest_u64(g, activity_gpa + 0x18, activity_object);
     write_guest_u64(g, activity_gpa + 0x20, internal_path_gpa);
     write_guest_u64(g, activity_gpa + 0x28, external_path_gpa);
     write_guest_i32(g, activity_gpa + 0x30, 35);
@@ -250,9 +257,10 @@ static uint64_t prepare_native_activity(guest_t* g,
     (void)kActivitySize;
     (void)kCallbacksSize;
     std::fprintf(stderr,
-        "[Muplar] prepared ANativeActivity at GPA 0x%llx callbacks=0x%llx\n",
+        "[Muplar] prepared ANativeActivity at GPA 0x%llx callbacks=0x%llx package=%s\n",
         (unsigned long long)activity_gpa,
-        (unsigned long long)callbacks_gpa);
+        (unsigned long long)callbacks_gpa,
+        package.c_str());
     return activity_gpa;
 }
 
@@ -874,6 +882,13 @@ int GuestRunner::run(const GuestRunnerConfig& cfg)
     uint64_t java_vm_gpa       = g.shim_data_base + 0x003000;
 
     jni::JniEnv    jni_env;
+    std::string package_name = cfg.package_name.empty()
+        ? "muplar"
+        : cfg.package_name;
+    jni_env.set_app_context(package_name, cfg.package_code_path);
+    uint64_t activity_object =
+        jni_env.register_object("android/app/NativeActivity");
+
     jni::JniBridge jni_bridge(&g, &jni_env, jni_table_gpa, jni_stubs_gpa);
     jni_bridge.install();
 
@@ -1003,6 +1018,12 @@ int GuestRunner::run(const GuestRunnerConfig& cfg)
                                     guest_t* gst) {
             return vcpu_run_loop(v, ve, gst, cfg.verbose, cfg.timeout_sec);
         };
+
+        art.set_guest_function_invoker(
+            [&](uint64_t fn, const std::vector<uint64_t>& args) -> int64_t {
+                return jni_onload.call_guest_function(
+                    fn, args, vcpu, vexit, run_current_vcpu);
+            });
 
         struct VcpuContext {
             std::array<uint64_t, 31> x{};
@@ -1311,7 +1332,8 @@ int GuestRunner::run(const GuestRunnerConfig& cfg)
                 } else {
                     uint64_t activity = prepare_native_activity(
                         &g, jni_onload, g.shim_data_base + 0x004000,
-                        art.asset_manager_handle());
+                        art.asset_manager_handle(), activity_object,
+                        package_name);
 
                     call_guest_and_drain(on_create, { activity, 0, 0 },
                                          true, false);

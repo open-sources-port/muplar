@@ -82,6 +82,94 @@ fi
 echo "Building APK asset test done."
 
 echo "========================================="
+echo "Building APK context test..."
+export scriptToRun=$ROOT_DIR/tests/assets/apk/create-native-context-apk.sh
+sh ${scriptToRun}
+returnCode=$?
+if [ "$returnCode" -ne 0 ]; then
+    echo "Building APK context test error."
+  exit 1
+fi
+echo "Building APK context test done."
+
+echo "========================================="
+echo "Building APK binder test..."
+export scriptToRun=$ROOT_DIR/tests/assets/apk/create-native-binder-apk.sh
+sh ${scriptToRun}
+returnCode=$?
+if [ "$returnCode" -ne 0 ]; then
+    echo "Building APK binder test error."
+  exit 1
+fi
+echo "Building APK binder test done."
+
+echo "========================================="
+echo "Building APK binder transaction test..."
+export scriptToRun=$ROOT_DIR/tests/assets/apk/create-native-binder-trans-apk.sh
+sh ${scriptToRun}
+returnCode=$?
+if [ "$returnCode" -ne 0 ]; then
+    echo "Building APK binder transaction test error."
+  exit 1
+fi
+echo "Building APK binder transaction test done."
+
+echo "========================================="
+echo "Building APK local binder test..."
+export scriptToRun=$ROOT_DIR/tests/assets/apk/create-native-binder-local-apk.sh
+sh ${scriptToRun}
+returnCode=$?
+if [ "$returnCode" -ne 0 ]; then
+    echo "Building APK local binder test error."
+  exit 1
+fi
+echo "Building APK local binder test done."
+
+echo "========================================="
+echo "Building APK binder string test..."
+export scriptToRun=$ROOT_DIR/tests/assets/apk/create-native-binder-string-apk.sh
+sh ${scriptToRun}
+returnCode=$?
+if [ "$returnCode" -ne 0 ]; then
+    echo "Building APK binder string test error."
+  exit 1
+fi
+echo "Building APK binder string test done."
+
+echo "========================================="
+echo "Building APK binder array test..."
+export scriptToRun=$ROOT_DIR/tests/assets/apk/create-native-binder-array-apk.sh
+sh ${scriptToRun}
+returnCode=$?
+if [ "$returnCode" -ne 0 ]; then
+    echo "Building APK binder array test error."
+  exit 1
+fi
+echo "Building APK binder array test done."
+
+echo "========================================="
+echo "Building APK binder parcelable test..."
+export scriptToRun=$ROOT_DIR/tests/assets/apk/create-native-binder-parcelable-apk.sh
+sh ${scriptToRun}
+returnCode=$?
+if [ "$returnCode" -ne 0 ]; then
+    echo "Building APK binder parcelable test error."
+  exit 1
+fi
+echo "Building APK binder parcelable test done."
+
+echo "========================================="
+echo "Building APK binder lifecycle test..."
+export scriptToRun=$ROOT_DIR/tests/assets/apk/create-native-binder-lifecycle-apk.sh
+sh ${scriptToRun}
+returnCode=$?
+if [ "$returnCode" -ne 0 ]; then
+    echo "Building APK binder lifecycle test error."
+  exit 1
+fi
+echo "Building APK binder lifecycle test done."
+
+echo "========================================="
 echo "Running Muplar ELF loader..."
 echo "codesign -d --entitlements - $ROOT_DIR/build/bin/mup"
 cat > $ROOT_DIR/mup.entitlements << 'EOF'
@@ -144,6 +232,46 @@ echo "========================\nCalling $APK..."
 echo "Exit code: $?"
 
 APK="$SYSROOT_TMP/nativeassettest.apk"
+echo "========================\nCalling $APK..."
+"$ROOT_DIR/build/bin/mup" --sysroot "$ROOT_DIR/build/sysroot" "$APK"
+echo "Exit code: $?"
+
+APK="$SYSROOT_TMP/nativecontexttest.apk"
+echo "========================\nCalling $APK..."
+"$ROOT_DIR/build/bin/mup" --sysroot "$ROOT_DIR/build/sysroot" "$APK"
+echo "Exit code: $?"
+
+APK="$SYSROOT_TMP/nativebindertest.apk"
+echo "========================\nCalling $APK..."
+"$ROOT_DIR/build/bin/mup" --sysroot "$ROOT_DIR/build/sysroot" "$APK"
+echo "Exit code: $?"
+
+APK="$SYSROOT_TMP/nativebindertranstest.apk"
+echo "========================\nCalling $APK..."
+"$ROOT_DIR/build/bin/mup" --sysroot "$ROOT_DIR/build/sysroot" "$APK"
+echo "Exit code: $?"
+
+APK="$SYSROOT_TMP/nativebinderlocaltest.apk"
+echo "========================\nCalling $APK..."
+"$ROOT_DIR/build/bin/mup" --sysroot "$ROOT_DIR/build/sysroot" "$APK"
+echo "Exit code: $?"
+
+APK="$SYSROOT_TMP/nativebinderstringtest.apk"
+echo "========================\nCalling $APK..."
+"$ROOT_DIR/build/bin/mup" --sysroot "$ROOT_DIR/build/sysroot" "$APK"
+echo "Exit code: $?"
+
+APK="$SYSROOT_TMP/nativebinderarraytest.apk"
+echo "========================\nCalling $APK..."
+"$ROOT_DIR/build/bin/mup" --sysroot "$ROOT_DIR/build/sysroot" "$APK"
+echo "Exit code: $?"
+
+APK="$SYSROOT_TMP/nativebinderparcelabletest.apk"
+echo "========================\nCalling $APK..."
+"$ROOT_DIR/build/bin/mup" --sysroot "$ROOT_DIR/build/sysroot" "$APK"
+echo "Exit code: $?"
+
+APK="$SYSROOT_TMP/nativebinderlifecycletest.apk"
 echo "========================\nCalling $APK..."
 "$ROOT_DIR/build/bin/mup" --sysroot "$ROOT_DIR/build/sysroot" "$APK"
 echo "Exit code: $?"

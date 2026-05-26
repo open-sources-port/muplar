@@ -150,6 +150,9 @@ int main(int argc, char** argv)
             cfg.native_lib_search_dirs.push_back(
                 (apk.extract_dir / "lib" / "arm64-v8a").string());
             cfg.apk_assets_dir = apk.assets_dir.string();
+            cfg.package_code_path = apk.apk_path.string();
+            if (apk.manifest_package)
+                cfg.package_name = *apk.manifest_package;
 
             std::cerr << "[APK] extracted " << apk.extracted_libs.size()
                       << " arm64-v8a lib(s) to "
@@ -162,6 +165,10 @@ int main(int argc, char** argv)
             if (apk.manifest_lib) {
                 std::cerr << "[APK] manifest lib_name="
                           << *apk.manifest_lib << "\n";
+            }
+            if (apk.manifest_package) {
+                std::cerr << "[APK] manifest package="
+                          << *apk.manifest_package << "\n";
             }
             std::cerr << "[APK] selected lib " << apk.selected_lib
                       << ".so -> " << cfg.elf_path << "\n";

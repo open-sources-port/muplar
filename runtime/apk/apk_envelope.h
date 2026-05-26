@@ -20,6 +20,7 @@ struct ApkLaunchResult {
     std::filesystem::path assets_dir;
     std::string selected_lib;
     std::optional<std::string> manifest_lib;
+    std::optional<std::string> manifest_package;
     std::vector<std::string> extracted_libs;
     std::vector<std::string> extracted_assets;
 };

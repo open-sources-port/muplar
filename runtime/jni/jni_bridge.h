@@ -65,6 +65,7 @@ private:
 
     // Pre-resolve any GPA arguments that are char* pointers before the call.
     void intern_char_arg(uint64_t gpa);
+    uint64_t materialize_string_chars(uint64_t string_handle);
 
     // Walk a guest JNINativeMethod[] and register each entry.
     void register_natives_from_guest(uint64_t class_handle,
@@ -75,6 +76,8 @@ private:
     JniEnv*   env_;
     uint64_t  table_gpa_;
     uint64_t  stub_base_gpa_;
+    uint64_t  string_chars_base_gpa_;
+    uint64_t  string_chars_bump_ = 0;
 };
 
 } // namespace muplar::runtime::jni
