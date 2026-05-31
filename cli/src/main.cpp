@@ -30,6 +30,7 @@ static void print_usage(const char* prog)
               << " [--verbose] [--sysroot PATH]\n"
               << "              [--apk] [--apk-lib NAME] [--apk-extract-dir PATH]\n"
               << "              [--native-activity]\n"
+              << "              [--strict-direct-imports]\n"
               << "              [--host-window] [--host-window-ms VALUE]\n"
               << "              [--jni-call CLASS METHOD SIGNATURE]"
               << " [--jni-int VALUE ...]\n"
@@ -84,6 +85,9 @@ int main(int argc, char** argv)
             arg_start  += 2;
         } else if (flag == "--native-activity") {
             cfg.native_activity = true;
+            ++arg_start;
+        } else if (flag == "--strict-direct-imports") {
+            cfg.strict_direct_imports = true;
             ++arg_start;
         } else if (flag == "--host-window") {
             cfg.host_window = true;

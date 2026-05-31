@@ -1,0 +1,3 @@
+The headers under android/ are vendored from AOSP frameworks/native
+(libs/binder/ndk/include_cpp/android/) and are licensed under the
+Apache License, Version 2.0.

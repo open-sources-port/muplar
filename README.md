@@ -70,4 +70,14 @@ export ANDROID_NDK_HOME=/opt/homebrew/share/android-ndk
 
 
 ## 🏗 Android Progress
-![Muplar Logo](./muplar_roadmap_to_android_app.svg)
+![Muplar Android Roadmap](./muplar_roadmap_to_android_app.svg)
+
+Detailed slices:
+
+- [NativeActivity runtime roadmap](./docs/roadmap/android_phase5_runtime.svg)
+- [Binder and AIDL roadmap](./docs/roadmap/android_phase5_binder_aidl.svg)
+- [APK native dependency roadmap](./docs/roadmap/android_phase5_apk_dependency.svg)
+
+APK compatibility checks can use `mup --strict-direct-imports --sysroot build/sysroot app.apk`
+to fail before launch when a direct native import is still unsupported.  Omit the flag for
+exploratory runs that install trap stubs and report only if the guest actually calls one.

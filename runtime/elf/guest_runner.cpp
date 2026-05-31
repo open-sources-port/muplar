@@ -300,12 +300,16 @@ struct DirectSoDyn {
     uint64_t strtab = 0;
     uint64_t strsz = 0;
     uint64_t symtab = 0;
+    uint64_t gnu_hash = 0;    // DT_GNU_HASH vaddr — used to derive symbol count
     uint64_t rela = 0;
     uint64_t rela_size = 0;
     uint64_t jmprel = 0;
     uint64_t jmprel_size = 0;
     uint64_t relr = 0;
     uint64_t relr_size = 0;
+    uint64_t init = 0;
+    uint64_t init_array = 0;
+    uint64_t init_array_size = 0;
     uint64_t soname_off = 0;
     std::vector<uint32_t> needed_off;
 };
@@ -412,10 +416,14 @@ static bool parse_direct_so_metadata(const std::string& path,
             case DT_STRTAB:   obj.dyn.strtab = val; break;
             case DT_STRSZ:    obj.dyn.strsz = val; break;
             case DT_SYMTAB:   obj.dyn.symtab = val; break;
+            case DT_GNU_HASH: obj.dyn.gnu_hash = val; break;
             case DT_RELA:     obj.dyn.rela = val; break;
             case DT_RELASZ:   obj.dyn.rela_size = val; break;
             case DT_JMPREL:   obj.dyn.jmprel = val; break;
             case DT_PLTRELSZ: obj.dyn.jmprel_size = val; break;
+            case DT_INIT:     obj.dyn.init = val; break;
+            case DT_INIT_ARRAY: obj.dyn.init_array = val; break;
+            case DT_INIT_ARRAYSZ: obj.dyn.init_array_size = val; break;
             case MU_DT_ANDROID_RELR:    obj.dyn.relr = val; break;
             case MU_DT_ANDROID_RELRSZ:  obj.dyn.relr_size = val; break;
             case MU_DT_ANDROID_RELRENT: break;
@@ -557,6 +565,54 @@ static bool map_direct_so_object(guest_t* g,
     return true;
 }
 
+// Derive the number of exported symbols from GNU hash table.
+// GNU hash header: [nbuckets(4)][symndx(4)][maskwords(4)][shift2(4)]
+//   followed by maskwords 8-byte bloom filters, then nbuckets 4-byte bucket
+//   entries.  The first bucket entry gives us the first symbol index.
+//   The last symbol is found by walking chains, but that's expensive.
+//   Instead we use: sym_count = number of chain entries, which equals
+//   the total symbols in the hash table = symndx + len(chains).
+//   We can bound chains: read from the first bucket-referenced sym to the
+//   end of the chain section.  Since we don't know its size, we instead
+//   use a safe large upper bound and stop at the null sentinel in DYNSYM.
+static uint32_t gnu_hash_sym_count(FILE* f,
+                                   const std::vector<Elf64_Phdr>& phdrs,
+                                   uint64_t gnu_hash_vaddr)
+{
+    if (!gnu_hash_vaddr) return 0;
+    uint64_t off = 0;
+    if (!vaddr_to_file_offset(phdrs, gnu_hash_vaddr, 16, &off)) return 0;
+
+    uint32_t nbuckets = 0, symndx = 0, maskwords = 0;
+    if (!read_at(f, off + 0,  &nbuckets,  4)) return 0;
+    if (!read_at(f, off + 4,  &symndx,    4)) return 0;
+    if (!read_at(f, off + 8,  &maskwords, 4)) return 0;
+
+    // Buckets start at: off + 16 + maskwords * 8
+    uint64_t bucket_off = off + 16 + (uint64_t)maskwords * 8;
+
+    // Find the highest bucket value (= highest sym index in use)
+    uint32_t max_sym = symndx;
+    for (uint32_t b = 0; b < nbuckets; ++b) {
+        uint32_t bucket_val = 0;
+        if (!read_at(f, bucket_off + b * 4, &bucket_val, 4)) break;
+        if (bucket_val > max_sym) max_sym = bucket_val;
+    }
+
+    // Chains start after buckets: off + 16 + maskwords*8 + nbuckets*4
+    // Walk chains from max_sym until we hit a chain entry with bit0 set (end)
+    uint64_t chain_base_off = bucket_off + (uint64_t)nbuckets * 4;
+    uint32_t sym = max_sym;
+    for (uint32_t iter = 0; iter < 65536; ++iter) {
+        uint32_t chain_val = 0;
+        uint64_t chain_off = chain_base_off + (uint64_t)(sym - symndx) * 4;
+        if (!read_at(f, chain_off, &chain_val, 4)) break;
+        if (chain_val & 1) { sym++; break; }  // end of chain
+        sym++;
+    }
+    return sym;  // last valid index + 1 is our upper bound
+}
+
 static uint64_t lookup_direct_symbol(const std::vector<DirectSoObject>& objects,
                                      const std::string& name)
 {
@@ -567,26 +623,46 @@ static uint64_t lookup_direct_symbol(const std::vector<DirectSoObject>& objects,
         FILE* f = std::fopen(obj.path.c_str(), "rb");
         if (!f) continue;
 
-        for (uint32_t i = 1; i < 8192; ++i) {
-            uint64_t sym_off = 0;
-            if (!vaddr_to_file_offset(obj.phdrs,
-                                      obj.dyn.symtab + i * sizeof(Elf64_Sym),
-                                      sizeof(Elf64_Sym),
-                                      &sym_off)) {
-                break;
-            }
+        // Determine how many symbols to scan.
+        // GNU hash gives us a tight upper bound; fall back to a large safe limit.
+        uint32_t sym_count = gnu_hash_sym_count(f, obj.phdrs, obj.dyn.gnu_hash);
+        if (sym_count == 0 || sym_count > 131072)
+            sym_count = 131072;  // hard upper bound
 
+        // Get the file offset of the DYNSYM table directly from the first entry.
+        uint64_t symtab_file_off = 0;
+        if (!vaddr_to_file_offset(obj.phdrs, obj.dyn.symtab, sizeof(Elf64_Sym),
+                                  &symtab_file_off)) {
+            std::fclose(f);
+            continue;
+        }
+
+        for (uint32_t i = 1; i < sym_count; ++i) {
             Elf64_Sym sym{};
-            if (!read_at(f, sym_off, &sym, sizeof(sym)))
-                break;
-            if (sym.st_name >= obj.dyn.strsz)
-                continue;
-            if (sym.st_shndx == SHN_UNDEF)
-                continue;
+            // Read directly by file offset — avoids repeated vaddr_to_file_offset
+            // calls which break on large tables near segment boundaries.
+            uint64_t entry_off = symtab_file_off + (uint64_t)i * sizeof(Elf64_Sym);
+            if (!read_at(f, entry_off, &sym, sizeof(sym))) break;
 
-            std::string sym_name = read_dyn_string(f, obj.phdrs, obj.dyn,
-                                                   sym.st_name);
-            if (sym_name == name) {
+            // Null sentinel: both name and value are 0 (only at index 0 normally,
+            // but treat as end-of-table if we see it again)
+            if (sym.st_name == 0 && sym.st_value == 0 && i > 1) break;
+            if (sym.st_name >= obj.dyn.strsz)  continue;
+            if (sym.st_shndx == SHN_UNDEF)      continue;
+            if (sym.st_value == 0)               continue;
+
+            // Read symbol name directly from file (strtab is contiguous)
+            uint64_t str_file_off = 0;
+            if (!vaddr_to_file_offset(obj.phdrs,
+                                      obj.dyn.strtab + sym.st_name, 1,
+                                      &str_file_off)) continue;
+
+            // Read just enough bytes to compare
+            char buf[256] = {};
+            size_t to_read = std::min<size_t>(name.size() + 1, sizeof(buf) - 1);
+            if (!read_at(f, str_file_off, buf, to_read)) continue;
+            if (std::strncmp(buf, name.c_str(), name.size()) == 0
+                && buf[name.size()] == '\0') {
                 std::fclose(f);
                 return obj.load_base + sym.st_value;
             }
@@ -619,9 +695,9 @@ static bool load_direct_so_dependencies(guest_t* g,
                 if (android_builtin_soname(art, needed))
                     continue;
                 std::fprintf(stderr,
-                    "[Muplar] direct .so dependency not found locally: %s\n",
+                    "[Muplar] required direct .so dependency not found locally: %s\n",
                     needed.c_str());
-                continue;
+                return false;
             }
 
             DirectSoObject dep;
@@ -664,23 +740,36 @@ static uint64_t resolve_android_symbol(const android::AndroidRuntime& art,
     return 0;
 }
 
-static void apply_direct_so_rela(FILE* f,
+static bool apply_direct_so_rela(FILE* f,
                                  const DirectSoObject& obj,
                                  const std::vector<DirectSoObject>& objects,
                                  guest_t* g,
                                  uint64_t rela_vaddr,
                                  uint64_t rela_size,
-                                 const android::AndroidRuntime& art,
-                                 size_t* applied)
+                                 android::AndroidRuntime& art,
+                                 size_t* applied,
+                                 size_t* unresolved)
 {
-    if (!rela_vaddr || !rela_size) return;
+    if (!rela_vaddr || !rela_size) return true;
     uint64_t rela_off = 0;
-    if (!vaddr_to_file_offset(obj.phdrs, rela_vaddr, rela_size, &rela_off)) return;
+    if (!vaddr_to_file_offset(obj.phdrs, rela_vaddr, rela_size, &rela_off)) {
+        std::fprintf(stderr,
+            "[Muplar] unable to read relocation table for %s at vaddr 0x%llx\n",
+            obj.soname.c_str(),
+            (unsigned long long)rela_vaddr);
+        return false;
+    }
 
     size_t count = rela_size / sizeof(Elf64_Rela);
     for (size_t i = 0; i < count; ++i) {
         Elf64_Rela rela{};
-        if (!read_at(f, rela_off + i * sizeof(rela), &rela, sizeof(rela))) break;
+        if (!read_at(f, rela_off + i * sizeof(rela), &rela, sizeof(rela))) {
+            std::fprintf(stderr,
+                "[Muplar] unable to read relocation %zu for %s\n",
+                i,
+                obj.soname.c_str());
+            return false;
+        }
 
         uint32_t sym_idx = ELF64_R_SYM(rela.r_info);
         uint32_t type = ELF64_R_TYPE(rela.r_info);
@@ -719,11 +808,36 @@ static void apply_direct_so_rela(FILE* f,
                 value = obj.load_base + sym.st_value + static_cast<uint64_t>(rela.r_addend);
             } else {
                 std::string name = read_dyn_string(f, obj.phdrs, obj.dyn, sym.st_name);
-                uint64_t resolved = lookup_direct_symbol(objects, name);
+                uint64_t resolved = resolve_android_symbol(art, name);
                 if (!resolved)
-                    resolved = resolve_android_symbol(art, name);
+                    resolved = lookup_direct_symbol(objects, name);
                 if (!resolved) {
-                    should_write = false;
+                    if (ELF64_ST_BIND(sym.st_info) == STB_WEAK) {
+                        value = static_cast<uint64_t>(rela.r_addend);
+                        break;
+                    }
+                    uint64_t trap = art.unsupported_import_stub(obj.soname, name);
+                    if (*unresolved < 8) {
+                        std::fprintf(stderr,
+                            "[Muplar] unresolved direct .so import: %s needs %s "
+                            "(reloc=%u slot=0x%llx%s)\n",
+                            obj.soname.c_str(),
+                            name.empty() ? "<unnamed>" : name.c_str(),
+                            type,
+                            (unsigned long long)slot_gpa,
+                            trap ? " trap=installed" : "");
+                    } else if (*unresolved == 8) {
+                        std::fprintf(stderr,
+                            "[Muplar] unresolved direct .so import: %s has more "
+                            "unresolved imports; suppressing further detail\n",
+                            obj.soname.c_str());
+                    }
+                    ++(*unresolved);
+                    if (trap) {
+                        value = trap + static_cast<uint64_t>(rela.r_addend);
+                    } else {
+                        should_write = false;
+                    }
                     break;
                 }
                 value = resolved + static_cast<uint64_t>(rela.r_addend);
@@ -740,6 +854,8 @@ static void apply_direct_so_rela(FILE* f,
             ++(*applied);
         }
     }
+
+    return true;
 }
 
 static size_t apply_direct_so_relr(FILE* f,
@@ -793,7 +909,8 @@ static size_t apply_direct_so_relr(FILE* f,
 static bool apply_direct_so_relocations(guest_t* g,
                                         const DirectSoObject& obj,
                                         const std::vector<DirectSoObject>& objects,
-                                        const android::AndroidRuntime& art)
+                                        android::AndroidRuntime& art,
+                                        bool strict_direct_imports)
 {
     FILE* f = std::fopen(obj.path.c_str(), "rb");
     if (!f) return false;
@@ -801,16 +918,34 @@ static bool apply_direct_so_relocations(guest_t* g,
     size_t relr_applied = apply_direct_so_relr(f, obj.phdrs, g, obj.load_base,
                                                obj.dyn.relr, obj.dyn.relr_size);
     size_t rela_applied = 0;
-    apply_direct_so_rela(f, obj, objects, g, obj.dyn.rela, obj.dyn.rela_size,
-                         art, &rela_applied);
-    apply_direct_so_rela(f, obj, objects, g, obj.dyn.jmprel,
-                         obj.dyn.jmprel_size, art, &rela_applied);
+    size_t unresolved = 0;
+    bool rela_ok =
+        apply_direct_so_rela(f, obj, objects, g, obj.dyn.rela, obj.dyn.rela_size,
+                             art, &rela_applied, &unresolved) &&
+        apply_direct_so_rela(f, obj, objects, g, obj.dyn.jmprel,
+                             obj.dyn.jmprel_size, art, &rela_applied, &unresolved);
 
     std::fprintf(stderr,
-        "[Muplar] direct .so relocations applied for %s: RELR=%zu RELA/PLT=%zu\n",
-        obj.soname.c_str(), relr_applied, rela_applied);
+        "[Muplar] direct .so relocations applied for %s: RELR=%zu RELA/PLT=%zu unresolved=%zu\n",
+        obj.soname.c_str(), relr_applied, rela_applied, unresolved);
+    if (unresolved) {
+        std::fprintf(stderr,
+            "[Muplar] WARNING: %s has %zu unresolved direct import(s); "
+            "continuing until a referenced symbol is actually used\n",
+            obj.soname.c_str(),
+            unresolved);
+        if (strict_direct_imports) {
+            std::fprintf(stderr,
+                "[Muplar] strict direct import mode: failing %s because "
+                "%zu required import(s) are unresolved\n",
+                obj.soname.c_str(),
+                unresolved);
+            std::fclose(f);
+            return false;
+        }
+    }
     std::fclose(f);
-    return true;
+    return rela_ok;
 }
 
 struct MuplarCtx {
@@ -835,6 +970,56 @@ static uint64_t hvc6_handler(uint64_t call_nr, const uint64_t args[8], void* use
     std::fprintf(stderr, "[muplar] unknown HVC #6 call_nr=0x%llx\n",
                  (unsigned long long)call_nr);
     return 0;
+}
+
+static bool patch_lse_atomics_flag(guest_t* g, const std::string& path, uint64_t load_base)
+{
+    FILE* ef = std::fopen(path.c_str(), "rb");
+    if (!ef) return false;
+
+    Elf64_Ehdr ehdr{};
+    if (std::fread(&ehdr, sizeof(ehdr), 1, ef) != 1) {
+        std::fclose(ef);
+        return false;
+    }
+
+    std::vector<Elf64_Shdr> shdrs(ehdr.e_shnum);
+    std::fseek(ef, static_cast<long>(ehdr.e_shoff), SEEK_SET);
+    if (std::fread(shdrs.data(), sizeof(Elf64_Shdr), ehdr.e_shnum, ef) != ehdr.e_shnum) {
+        std::fclose(ef);
+        return false;
+    }
+
+    for (const auto& shdr : shdrs) {
+        if (shdr.sh_type != SHT_SYMTAB && shdr.sh_type != SHT_DYNSYM) continue;
+        if (shdr.sh_link >= ehdr.e_shnum) continue;
+
+        const Elf64_Shdr& strhdr = shdrs[shdr.sh_link];
+
+        std::vector<Elf64_Sym> syms(shdr.sh_size / sizeof(Elf64_Sym));
+        std::fseek(ef, static_cast<long>(shdr.sh_offset), SEEK_SET);
+        std::fread(syms.data(), sizeof(Elf64_Sym), syms.size(), ef);
+
+        std::vector<char> strtab(strhdr.sh_size);
+        std::fseek(ef, static_cast<long>(strhdr.sh_offset), SEEK_SET);
+        std::fread(strtab.data(), 1, strhdr.sh_size, ef);
+
+        for (const auto& sym : syms) {
+            if (!sym.st_name || sym.st_name >= strhdr.sh_size) continue;
+
+            if (std::strcmp(&strtab[sym.st_name], "__aarch64_have_lse_atomics") == 0) {
+                uint64_t gpa = load_base + sym.st_value;
+                uint8_t zero = 0;
+                guest_write(g, gpa, &zero, 1);
+                std::printf("[Muplar] patched __aarch64_have_lse_atomics=0 at GPA 0x%llx for %s\n", (unsigned long long)gpa, path.c_str());
+                std::fclose(ef);
+                return true;
+            }
+        }
+    }
+
+    std::fclose(ef);
+    return false;
 }
 
 int GuestRunner::run(const GuestRunnerConfig& cfg)
@@ -933,7 +1118,7 @@ int GuestRunner::run(const GuestRunnerConfig& cfg)
                     if (!sym.st_name || sym.st_name >= strhdr.sh_size) continue;
                     if (std::strcmp(&strtab[sym.st_name],
                                     "__aarch64_have_lse_atomics") == 0) {
-                        lse_flag_gpa = sym.st_value;
+                        lse_flag_gpa = g.elf_load_min + sym.st_value;
                         break;
                     }
                 }
@@ -943,9 +1128,9 @@ int GuestRunner::run(const GuestRunnerConfig& cfg)
         }
 
         if (lse_flag_gpa) {
-            uint8_t one = 1;
-            guest_write(&g, lse_flag_gpa, &one, 1);
-            std::printf("[Muplar] patched __aarch64_have_lse_atomics=1 "
+            uint8_t zero = 0;
+            guest_write(&g, lse_flag_gpa, &zero, 1);
+            std::printf("[Muplar] patched __aarch64_have_lse_atomics=0 "
                         "at GPA 0x%llx\n", (unsigned long long)lse_flag_gpa);
         } else {
             std::fprintf(stderr,
@@ -972,6 +1157,7 @@ int GuestRunner::run(const GuestRunnerConfig& cfg)
     int exit_code = 0;
     bool host_app_loop_ran = false;
     bool direct_so_ready = true;
+    std::vector<DirectSoObject> direct_objects;
 
     if (is_shared_lib) {
         // For .so files: run Android/JNI entrypoints directly.
@@ -982,7 +1168,6 @@ int GuestRunner::run(const GuestRunnerConfig& cfg)
             main_so.load_base = g.elf_load_min - main_so.load_min;
             main_so.mapped_by_bootstrap = true;
 
-            std::vector<DirectSoObject> direct_objects;
             direct_objects.push_back(main_so);
 
             std::vector<std::string> lib_search_dirs = cfg.native_lib_search_dirs;
@@ -998,11 +1183,31 @@ int GuestRunner::run(const GuestRunnerConfig& cfg)
                 exit_code = 1;
                 direct_so_ready = false;
             } else {
-                for (const auto& obj : direct_objects) {
-                    if (!apply_direct_so_relocations(&g, obj, direct_objects, art)) {
+                // Apply relocations in reverse dependency order: deps first, then
+                // dependents.  This ensures that when libfoo.so's PLT entries are
+                // patched, the symbols they reference inside libc++_shared (or any
+                // other dep) already have their own GOT/PLT slots resolved, so
+                // lookup_direct_symbol() returns the correct runtime address.
+                //
+                // Example: direct_objects = [libaidlndktest.so, libc++_shared.so]
+                // Without this fix: libaidlndktest's PLT slot for a libc++ symbol
+                //   resolves to libc++_shared's UNRELOCATED st_value → crash.
+                // With this fix: libc++_shared's internal GOT is patched first,
+                //   then libaidlndktest's PLT entries get the correct addresses.
+                for (int ri = static_cast<int>(direct_objects.size()) - 1; ri >= 0; --ri) {
+                    if (!apply_direct_so_relocations(&g, direct_objects[ri],
+                                                     direct_objects, art,
+                                                     cfg.strict_direct_imports)) {
                         exit_code = 1;
                         direct_so_ready = false;
                     }
+                }
+
+                // Re-patch after direct relocations.  The earlier patch is kept
+                // in place, but this is the one that matters for directly loaded
+                // APK .so files and their dependencies.
+                for (const DirectSoObject& obj : direct_objects) {
+                    patch_lse_atomics_flag(&g, obj.path, obj.load_base);
                 }
             }
         } else {
@@ -1263,6 +1468,51 @@ int GuestRunner::run(const GuestRunnerConfig& cfg)
                 return ret;
             };
 
+        auto run_direct_so_initializers = [&]() {
+            if (!direct_so_ready)
+                return;
+
+            for (int ri = static_cast<int>(direct_objects.size()) - 1;
+                 ri >= 0; --ri) {
+                const DirectSoObject& obj = direct_objects[ri];
+                std::string label = obj.soname.empty()
+                    ? path_filename(obj.path)
+                    : obj.soname;
+                if (ri != 0 && android_builtin_soname(art, label)) {
+                    std::printf("[Muplar] skipping DT_INIT_ARRAY for builtin dependency %s\n",
+                                label.c_str());
+                    continue;
+                }
+
+                if (obj.dyn.init) {
+                    uint64_t init_fn = obj.load_base + obj.dyn.init;
+                    std::printf("[Muplar] running DT_INIT for %s at GPA 0x%llx\n",
+                                label.c_str(),
+                                (unsigned long long)init_fn);
+                    call_guest_and_drain(init_fn, {}, false, false);
+                }
+
+                if (!obj.dyn.init_array || !obj.dyn.init_array_size)
+                    continue;
+
+                uint64_t array_gpa = obj.load_base + obj.dyn.init_array;
+                size_t count =
+                    static_cast<size_t>(obj.dyn.init_array_size / sizeof(uint64_t));
+                std::printf("[Muplar] running DT_INIT_ARRAY for %s (%zu entries)\n",
+                            label.c_str(), count);
+                for (size_t i = 0; i < count; ++i) {
+                    uint64_t init_fn = 0;
+                    if (!read_u64_guest(&g, array_gpa + i * sizeof(uint64_t),
+                                        &init_fn)) {
+                        continue;
+                    }
+                    if (init_fn <= 1)
+                        continue;
+                    call_guest_and_drain(init_fn, {}, false, false);
+                }
+            }
+        };
+
         auto run_host_app_loop = [&]() {
             if (!cfg.host_window)
                 return false;
@@ -1302,6 +1552,8 @@ int GuestRunner::run(const GuestRunnerConfig& cfg)
             std::printf("[Muplar] host app loop exited after %zu ticks\n", ticks);
             return true;
         };
+
+        run_direct_so_initializers();
 
         uint64_t jni_onload_gpa = direct_so_ready
             ? jni_onload.find_jni_onload(g.elf_load_min, cfg.elf_path)

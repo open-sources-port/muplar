@@ -1,6 +1,6 @@
-<svg width="100%" viewBox="0 0 680 2268" role="img" xmlns="http://www.w3.org/2000/svg">
-<title>Muplar roadmap from current state to running Android apps</title>
-<desc>A vertical flowchart showing 5 stages: current state, JNI_OnLoad, dynamic linker, Android runtime stubs, and full app execution.</desc>
+<svg width="100%" viewBox="0 0 680 720" role="img" xmlns="http://www.w3.org/2000/svg">
+<title>Muplar Android roadmap overview</title>
+<desc>A compact overview of Android execution progress with links to detailed roadmap files.</desc>
 
 <style>
 text{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}
@@ -15,8 +15,6 @@ text{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}
 .future-subtitle{fill:#6B7280;font-size:12px}
 .phase-label{font-size:12px;font-weight:600}
 .arrow{stroke:#6B7280;stroke-width:1.5;fill:none}
-.callout{fill:#FFFBEB;stroke:#D97706;stroke-width:1;stroke-dasharray:4 3}
-.callout-text{fill:#92400E;font-size:12px}
 </style>
 
 <defs>
@@ -26,238 +24,58 @@ text{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}
 </defs>
 
 <g>
-<rect class="done" x="40" y="20" width="600" height="56" rx="8"/>
-<text class="done-title" x="60" y="44">✓ Static ELF + elfuse HVC loop</text>
-<text class="done-subtitle" x="60" y="62">Guest boots, Linux syscalls translate, exit works</text>
-<text class="done-title phase-label" x="560" y="50" text-anchor="middle">Phase 1 (Done)</text>
+<rect class="done" x="40" y="24" width="600" height="72" rx="8"/>
+<text class="done-title" x="60" y="50">Core guest execution</text>
+<text class="done-subtitle" x="60" y="68">Static ELF, HVC loop, syscalls, JNI_OnLoad, RegisterNatives</text>
+<text class="done-subtitle" x="60" y="84">Dynamic linker and Android runtime shim foundations</text>
+<text class="done-title phase-label" x="560" y="58" text-anchor="middle">Phases 1-4</text>
 </g>
 
-<line class="arrow" x1="340" y1="76" x2="340" y2="104" marker-end="url(#arrow)"/>
+<line class="arrow" x1="340" y1="96" x2="340" y2="124" marker-end="url(#arrow)"/>
 
 <g>
-<rect class="done" x="40" y="104" width="600" height="56" rx="8"/>
-<text class="done-title" x="60" y="128">✓ JNI_OnLoad + RegisterNatives</text>
-<text class="done-subtitle" x="60" y="146">.so boots, JNIEnv* live, native methods registered</text>
-<text class="done-title phase-label" x="560" y="134" text-anchor="middle">Phase 2 (Done)</text>
+<rect class="done" x="40" y="128" width="600" height="84" rx="8"/>
+<text class="done-title" x="60" y="154">NativeActivity runtime</text>
+<text class="done-subtitle" x="60" y="172">Lifecycle, ANativeWindow, EGL/GLES, input queue, app loop, assets</text>
+<text class="done-subtitle" x="60" y="190">APK launch envelope, package metadata, host-driven callbacks</text>
+<text class="done-title phase-label" x="560" y="164" text-anchor="middle">5.1-5.13</text>
 </g>
 
-<line class="arrow" x1="340" y1="160" x2="340" y2="188" marker-end="url(#arrow)"/>
+<line class="arrow" x1="340" y1="212" x2="340" y2="240" marker-end="url(#arrow)"/>
 
 <g>
-<rect class="done" x="40" y="188" width="600" height="56" rx="8"/>
-<text class="done-title" x="60" y="212">✓ Dynamic linker (linker64)</text>
-<text class="done-subtitle" x="60" y="230">Load libandroid.so, libc.so, resolve symbols + relocations</text>
-<text class="done-title phase-label" x="560" y="220" text-anchor="middle">Phase 3 (Done)</text>
-</g>
-
-<line class="arrow" x1="340" y1="244" x2="340" y2="272" marker-end="url(#arrow)"/>
-
-<g>
-<rect class="done" x="40" y="272" width="600" height="56" rx="8"/>
-<text class="done-title" x="60" y="296">✓ Android runtime stubs (ART shim)</text>
-<text class="done-subtitle" x="60" y="314">JNIEnv, JavaVM, liblog/libandroid/libdl/libc shim calls</text>
-<text class="done-title phase-label" x="560" y="304" text-anchor="middle">Phase 4 (Done)</text>
+<rect class="done" x="40" y="244" width="600" height="84" rx="8"/>
+<text class="done-title" x="60" y="270">Binder and AIDL coverage</text>
+<text class="done-subtitle" x="60" y="288">Service manager, local/remote Binder objects, Parcel payloads</text>
+<text class="done-subtitle" x="60" y="306">Generated AIDL, lifecycle hardening, NDK C++ runtime dependencies</text>
+<text class="done-title phase-label" x="560" y="280" text-anchor="middle">5.14-5.26</text>
 </g>
 
 <line class="arrow" x1="340" y1="328" x2="340" y2="356" marker-end="url(#arrow)"/>
 
 <g>
-<rect class="done" x="40" y="356" width="600" height="56" rx="8"/>
-<text class="done-title" x="60" y="380">✓ Direct Android JNI/native execution</text>
-<text class="done-subtitle" x="60" y="398">Run JNI_OnLoad, resolve RegisterNatives, invoke native methods</text>
-<text class="done-title phase-label" x="560" y="388" text-anchor="middle">Phase 5.1 (Done)</text>
+<rect class="done" x="40" y="360" width="600" height="84" rx="8"/>
+<text class="done-title" x="60" y="386">Real APK native dependency closure</text>
+<text class="done-subtitle" x="60" y="404">Load transitive DT_NEEDED libraries from extracted APK lib/arm64-v8a</text>
+<text class="done-subtitle" x="60" y="422">Report missing libraries, unresolved imports, and strict-mode failures clearly</text>
+<text class="done-title phase-label" x="560" y="396" text-anchor="middle">5.27 Done</text>
 </g>
 
-<line class="arrow" x1="340" y1="412" x2="340" y2="440" marker-end="url(#arrow)"/>
+<line class="arrow" x1="340" y1="444" x2="340" y2="472" marker-end="url(#arrow)"/>
 
 <g>
-<rect class="done" x="40" y="440" width="600" height="56" rx="8"/>
-<text class="done-title" x="60" y="464">✓ NativeActivity window + EGL smoke</text>
-<text class="done-subtitle" x="60" y="482">Lifecycle callbacks, ANativeWindow, host window, EGL/GLES frame</text>
-<text class="done-title phase-label" x="560" y="472" text-anchor="middle">Phase 5.2 (Done)</text>
+<rect class="future" x="40" y="476" width="600" height="84" rx="8"/>
+<text class="future-title" x="60" y="502">Next Android execution frontier</text>
+<text class="future-subtitle" x="60" y="520">Try less-controlled APKs, widen libc/libandroid coverage from real failures</text>
+<text class="future-subtitle" x="60" y="538">Then move toward Java/ART surface and broader app compatibility</text>
+<text class="future-title phase-label" x="560" y="512" text-anchor="middle">Future</text>
 </g>
 
-<line class="arrow" x1="340" y1="496" x2="340" y2="524" marker-end="url(#arrow)"/>
-
 <g>
-<rect class="done" x="40" y="524" width="600" height="56" rx="8"/>
-<text class="done-title" x="60" y="548">✓ NativeActivity glue pthread + looper callbacks</text>
-<text class="done-subtitle" x="60" y="566">Run pthread guest entrypoints; deliver ALooper addFd/poll callbacks</text>
-<text class="done-title phase-label" x="560" y="556" text-anchor="middle">Phase 5.3 (Done)</text>
-</g>
-
-<line class="arrow" x1="340" y1="580" x2="340" y2="608" marker-end="url(#arrow)"/>
-
-<g>
-<rect class="done" x="40" y="608" width="600" height="56" rx="8"/>
-<text class="done-title" x="60" y="632">✓ Input queue + repeated app-loop scheduling</text>
-<text class="done-subtitle" x="60" y="650">AInputQueue attach/detach, repeated poll, synthetic motion events</text>
-<text class="done-title phase-label" x="560" y="640" text-anchor="middle">Phase 5.4 (Done)</text>
-</g>
-
-<line class="arrow" x1="340" y1="664" x2="340" y2="692" marker-end="url(#arrow)"/>
-
-<g>
-<rect class="done" x="40" y="692" width="600" height="56" rx="8"/>
-<text class="done-title" x="60" y="716">✓ Choreographer + frame-loop callbacks</text>
-<text class="done-subtitle" x="60" y="734">Frame callbacks, reposted frames, app-loop drain budget</text>
-<text class="done-title phase-label" x="560" y="724" text-anchor="middle">Phase 5.5 (Done)</text>
-</g>
-
-<line class="arrow" x1="340" y1="748" x2="340" y2="776" marker-end="url(#arrow)"/>
-
-<g>
-<rect class="done" x="40" y="776" width="600" height="56" rx="8"/>
-<text class="done-title" x="60" y="800">✓ Host input capture + queue rearm</text>
-<text class="done-subtitle" x="60" y="818">Mouse/key events enqueue into AInputQueue; looper fd is rearmed</text>
-<text class="done-title phase-label" x="560" y="808" text-anchor="middle">Phase 5.6 (Done)</text>
-</g>
-
-<line class="arrow" x1="340" y1="832" x2="340" y2="860" marker-end="url(#arrow)"/>
-
-<g>
-<rect class="done" x="40" y="860" width="600" height="56" rx="8"/>
-<text class="done-title" x="60" y="884">✓ Persistent host-driven app loop</text>
-<text class="done-subtitle" x="60" y="902">Guest callbacks stay alive while host window pumps input/frame ticks</text>
-<text class="done-title phase-label" x="560" y="892" text-anchor="middle">Phase 5.7 (Done)</text>
-</g>
-
-<line class="arrow" x1="340" y1="916" x2="340" y2="944" marker-end="url(#arrow)"/>
-
-<g>
-<rect class="done" x="40" y="944" width="600" height="56" rx="8"/>
-<text class="done-title" x="60" y="968">✓ Native app glue scheduler</text>
-<text class="done-subtitle" x="60" y="986">Guest pthreads yield on blocking ALooper polls and resume on host/input ticks</text>
-<text class="done-title phase-label" x="560" y="976" text-anchor="middle">Phase 5.8 (Done)</text>
-</g>
-
-<line class="arrow" x1="340" y1="1000" x2="340" y2="1016" marker-end="url(#arrow)"/>
-
-<g>
-<rect class="done" x="40" y="1020" width="600" height="76" rx="8"/>
-<text class="done-title" x="60" y="1044">✓ Native app glue command pipe</text>
-<text class="done-subtitle" x="60" y="1062">Deliver APP_CMD_* lifecycle/window/input messages through guest pipe + ALooper</text>
-<text class="done-subtitle" x="60" y="1080">libc pipe/read/write/close stubs wake persistent guest app threads</text>
-<text class="done-title phase-label" x="560" y="1054" text-anchor="middle">Phase 5.9 (Done)</text>
-</g>
-
-<line class="arrow" x1="340" y1="1096" x2="340" y2="1112" marker-end="url(#arrow)"/>
-
-<g>
-<rect class="done" x="40" y="1116" width="600" height="76" rx="8"/>
-<text class="done-title" x="60" y="1140">✓ APK launch envelope</text>
-<text class="done-subtitle" x="60" y="1158">Extract arm64-v8a native libraries and infer android.app.lib_name</text>
-<text class="done-subtitle" x="60" y="1176">Run APK NativeActivity path through existing guest bootstrap</text>
-<text class="done-title phase-label" x="560" y="1150" text-anchor="middle">Phase 5.10 (Done)</text>
-</g>
-
-<line class="arrow" x1="340" y1="1192" x2="340" y2="1208" marker-end="url(#arrow)"/>
-
-<g>
-<rect class="done" x="40" y="1212" width="600" height="76" rx="8"/>
-<text class="done-title" x="60" y="1236">✓ APK-local dependency loading</text>
-<text class="done-subtitle" x="60" y="1254">Map APK-local DT_NEEDED libraries into guest memory</text>
-<text class="done-subtitle" x="60" y="1272">Resolve direct .so relocations across selected lib + companion libs</text>
-<text class="done-title phase-label" x="560" y="1246" text-anchor="middle">Phase 5.11 (Done)</text>
-</g>
-
-<line class="arrow" x1="340" y1="1288" x2="340" y2="1304" marker-end="url(#arrow)"/>
-
-<g>
-<rect class="done" x="40" y="1308" width="600" height="76" rx="8"/>
-<text class="done-title" x="60" y="1332">✓ APK assets + AssetManager</text>
-<text class="done-subtitle" x="60" y="1350">Extract packaged assets and expose them through AAssetManager/AAsset stubs</text>
-<text class="done-subtitle" x="60" y="1368">NativeActivity receives a live assetManager and can read APK asset bytes</text>
-<text class="done-title phase-label" x="560" y="1342" text-anchor="middle">Phase 5.12 (Done)</text>
-</g>
-
-<line class="arrow" x1="340" y1="1384" x2="340" y2="1400" marker-end="url(#arrow)"/>
-
-<g>
-<rect class="done" x="40" y="1404" width="600" height="76" rx="8"/>
-<text class="done-title" x="60" y="1428">✓ Package metadata + app context</text>
-<text class="done-subtitle" x="60" y="1446">Parse manifest package name and populate NativeActivity data paths</text>
-<text class="done-subtitle" x="60" y="1464">Expose getPackageName through lightweight JNI Activity context</text>
-<text class="done-title phase-label" x="560" y="1438" text-anchor="middle">Phase 5.13 (Done)</text>
-</g>
-
-<line class="arrow" x1="340" y1="1480" x2="340" y2="1496" marker-end="url(#arrow)"/>
-
-<g>
-<rect class="done" x="40" y="1500" width="600" height="76" rx="8"/>
-<text class="done-title" x="60" y="1524">✓ Binder/service expansion</text>
-<text class="done-subtitle" x="60" y="1542">Resolve libbinder_ndk service lookups into stable remote Binder handles</text>
-<text class="done-subtitle" x="60" y="1560">Support AIBinder liveness, ping, declared checks, and ref-count probes</text>
-<text class="done-title phase-label" x="560" y="1534" text-anchor="middle">Phase 5.14 (Done)</text>
-</g>
-
-<line class="arrow" x1="340" y1="1576" x2="340" y2="1592" marker-end="url(#arrow)"/>
-
-<g>
-<rect class="done" x="40" y="1596" width="600" height="76" rx="8"/>
-<text class="done-title" x="60" y="1620">✓ Binder transaction + Parcel basics</text>
-<text class="done-subtitle" x="60" y="1638">AIBinder_prepareTransaction/transact with typed Parcel storage</text>
-<text class="done-subtitle" x="60" y="1656">Primitive AParcel read/write plus OK AStatus reply headers</text>
-<text class="done-title phase-label" x="560" y="1630" text-anchor="middle">Phase 5.15 (Done)</text>
-</g>
-
-<line class="arrow" x1="340" y1="1672" x2="340" y2="1688" marker-end="url(#arrow)"/>
-
-<g>
-<rect class="done" x="40" y="1692" width="600" height="76" rx="8"/>
-<text class="done-title" x="60" y="1716">✓ Local Binder objects + onTransact</text>
-<text class="done-subtitle" x="60" y="1734">AIBinder_Class_define/new with local class, userdata, descriptor state</text>
-<text class="done-subtitle" x="60" y="1752">Dispatch local Binder transactions into guest onTransact callbacks</text>
-<text class="done-title phase-label" x="560" y="1726" text-anchor="middle">Phase 5.16 (Done)</text>
-</g>
-
-<line class="arrow" x1="340" y1="1768" x2="340" y2="1784" marker-end="url(#arrow)"/>
-
-<g>
-<rect class="done" x="40" y="1788" width="600" height="76" rx="8"/>
-<text class="done-title" x="60" y="1812">✓ Parcel strings + allocator callbacks</text>
-<text class="done-subtitle" x="60" y="1830">AParcel_readString invokes guest allocator callbacks and fills buffers</text>
-<text class="done-subtitle" x="60" y="1848">String and null-string values round-trip through local Binder transactions</text>
-<text class="done-title phase-label" x="560" y="1822" text-anchor="middle">Phase 5.17 (Done)</text>
-</g>
-
-<line class="arrow" x1="340" y1="1864" x2="340" y2="1880" marker-end="url(#arrow)"/>
-
-<g>
-<rect class="done" x="40" y="1884" width="600" height="76" rx="8"/>
-<text class="done-title" x="60" y="1908">✓ Parcel arrays + richer AIDL payloads</text>
-<text class="done-subtitle" x="60" y="1926">AParcel int32 array callbacks read/write normal and null arrays</text>
-<text class="done-subtitle" x="60" y="1944">String arrays handle getters, allocators, null arrays, and null elements</text>
-<text class="done-title phase-label" x="560" y="1918" text-anchor="middle">Phase 5.18 (Done)</text>
-</g>
-
-<line class="arrow" x1="340" y1="1960" x2="340" y2="1976" marker-end="url(#arrow)"/>
-
-<g>
-<rect class="done" x="40" y="1980" width="600" height="76" rx="8"/>
-<text class="done-title" x="60" y="2004">✓ Parcelable callbacks + FD payloads</text>
-<text class="done-subtitle" x="60" y="2022">Parcelable array callbacks dispatch nested parcel fields</text>
-<text class="done-subtitle" x="60" y="2040">ParcelFileDescriptor read/write carries real and null FD payloads</text>
-<text class="done-title phase-label" x="560" y="2014" text-anchor="middle">Phase 5.19 (Done)</text>
-</g>
-
-<line class="arrow" x1="340" y1="2056" x2="340" y2="2072" marker-end="url(#arrow)"/>
-
-<g>
-<rect class="done" x="40" y="2076" width="600" height="76" rx="8"/>
-<text class="done-title" x="60" y="2100">✓ Binder lifecycle hardening</text>
-<text class="done-subtitle" x="60" y="2118">Remote class association, refcounts, and null edge cases behave</text>
-<text class="done-subtitle" x="60" y="2136">Death recipients track link/unlink/delete cleanup callbacks</text>
-<text class="done-title phase-label" x="560" y="2110" text-anchor="middle">Phase 5.20 (Done)</text>
-</g>
-
-<line class="arrow" x1="340" y1="2152" x2="340" y2="2168" marker-end="url(#arrow)"/>
-
-<g>
-<rect class="current" x="40" y="2172" width="600" height="76" rx="8"/>
-<text class="current-title" x="60" y="2196">→ Binder driver realism</text>
-<text class="current-subtitle" x="60" y="2214">Model dead remote binders, failed transactions, and service cleanup</text>
-<text class="current-subtitle" x="60" y="2232">Prepare for real app service/proxy AIDL smoke tests</text>
-<text class="current-title phase-label" x="560" y="2206" text-anchor="middle">Phase 5.21 (Current)</text>
+<rect class="future" x="40" y="600" width="600" height="72" rx="8"/>
+<text class="future-title" x="60" y="626">Detailed roadmap files</text>
+<text class="future-subtitle" x="60" y="644">docs/roadmap/android_phase5_runtime.svg</text>
+<text class="future-subtitle" x="60" y="660">docs/roadmap/android_phase5_binder_aidl.svg</text>
+<text class="future-subtitle" x="360" y="660">docs/roadmap/android_phase5_apk_dependency.svg</text>
 </g>
 </svg>

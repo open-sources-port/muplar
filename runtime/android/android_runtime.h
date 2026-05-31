@@ -9,12 +9,14 @@
 //   0x2300–0x23FF : libdl       (dlopen, dlsym, dlclose, dlerror)
 //   0x2400–0x24FF : libEGL      (eglGetDisplay, eglInitialize, …)
 //   0x2500–0x25FF : libGLESv2   (eglGetProcAddress passthrough + GLES dispatch)
+//   0x2600–0x26FF : libc++ / NDK C++ runtime (operator new/delete, guards, atexit)
 //   0x2700–0x27FF : libbinder_ndk (AServiceManager/AIBinder basics)
 #pragma once
 
 #include <cstdint>
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 #include <functional>
 #include <memory>
 #include <optional>
@@ -83,10 +85,16 @@ public:
     // Return the builtin symbol map for a given soname.
     BuiltinSymbols builtin_symbols(const std::string& soname) const;
 
+    // Return a guest-callable trap stub for an unresolved direct .so import.
+    uint64_t unsupported_import_stub(const std::string& soname,
+                                     const std::string& symbol);
+
     static constexpr const char* KNOWN_SONAMES[] = {
         "libc.so", "libm.so", "libdl.so", "libdl_android.so", "liblog.so",
         "libandroid.so", "libbinder_ndk.so", "libstdc++.so",
         "libEGL.so", "libGLESv2.so", "libGLESv3.so",
+        "libc++_shared.so", "libc++abi.so", "libunwind.so",
+        "libandroid_support.so",
         nullptr
     };
 
@@ -115,6 +123,7 @@ private:
     void register_liblog_stubs();
     void register_libandroid_stubs();
     void register_libdl_stubs();
+    void register_libcxx_stubs();
     void register_libbinder_stubs();
     void register_libegl_stubs();
     void register_libgles_stubs();
@@ -145,7 +154,7 @@ private:
     // ── Bump allocator for malloc stubs ──────────────────────────────────────
     uint64_t heap_base_  = 0;
     uint64_t heap_bump_  = 0;
-    static constexpr uint64_t HEAP_SIZE = 512 * 1024;
+    static constexpr uint64_t HEAP_SIZE = 8 * 1024 * 1024; // 8MB for libc++ objects
 
     // ── pthread handle table ──────────────────────────────────────────────────
     struct PthreadEntry { uint64_t stack_gpa; uint64_t stack_size; };
@@ -236,9 +245,11 @@ private:
         bool remote = true;
         uint64_t class_handle = 0;
         uint64_t user_data = 0;
+        uint64_t extension_handle = 0;
         struct DeathLink {
             uint64_t recipient_handle = 0;
             uint64_t cookie = 0;
+            uint64_t on_binder_died = 0;
             uint64_t on_unlinked = 0;
         };
         std::vector<DeathLink> death_links;
@@ -249,8 +260,12 @@ private:
         uint64_t on_create = 0;
         uint64_t on_destroy = 0;
         uint64_t on_transact = 0;
+        bool interface_token_header = true;
+        std::vector<std::string> transaction_names;
+        std::vector<uint64_t> transaction_name_gpas;
     };
     enum class BinderParcelKind {
+        InterfaceToken,
         Int32,
         Uint32,
         Int64,
@@ -292,8 +307,12 @@ private:
         uint64_t on_binder_died = 0;
         uint64_t on_unlinked = 0;
     };
+    struct BinderWeak {
+        uint64_t binder_handle = 0;
+    };
     std::unordered_map<uint64_t, BinderService> binder_services_;
     std::unordered_map<std::string, uint64_t> binder_service_by_name_;
+    std::unordered_set<std::string> binder_removed_service_names_;
     uint64_t next_binder_handle_ = 0xB1D0'0001ULL;
     std::unordered_map<uint64_t, BinderClass> binder_classes_;
     uint64_t next_binder_class_handle_ = 0xB1C0'0001ULL;
@@ -303,6 +322,8 @@ private:
     uint64_t next_binder_status_handle_ = 0xB1D2'0001ULL;
     std::unordered_map<uint64_t, BinderDeathRecipient> binder_death_recipients_;
     uint64_t next_binder_death_handle_ = 0xB1D3'0001ULL;
+    std::unordered_map<uint64_t, BinderWeak> binder_weaks_;
+    uint64_t next_binder_weak_handle_ = 0xB1D4'0001ULL;
     GuestFunctionInvoker guest_function_invoker_;
 
     // ── Native window state ───────────────────────────────────────────────────
@@ -340,10 +361,16 @@ private:
     static constexpr uint64_t EGL_SUCCESS_VAL   = 0x3000ULL; // EGL_SUCCESS
 
     // eglGetProcAddress dispatch: guest hvc_nr → host fn ptr
-    // Allocated dynamically starting at HVC_GL_PROC_BASE.
+    // Allocated dynamically in [HVC_GL_PROC_BASE, HVC_GL_PROC_LIMIT).
     static constexpr uint32_t HVC_GL_PROC_BASE = 0x2800;
+    static constexpr uint32_t HVC_GL_PROC_LIMIT = 0x2E00;
     std::unordered_map<uint32_t, void*> proc_addr_handlers_;
     uint32_t next_proc_hvc_ = HVC_GL_PROC_BASE;
+
+    static constexpr uint32_t HVC_UNSUPPORTED_IMPORT_BASE = 0x2E00;
+    static constexpr uint32_t HVC_UNSUPPORTED_IMPORT_LIMIT = 0x3000;
+    std::unordered_map<std::string, uint64_t> unsupported_import_stubs_;
+    uint32_t next_unsupported_import_hvc_ = HVC_UNSUPPORTED_IMPORT_BASE;
 
     // Helper: resolve a symbol from ANGLE (tries EGL then GLES lib)
     void* angle_sym(const char* name) const;
@@ -357,6 +384,7 @@ private:
     bool looper_fd_ready(int32_t fd) const;
     void present_native_window_buffer();
     void present_egl_surface();
+    void release_binder_strong(uint64_t handle);
 
     bool host_window_enabled_ = false;
     std::unique_ptr<HostWindow> host_window_;

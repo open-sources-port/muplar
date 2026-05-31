@@ -1,6 +1,7 @@
 // runtime/android/android_runtime.cpp
 #include "android_runtime.h"
 
+#include <cstdlib>
 #include <cstdio>
 #include <cstring>
 #include <filesystem>
@@ -20,6 +21,7 @@
 
 extern "C" {
     #include "core/guest.h"
+    #include "syscall/internal.h"
     #include "syscall/proc.h"
 }
 
@@ -93,6 +95,7 @@ static constexpr uint32_t HVC_PIPE2               = 0x203D;
 static constexpr uint32_t HVC_READ                = 0x203E;
 static constexpr uint32_t HVC_WRITE               = 0x203F;
 static constexpr uint32_t HVC_CLOSE               = 0x2049;
+static constexpr uint32_t HVC_REGISTER_ATFORK     = 0x204A;
 
 // liblog
 static constexpr uint32_t HVC_LOG_PRINT           = 0x2100;
@@ -293,6 +296,7 @@ static constexpr uint32_t HVC_BINDER_ASSOC_CLASS      = 0x2755;
 static constexpr uint32_t HVC_BINDER_GET_CLASS        = 0x2756;
 static constexpr uint32_t HVC_BINDER_GET_USER_DATA    = 0x2757;
 static constexpr uint32_t HVC_BINDER_CLASS_GET_FN_NAME = 0x2758;
+static constexpr uint32_t HVC_BINDER_CLASS_DISABLE_TOKEN = 0x2759;
 static constexpr uint32_t HVC_STATUS_NEW_OK           = 0x2760;
 static constexpr uint32_t HVC_STATUS_FROM_STATUS      = 0x2761;
 static constexpr uint32_t HVC_STATUS_IS_OK            = 0x2762;
@@ -304,6 +308,59 @@ static constexpr uint32_t HVC_STATUS_DELETE           = 0x2767;
 static constexpr uint32_t HVC_BINDER_DEATH_NEW        = 0x2768;
 static constexpr uint32_t HVC_BINDER_DEATH_SET_UNLINK = 0x2769;
 static constexpr uint32_t HVC_BINDER_DEATH_DELETE     = 0x276A;
+static constexpr uint32_t HVC_BINDER_MUPLAR_KILL      = 0x276B;
+static constexpr uint32_t HVC_STATUS_FROM_EXCEPTION   = 0x276C;
+static constexpr uint32_t HVC_STATUS_FROM_EXCEPTION_MSG = 0x276D;
+static constexpr uint32_t HVC_STATUS_FROM_SERVICE     = 0x276E;
+static constexpr uint32_t HVC_STATUS_FROM_SERVICE_MSG = 0x276F;
+static constexpr uint32_t HVC_STATUS_DESCRIPTION      = 0x2770;
+static constexpr uint32_t HVC_STATUS_DELETE_DESC      = 0x2771;
+static constexpr uint32_t HVC_BINDER_WEAK_NEW         = 0x2772;
+static constexpr uint32_t HVC_BINDER_WEAK_DELETE      = 0x2773;
+static constexpr uint32_t HVC_BINDER_WEAK_PROMOTE     = 0x2774;
+static constexpr uint32_t HVC_BINDER_SET_EXTENSION    = 0x2775;
+static constexpr uint32_t HVC_BINDER_GET_EXTENSION    = 0x2776;
+static constexpr uint32_t HVC_BINDER_LT               = 0x2777;
+static constexpr uint32_t HVC_BINDER_WEAK_CLONE       = 0x2778;
+static constexpr uint32_t HVC_BINDER_WEAK_LT          = 0x2779;
+
+// libc++ / NDK C++ runtime  : 0x2600–0x26FF
+static constexpr uint32_t HVC_CXA_ATEXIT           = 0x2600;
+static constexpr uint32_t HVC_CXA_FINALIZE         = 0x2601;
+static constexpr uint32_t HVC_CXA_THROW            = 0x2602;
+static constexpr uint32_t HVC_CXA_BEGIN_CATCH      = 0x2603;
+static constexpr uint32_t HVC_CXA_END_CATCH        = 0x2604;
+static constexpr uint32_t HVC_CXA_RETHROW          = 0x2605;
+static constexpr uint32_t HVC_CXA_CURRENT_EXCEPTION= 0x2606;
+static constexpr uint32_t HVC_CXA_GUARD_ACQUIRE    = 0x2607;
+static constexpr uint32_t HVC_CXA_GUARD_RELEASE    = 0x2608;
+static constexpr uint32_t HVC_CXA_GUARD_ABORT      = 0x2609;
+static constexpr uint32_t HVC_CXA_PURE_VIRTUAL     = 0x260A;
+static constexpr uint32_t HVC_CXA_DELETED_VIRTUAL  = 0x260B;
+static constexpr uint32_t HVC_GXX_PERSONALITY      = 0x260C;
+static constexpr uint32_t HVC_UNWIND_RESUME        = 0x260D;
+static constexpr uint32_t HVC_OP_NEW               = 0x2610;
+static constexpr uint32_t HVC_OP_NEW_NOTHROW       = 0x2611;
+static constexpr uint32_t HVC_OP_NEW_ARRAY         = 0x2612;
+static constexpr uint32_t HVC_OP_DELETE            = 0x2613;
+static constexpr uint32_t HVC_OP_DELETE_SIZED      = 0x2614;
+static constexpr uint32_t HVC_OP_DELETE_ARRAY      = 0x2615;
+static constexpr uint32_t HVC_STD_TERMINATE        = 0x2620;
+static constexpr uint32_t HVC_STD_UNEXPECTED       = 0x2621;
+static constexpr uint32_t HVC_STD_BAD_ALLOC        = 0x2622;
+static constexpr uint32_t HVC_STD_BAD_CAST         = 0x2623;
+static constexpr uint32_t HVC_TYPEINFO_NAME        = 0x2630;
+static constexpr uint32_t HVC_DYNAMIC_CAST         = 0x2631;
+static constexpr uint32_t HVC_SHARED_COUNT_ADD     = 0x2632;
+static constexpr uint32_t HVC_SHARED_COUNT_RELEASE = 0x2633;
+static constexpr uint32_t HVC_SHARED_WEAK_ADD      = 0x2634;
+static constexpr uint32_t HVC_SHARED_WEAK_RELEASE_SHARED = 0x2635;
+static constexpr uint32_t HVC_SHARED_WEAK_RELEASE_WEAK   = 0x2636;
+static constexpr uint32_t HVC_SHARED_WEAK_LOCK           = 0x2637;
+static constexpr uint32_t HVC_SHARED_GET_DELETER         = 0x2638;
+static constexpr uint32_t HVC_ANDROID_CPUFEATURES  = 0x2640;
+static constexpr uint32_t HVC_ANDROID_CPUFAMILY    = 0x2641;
+static constexpr uint32_t HVC_ANDROID_CPUCOUNT     = 0x2642;
 
 // ── AArch64 HVC shim stub layout ─────────────────────────────────────────────
 //   movz x8, #<hvc_nr>   ; 4 bytes
@@ -784,14 +841,75 @@ uint64_t AndroidRuntime::add(const std::string& soname,
     return gpa;
 }
 
+void AndroidRuntime::release_binder_strong(uint64_t handle)
+{
+    auto it = binder_services_.find(handle);
+    if (it == binder_services_.end())
+        return;
+
+    BinderService& service = it->second;
+    if (service.remote) {
+        if (service.ref_count > 1)
+            service.ref_count--;
+        return;
+    }
+
+    if (service.ref_count > 1) {
+        service.ref_count--;
+        return;
+    }
+
+    uint64_t extension_handle = service.extension_handle;
+    uint64_t on_destroy = 0;
+    uint64_t user_data = service.user_data;
+    auto class_it = binder_classes_.find(service.class_handle);
+    if (class_it != binder_classes_.end())
+        on_destroy = class_it->second.on_destroy;
+    if (on_destroy && guest_function_invoker_)
+        guest_function_invoker_(on_destroy, { user_data });
+
+    for (const BinderService::DeathLink& link : service.death_links) {
+        if (link.on_unlinked && guest_function_invoker_)
+            guest_function_invoker_(link.on_unlinked, { link.cookie });
+    }
+
+    for (auto name_it = binder_service_by_name_.begin();
+         name_it != binder_service_by_name_.end();) {
+        if (name_it->second == handle) {
+            binder_removed_service_names_.insert(name_it->first);
+            name_it = binder_service_by_name_.erase(name_it);
+        } else {
+            ++name_it;
+        }
+    }
+
+    binder_services_.erase(it);
+
+    if (extension_handle)
+        release_binder_strong(extension_handle);
+}
+
 void AndroidRuntime::install()
 {
     if (installed_) return;
     installed_     = true;
     next_stub_gpa_ = arena_gpa_;
 
-    heap_base_ = arena_gpa_ + 0x10000;
+    heap_base_ = 0x1F0000000ULL;
     heap_bump_ = heap_base_;
+    pthread_mutex_lock(&mmap_lock);
+    int heap_map_rc =
+        guest_extend_page_tables(guest_, heap_base_, heap_base_ + HEAP_SIZE,
+                                 MEM_PERM_RW);
+    pthread_mutex_unlock(&mmap_lock);
+    if (heap_map_rc < 0) {
+        std::fprintf(stderr,
+            "[ART] failed to map Android runtime heap [0x%llx, 0x%llx)\n",
+            (unsigned long long)heap_base_,
+            (unsigned long long)(heap_base_ + HEAP_SIZE));
+        std::abort();
+    }
+
     native_window_.bits_gpa = arena_gpa_ + 0x0A0000;
     native_window_.bits_size =
         static_cast<uint64_t>(MAX_NATIVE_WINDOW_WIDTH) *
@@ -814,6 +932,7 @@ void AndroidRuntime::install()
     register_liblog_stubs();
     register_libandroid_stubs();
     register_libdl_stubs();
+    register_libcxx_stubs();
     register_libbinder_stubs();
     register_libegl_stubs();
     register_libgles_stubs();
@@ -828,6 +947,36 @@ BuiltinSymbols AndroidRuntime::builtin_symbols(const std::string& soname) const
 {
     auto it = sym_tables_.find(soname);
     return (it != sym_tables_.end()) ? it->second : BuiltinSymbols{};
+}
+
+uint64_t AndroidRuntime::unsupported_import_stub(const std::string& soname,
+                                                 const std::string& symbol)
+{
+    std::string key = soname + "\n" + symbol;
+    auto it = unsupported_import_stubs_.find(key);
+    if (it != unsupported_import_stubs_.end())
+        return it->second;
+
+    if (next_unsupported_import_hvc_ >= HVC_UNSUPPORTED_IMPORT_LIMIT) {
+        std::fprintf(stderr,
+            "[ART] unsupported import stub arena exhausted for %s:%s\n",
+            soname.c_str(),
+            symbol.c_str());
+        return 0;
+    }
+
+    uint32_t hvc_nr = next_unsupported_import_hvc_++;
+    uint64_t gpa = write_stub(hvc_nr);
+    handlers_[hvc_nr] =
+        [soname, symbol](guest_t*, const uint64_t[8]) -> uint64_t {
+            std::fprintf(stderr,
+                "[ART] unsupported direct import called: %s needs %s\n",
+                soname.c_str(),
+                symbol.c_str());
+            return 0;
+        };
+    unsupported_import_stubs_[key] = gpa;
+    return gpa;
 }
 
 bool AndroidRuntime::try_dispatch(uint32_t        hvc_nr,
@@ -852,10 +1001,12 @@ bool AndroidRuntime::try_dispatch(uint32_t        hvc_nr,
 void AndroidRuntime::register_libc_stubs()
 {
     add("libc.so", "malloc", HVC_MALLOC,
-        [this](guest_t*, const uint64_t a[8]) -> uint64_t {
+        [this](guest_t* g, const uint64_t a[8]) -> uint64_t {
             uint64_t size = (a[0] + 15) & ~15ULL;
             if (!a[0] || heap_bump_ + size > heap_base_ + HEAP_SIZE) return 0;
             uint64_t ptr = heap_bump_; heap_bump_ += size;
+            std::vector<uint8_t> z(size, 0);
+            guest_write(g, ptr, z.data(), size);
             return ptr;
         });
 
@@ -870,10 +1021,16 @@ void AndroidRuntime::register_libc_stubs()
         });
 
     add("libc.so", "realloc", HVC_REALLOC,
-        [this](guest_t*, const uint64_t a[8]) -> uint64_t {
+        [this](guest_t* g, const uint64_t a[8]) -> uint64_t {
             uint64_t size = (a[1] + 15) & ~15ULL;
             if (!size || heap_bump_ + size > heap_base_ + HEAP_SIZE) return 0;
             uint64_t ptr = heap_bump_; heap_bump_ += size;
+            std::vector<uint8_t> buf(size, 0);
+            if (a[0] >= heap_base_ && a[0] < heap_bump_) {
+                uint64_t copy = std::min(size, ptr - a[0]);
+                guest_read(g, a[0], buf.data(), copy);
+            }
+            guest_write(g, ptr, buf.data(), size);
             return ptr;
         });
 
@@ -984,6 +1141,9 @@ void AndroidRuntime::register_libc_stubs()
         [](guest_t*, const uint64_t[8]) -> uint64_t { return (uint64_t)::getpid(); });
 
     add("libc.so", "getenv", HVC_GETENV_LIBC,
+        [](guest_t*, const uint64_t[8]) -> uint64_t { return 0; });
+
+    add("libc.so", "__register_atfork", HVC_REGISTER_ATFORK,
         [](guest_t*, const uint64_t[8]) -> uint64_t { return 0; });
 
     add("libc.so", "pthread_create", HVC_PTHREAD_CREATE,
@@ -1189,8 +1349,17 @@ void AndroidRuntime::register_libc_stubs()
             return 0;
         });
 
-    sym_tables_["libm.so"]    = sym_tables_["libc.so"];
+    uint64_t stdio_gpa = arena_gpa_ + 0x080000;
+    std::vector<uint8_t> stdio_zero(0x600, 0);
+    guest_write(guest_, stdio_gpa, stdio_zero.data(), stdio_zero.size());
+    sym_tables_["libc.so"]["__sF"] = stdio_gpa;
+
+    sym_tables_["libm.so"]      = sym_tables_["libc.so"];
     sym_tables_["libstdc++.so"] = sym_tables_["libc.so"];
+    // libc++_shared.so and NDK wrapper libs re-export most libc symbols
+    sym_tables_["libc++_shared.so"]    = sym_tables_["libc.so"];
+    sym_tables_["libandroid_support.so"] = sym_tables_["libc.so"];
+    sym_tables_["libc++abi.so"]         = sym_tables_["libc.so"];
 }
 
 // ── liblog stubs ──────────────────────────────────────────────────────────────
@@ -1749,29 +1918,66 @@ void AndroidRuntime::register_libdl_stubs()
 
     add("libdl.so", "dlsym", HVC_DLSYM,
         [this](guest_t* g, const uint64_t a[8]) -> uint64_t {
-            auto sym = guest_read_string(g,a[1]);
-            // Search our stub tables first
+            uint64_t handle = a[0];
+            auto sym = guest_read_string(g, a[1]);
+            if (sym.empty()) return 0;
+
+            // RTLD_DEFAULT (0) or RTLD_NEXT (−1): search all tables.
+            // Otherwise narrow to the soname that was dlopen'd.
+            std::string scoped_soname;
+            if (handle != 0 && handle != static_cast<uint64_t>(-1LL)) {
+                auto hit = dl_handles_.find(handle);
+                if (hit != dl_handles_.end())
+                    scoped_soname = hit->second.path;
+            }
+
+            // Helper: search one soname table
+            auto search_table = [&](const std::string& soname) -> uint64_t {
+                auto tit = sym_tables_.find(soname);
+                if (tit == sym_tables_.end()) return 0;
+                auto sit = tit->second.find(sym);
+                return (sit != tit->second.end()) ? sit->second : 0;
+            };
+
+            // 1. Try scoped soname first (exact handle match)
+            if (!scoped_soname.empty()) {
+                uint64_t gpa = search_table(scoped_soname);
+                if (gpa) return gpa;
+                // Also try just the basename (dlopen path may be full path)
+                auto slash = scoped_soname.rfind('/');
+                std::string base = (slash == std::string::npos)
+                    ? scoped_soname : scoped_soname.substr(slash + 1);
+                if (base != scoped_soname) {
+                    gpa = search_table(base);
+                    if (gpa) return gpa;
+                }
+            }
+
+            // 2. Search all tables (covers RTLD_DEFAULT and cross-soname refs)
             for (auto& [soname, syms] : sym_tables_) {
                 auto it = syms.find(sym);
-                if (it != syms.end()) return it->second;
+                if (it != syms.end()) {
+                    return it->second;
+                }
             }
-            // Then try ANGLE directly
+
+            // 3. Try ANGLE for GL symbols
             void* fn = angle_sym(sym.c_str());
             if (fn) {
-                // Allocate a passthrough HVC stub for this symbol
                 uint32_t nr = next_proc_hvc_++;
                 uint64_t gpa = write_stub(nr);
-                handlers_[nr] = [fn](guest_t*, const uint64_t[8]) -> uint64_t {
-                    // Direct host call — args already in regs, but we can't
-                    // forward variadic AArch64 args from C++ safely here.
-                    // Log and return 0 for now; procaddr path is the right one.
-                    (void)fn;
+                void* captured = fn;
+                std::string captured_name = sym;
+                handlers_[nr] = [captured, captured_name](guest_t*, const uint64_t[8]) -> uint64_t {
+                    std::fprintf(stderr, "[GL] dlsym-resolved %s() called\n", captured_name.c_str());
+                    (void)captured;
                     return 0;
                 };
-                std::fprintf(stderr, "[ART] dlsym(%s) → stub 0x%llx\n",
+                std::fprintf(stderr, "[ART] dlsym(%s) → ANGLE stub 0x%llx\n",
                              sym.c_str(), (unsigned long long)gpa);
                 return gpa;
             }
+
             std::fprintf(stderr, "[ART] dlsym(%s) → NOT FOUND\n", sym.c_str());
             return 0;
         });
@@ -1791,6 +1997,8 @@ void AndroidRuntime::register_libbinder_stubs()
     constexpr uint64_t STATUS_OK = 0;
     constexpr uint64_t STATUS_BAD_VALUE =
         static_cast<uint64_t>(static_cast<int64_t>(-22));
+    constexpr uint64_t STATUS_BAD_TYPE =
+        static_cast<uint64_t>(static_cast<int64_t>(-2147483647LL));
     constexpr uint64_t STATUS_INVALID_OPERATION =
         static_cast<uint64_t>(static_cast<int64_t>(-38));
     constexpr uint64_t STATUS_NO_MEMORY =
@@ -1803,10 +2011,16 @@ void AndroidRuntime::register_libbinder_stubs()
         static_cast<uint64_t>(static_cast<int64_t>(-32));
     constexpr uint64_t STATUS_NOT_ENOUGH_DATA =
         static_cast<uint64_t>(static_cast<int64_t>(-61));
+    constexpr uint64_t STATUS_UNEXPECTED_NULL =
+        static_cast<uint64_t>(static_cast<int64_t>(-2147483640LL));
 
     auto find_service = [this](uint64_t handle) -> BinderService* {
         auto it = binder_services_.find(handle);
         return it == binder_services_.end() ? nullptr : &it->second;
+    };
+    auto find_weak = [this](uint64_t handle) -> BinderWeak* {
+        auto it = binder_weaks_.find(handle);
+        return it == binder_weaks_.end() ? nullptr : &it->second;
     };
     auto make_binder_service =
         [](std::string name,
@@ -1834,15 +2048,67 @@ void AndroidRuntime::register_libbinder_stubs()
             if (link.on_unlinked && guest_function_invoker_)
                 guest_function_invoker_(link.on_unlinked, { link.cookie });
         };
+    auto notify_binder_died =
+        [this](const BinderService::DeathLink& link) {
+            if (link.on_binder_died && guest_function_invoker_)
+                guest_function_invoker_(link.on_binder_died, { link.cookie });
+        };
+    auto cleanup_service_names_for_handle =
+        [this](uint64_t handle, bool mark_removed) {
+            for (auto it = binder_service_by_name_.begin();
+                 it != binder_service_by_name_.end();) {
+                if (it->second == handle) {
+                    if (mark_removed)
+                        binder_removed_service_names_.insert(it->first);
+                    it = binder_service_by_name_.erase(it);
+                } else {
+                    ++it;
+                }
+            }
+        };
+    auto retire_service =
+        [cleanup_service_names_for_handle,
+         notify_binder_died,
+         notify_death_unlinked]
+        (uint64_t handle, BinderService* service, const char* reason) -> bool {
+            if (!service || !service->alive)
+                return false;
+            service->alive = false;
+            cleanup_service_names_for_handle(handle, false);
+            for (const BinderService::DeathLink& link : service->death_links) {
+                notify_binder_died(link);
+                notify_death_unlinked(link);
+            }
+            service->death_links.clear();
+            std::fprintf(stderr,
+                         "[Binder] service 0x%llx marked dead (%s)\n",
+                         (unsigned long long)handle,
+                         reason ? reason : "unknown");
+            return true;
+        };
 
     auto service_handle_for_name =
-        [this, make_binder_service](const std::string& name) -> uint64_t {
+        [this, make_binder_service](const std::string& name,
+                                    bool create_missing) -> uint64_t {
             if (name.empty())
                 return 0;
 
             auto existing = binder_service_by_name_.find(name);
-            if (existing != binder_service_by_name_.end())
-                return existing->second;
+            if (existing != binder_service_by_name_.end()) {
+                auto service_it = binder_services_.find(existing->second);
+                if (service_it != binder_services_.end() &&
+                    service_it->second.alive) {
+                    return existing->second;
+                }
+                binder_service_by_name_.erase(existing);
+            }
+
+            if (binder_removed_service_names_.find(name) !=
+                binder_removed_service_names_.end()) {
+                return 0;
+            }
+            if (!create_missing)
+                return 0;
 
             uint64_t handle = next_binder_handle_++;
             binder_services_[handle] =
@@ -1854,9 +2120,10 @@ void AndroidRuntime::register_libbinder_stubs()
     auto service_lookup =
         [service_handle_for_name](const char* op,
                                   guest_t* g,
-                                  const uint64_t a[8]) -> uint64_t {
+                                  const uint64_t a[8],
+                                  bool create_missing) -> uint64_t {
             std::string name = guest_read_string(g, a[0]);
-            uint64_t handle = service_handle_for_name(name);
+            uint64_t handle = service_handle_for_name(name, create_missing);
             std::fprintf(stderr, "[Binder] %s(%s) -> 0x%llx\n",
                          op,
                          name.empty() ? "<empty>" : name.c_str(),
@@ -1866,37 +2133,50 @@ void AndroidRuntime::register_libbinder_stubs()
 
     add("libbinder_ndk.so", "AServiceManager_checkService", HVC_SERVICE_CHECK,
         [service_lookup](guest_t* g, const uint64_t a[8]) -> uint64_t {
-            return service_lookup("checkService", g, a);
+            return service_lookup("checkService", g, a, true);
         });
     add("libbinder_ndk.so", "AServiceManager_getService", HVC_SERVICE_GET,
         [service_lookup](guest_t* g, const uint64_t a[8]) -> uint64_t {
-            return service_lookup("getService", g, a);
+            return service_lookup("getService", g, a, true);
         });
     add("libbinder_ndk.so", "AServiceManager_waitForService", HVC_SERVICE_WAIT,
         [service_lookup](guest_t* g, const uint64_t a[8]) -> uint64_t {
-            return service_lookup("waitForService", g, a);
+            return service_lookup("waitForService", g, a, true);
         });
     add("libbinder_ndk.so", "AServiceManager_isDeclared", HVC_SERVICE_IS_DECLARED,
-        [](guest_t* g, const uint64_t a[8]) -> uint64_t {
+        [this](guest_t* g, const uint64_t a[8]) -> uint64_t {
             std::string name = guest_read_string(g, a[0]);
-            uint64_t declared = name.empty() ? 0 : 1;
+            uint64_t declared =
+                name.empty() ||
+                binder_removed_service_names_.find(name) !=
+                    binder_removed_service_names_.end()
+                    ? 0
+                    : 1;
             std::fprintf(stderr, "[Binder] isDeclared(%s) -> %llu\n",
                          name.empty() ? "<empty>" : name.c_str(),
                          (unsigned long long)declared);
             return declared;
         });
     add("libbinder_ndk.so", "AServiceManager_addService", HVC_SERVICE_ADD,
-        [this, service_handle_for_name, make_binder_service]
+        [this, find_service]
         (guest_t* g, const uint64_t a[8]) -> uint64_t {
             std::string name = guest_read_string(g, a[1]);
-            uint64_t handle = a[0] ? a[0] : service_handle_for_name(name);
-            if (name.empty() || !handle)
+            uint64_t handle = a[0];
+            BinderService* service = find_service(handle);
+            if (name.empty() || !service || !service->alive || service->remote)
                 return STATUS_BAD_VALUE;
 
-            if (binder_services_.find(handle) == binder_services_.end())
-                binder_services_[handle] =
-                    make_binder_service(name, 1, true, true, 0, 0);
+            auto existing = binder_service_by_name_.find(name);
+            if (existing != binder_service_by_name_.end() &&
+                existing->second != handle) {
+                BinderService* existing_service = find_service(existing->second);
+                if (existing_service && existing_service->alive)
+                    return STATUS_ALREADY_EXISTS;
+            }
+
             binder_service_by_name_[name] = handle;
+            binder_removed_service_names_.erase(name);
+            service->name = name;
             std::fprintf(stderr, "[Binder] addService(%s, 0x%llx) -> OK\n",
                          name.c_str(), (unsigned long long)handle);
             return STATUS_OK;
@@ -1926,33 +2206,9 @@ void AndroidRuntime::register_libbinder_stubs()
             return 0;
         });
     add("libbinder_ndk.so", "AIBinder_decStrong", HVC_BINDER_DEC_STRONG,
-        [this, find_service, notify_death_unlinked]
+        [this]
         (guest_t*, const uint64_t a[8]) -> uint64_t {
-            BinderService* service = find_service(a[0]);
-            if (!service)
-                return 0;
-
-            if (service->remote) {
-                if (service->ref_count > 1)
-                    service->ref_count--;
-                return 0;
-            }
-
-            if (service->ref_count > 1) {
-                service->ref_count--;
-                return 0;
-            }
-
-            uint64_t on_destroy = 0;
-            uint64_t user_data = service->user_data;
-            auto class_it = binder_classes_.find(service->class_handle);
-            if (class_it != binder_classes_.end())
-                on_destroy = class_it->second.on_destroy;
-            if (on_destroy && guest_function_invoker_)
-                guest_function_invoker_(on_destroy, { user_data });
-            for (const BinderService::DeathLink& link : service->death_links)
-                notify_death_unlinked(link);
-            binder_services_.erase(a[0]);
+            release_binder_strong(a[0]);
             return 0;
         });
     add("libbinder_ndk.so", "AIBinder_debugGetRefCount", HVC_BINDER_REF_COUNT,
@@ -1971,10 +2227,14 @@ void AndroidRuntime::register_libbinder_stubs()
         [](guest_t*, const uint64_t[8]) -> uint64_t { return 0; });
     add("libbinder_ndk.so", "AIBinder_dump", HVC_BINDER_DUMP,
         [find_service](guest_t*, const uint64_t a[8]) -> uint64_t {
-            return find_service(a[0]) ? STATUS_OK : STATUS_BAD_VALUE;
+            BinderService* service = find_service(a[0]);
+            if (!service)
+                return STATUS_BAD_VALUE;
+            return service->alive ? STATUS_OK : STATUS_DEAD_OBJECT;
         });
 
     constexpr int32_t EX_NONE = 0;
+    constexpr int32_t EX_SERVICE_SPECIFIC = -8;
     constexpr int32_t EX_TRANSACTION_FAILED = -129;
     constexpr uint32_t FLAG_ONEWAY = 0x01;
     constexpr int32_t MAX_PARCEL_ARRAY_LENGTH = 1024;
@@ -2149,6 +2409,7 @@ void AndroidRuntime::register_libbinder_stubs()
             BinderService::DeathLink link = {
                 a[1],
                 a[2],
+                recipient->on_binder_died,
                 recipient->on_unlinked,
             };
             if (!service->alive) {
@@ -2192,6 +2453,15 @@ void AndroidRuntime::register_libbinder_stubs()
             }
             return STATUS_NAME_NOT_FOUND;
         });
+    add("libbinder_ndk.so", "__muplar_binder_kill", HVC_BINDER_MUPLAR_KILL,
+        [find_service, retire_service](guest_t*, const uint64_t a[8]) -> uint64_t {
+            BinderService* service = find_service(a[0]);
+            if (!service)
+                return STATUS_BAD_VALUE;
+            return retire_service(a[0], service, "test hook")
+                ? STATUS_OK
+                : STATUS_DEAD_OBJECT;
+        });
 
     add("libbinder_ndk.so", "AIBinder_Class_define", HVC_BINDER_CLASS_DEFINE,
         [this](guest_t* g, const uint64_t a[8]) -> uint64_t {
@@ -2200,13 +2470,12 @@ void AndroidRuntime::register_libbinder_stubs()
                 return 0;
 
             uint64_t handle = next_binder_class_handle_++;
-            binder_classes_[handle] = {
-                descriptor,
-                0,
-                a[1],
-                a[2],
-                a[3]
-            };
+            BinderClass clazz;
+            clazz.descriptor = descriptor;
+            clazz.on_create = a[1];
+            clazz.on_destroy = a[2];
+            clazz.on_transact = a[3];
+            binder_classes_[handle] = std::move(clazz);
             std::fprintf(stderr,
                 "[Binder] Class_define(%s) -> 0x%llx onTransact=0x%llx\n",
                 descriptor.c_str(),
@@ -2219,7 +2488,24 @@ void AndroidRuntime::register_libbinder_stubs()
         [](guest_t*, const uint64_t[8]) -> uint64_t { return 0; });
     add("libbinder_ndk.so", "AIBinder_Class_setTransactionCodeToFunctionNameMap",
         HVC_BINDER_CLASS_SET_NAMES,
-        [](guest_t*, const uint64_t[8]) -> uint64_t { return 0; });
+        [find_class](guest_t* g, const uint64_t a[8]) -> uint64_t {
+            BinderClass* clazz = find_class(a[0]);
+            size_t length = static_cast<size_t>(a[2]);
+            if (!clazz || !a[1] || length > MAX_PARCEL_ARRAY_LENGTH)
+                return 0;
+
+            clazz->transaction_names.clear();
+            clazz->transaction_name_gpas.clear();
+            clazz->transaction_names.reserve(length);
+            clazz->transaction_name_gpas.resize(length);
+            for (size_t i = 0; i < length; ++i) {
+                uint64_t name_gpa =
+                    guest_read_u64(g, a[1] + static_cast<uint64_t>(i) * 8);
+                clazz->transaction_names.push_back(
+                    name_gpa ? guest_read_string(g, name_gpa) : std::string());
+            }
+            return 0;
+        });
     add("libbinder_ndk.so", "AIBinder_Class_getDescriptor",
         HVC_BINDER_CLASS_GET_NAME,
         [find_class, alloc_guest_string](guest_t* g, const uint64_t a[8]) -> uint64_t {
@@ -2232,7 +2518,32 @@ void AndroidRuntime::register_libbinder_stubs()
         });
     add("libbinder_ndk.so", "AIBinder_Class_getFunctionName",
         HVC_BINDER_CLASS_GET_FN_NAME,
-        [](guest_t*, const uint64_t[8]) -> uint64_t { return 0; });
+        [find_class, alloc_guest_string]
+        (guest_t* g, const uint64_t a[8]) -> uint64_t {
+            BinderClass* clazz = find_class(a[0]);
+            uint32_t code = static_cast<uint32_t>(a[1]);
+            if (!clazz || code == 0)
+                return 0;
+            size_t index = static_cast<size_t>(code - 1);
+            if (index >= clazz->transaction_names.size() ||
+                clazz->transaction_names[index].empty()) {
+                return 0;
+            }
+            if (index >= clazz->transaction_name_gpas.size())
+                clazz->transaction_name_gpas.resize(clazz->transaction_names.size());
+            if (!clazz->transaction_name_gpas[index]) {
+                clazz->transaction_name_gpas[index] =
+                    alloc_guest_string(g, clazz->transaction_names[index]);
+            }
+            return clazz->transaction_name_gpas[index];
+        });
+    add("libbinder_ndk.so", "AIBinder_Class_disableInterfaceTokenHeader",
+        HVC_BINDER_CLASS_DISABLE_TOKEN,
+        [find_class](guest_t*, const uint64_t a[8]) -> uint64_t {
+            if (BinderClass* clazz = find_class(a[0]))
+                clazz->interface_token_header = false;
+            return 0;
+        });
 
     add("libbinder_ndk.so", "AIBinder_new", HVC_BINDER_NEW,
         [this, find_class, make_binder_service]
@@ -2276,11 +2587,132 @@ void AndroidRuntime::register_libbinder_stubs()
             return service ? service->user_data : 0;
         });
 
-    add("libbinder_ndk.so", "AIBinder_prepareTransaction", HVC_BINDER_PREPARE_TX,
-        [find_service, create_parcel](guest_t* g, const uint64_t a[8]) -> uint64_t {
-            if (!find_service(a[0]) || !a[1])
+    add("libbinder_ndk.so", "AIBinder_Weak_new", HVC_BINDER_WEAK_NEW,
+        [this, find_service](guest_t*, const uint64_t a[8]) -> uint64_t {
+            BinderService* service = find_service(a[0]);
+            if (!service)
+                return 0;
+            uint64_t handle = next_binder_weak_handle_++;
+            binder_weaks_[handle] = { a[0] };
+            std::fprintf(stderr,
+                "[Binder] Weak_new binder=0x%llx -> weak=0x%llx\n",
+                (unsigned long long)a[0],
+                (unsigned long long)handle);
+            return handle;
+        });
+    add("libbinder_ndk.so", "AIBinder_Weak_delete", HVC_BINDER_WEAK_DELETE,
+        [this](guest_t*, const uint64_t a[8]) -> uint64_t {
+            binder_weaks_.erase(a[0]);
+            return 0;
+        });
+    add("libbinder_ndk.so", "AIBinder_Weak_promote",
+        HVC_BINDER_WEAK_PROMOTE,
+        [find_weak, find_service](guest_t*, const uint64_t a[8]) -> uint64_t {
+            BinderWeak* weak = find_weak(a[0]);
+            if (!weak)
+                return 0;
+            BinderService* service = find_service(weak->binder_handle);
+            if (!service || !service->alive)
+                return 0;
+            service->ref_count++;
+            return weak->binder_handle;
+        });
+    add("libbinder_ndk.so", "AIBinder_Weak_clone", HVC_BINDER_WEAK_CLONE,
+        [this, find_weak](guest_t*, const uint64_t a[8]) -> uint64_t {
+            BinderWeak* weak = find_weak(a[0]);
+            if (!weak)
+                return 0;
+            uint64_t handle = next_binder_weak_handle_++;
+            binder_weaks_[handle] = *weak;
+            return handle;
+        });
+    add("libbinder_ndk.so", "AIBinder_Weak_lt", HVC_BINDER_WEAK_LT,
+        [find_weak](guest_t*, const uint64_t a[8]) -> uint64_t {
+            BinderWeak* lhs = find_weak(a[0]);
+            BinderWeak* rhs = find_weak(a[1]);
+            uint64_t lhs_binder = lhs ? lhs->binder_handle : 0;
+            uint64_t rhs_binder = rhs ? rhs->binder_handle : 0;
+            return lhs_binder < rhs_binder ? 1 : 0;
+        });
+    add("libbinder_ndk.so", "AIBinder_lt", HVC_BINDER_LT,
+        [](guest_t*, const uint64_t a[8]) -> uint64_t {
+            return a[0] < a[1] ? 1 : 0;
+        });
+    add("libbinder_ndk.so", "AIBinder_setExtension",
+        HVC_BINDER_SET_EXTENSION,
+        [this, find_service](guest_t*, const uint64_t a[8]) -> uint64_t {
+            BinderService* service = find_service(a[0]);
+            BinderService* extension = find_service(a[1]);
+            if (!a[0] || !a[1])
+                return STATUS_UNEXPECTED_NULL;
+            if (!service || !extension)
                 return STATUS_BAD_VALUE;
+            if (!service->alive || !extension->alive)
+                return STATUS_DEAD_OBJECT;
+            if (service->remote)
+                return STATUS_INVALID_OPERATION;
+            if (service->extension_handle == a[1])
+                return STATUS_OK;
+
+            extension->ref_count++;
+            uint64_t old_extension = service->extension_handle;
+            service->extension_handle = a[1];
+            if (old_extension)
+                release_binder_strong(old_extension);
+            std::fprintf(stderr,
+                "[Binder] setExtension binder=0x%llx ext=0x%llx\n",
+                (unsigned long long)a[0],
+                (unsigned long long)a[1]);
+            return STATUS_OK;
+        });
+    add("libbinder_ndk.so", "AIBinder_getExtension",
+        HVC_BINDER_GET_EXTENSION,
+        [find_service](guest_t* g, const uint64_t a[8]) -> uint64_t {
+            if (!a[0])
+                return STATUS_UNEXPECTED_NULL;
+            if (!a[1])
+                return STATUS_BAD_VALUE;
+            BinderService* service = find_service(a[0]);
+            if (!service)
+                return STATUS_BAD_VALUE;
+            uint64_t extension_handle = service->extension_handle;
+            if (!extension_handle) {
+                guest_write_u64(g, a[1], 0);
+                return STATUS_OK;
+            }
+            BinderService* extension = find_service(extension_handle);
+            if (!extension || !extension->alive) {
+                guest_write_u64(g, a[1], 0);
+                return STATUS_DEAD_OBJECT;
+            }
+            extension->ref_count++;
+            guest_write_u64(g, a[1], extension_handle);
+            return STATUS_OK;
+        });
+
+    add("libbinder_ndk.so", "AIBinder_prepareTransaction", HVC_BINDER_PREPARE_TX,
+        [this, find_service, find_class, create_parcel, append_value]
+        (guest_t* g, const uint64_t a[8]) -> uint64_t {
+            BinderService* service = find_service(a[0]);
+            if (!service || !a[1])
+                return STATUS_BAD_VALUE;
+            if (!service->alive)
+                return STATUS_DEAD_OBJECT;
+            BinderClass* clazz = service->class_handle
+                ? find_class(service->class_handle)
+                : nullptr;
+            if (service->class_handle && !clazz)
+                return STATUS_INVALID_OPERATION;
             uint64_t parcel = create_parcel(a[0], 0, false);
+            if (clazz && clazz->interface_token_header) {
+                uint64_t rc = append_value(
+                    parcel, BinderParcelKind::InterfaceToken, 0,
+                    clazz->descriptor);
+                if (rc != STATUS_OK) {
+                    binder_parcels_.erase(parcel);
+                    return rc;
+                }
+            }
             guest_write_u64(g, a[1], parcel);
             std::fprintf(stderr,
                 "[Binder] prepareTransaction binder=0x%llx parcel=0x%llx\n",
@@ -2307,6 +2739,25 @@ void AndroidRuntime::register_libbinder_stubs()
 
             uint64_t out_handle = 0;
             uint64_t status = STATUS_OK;
+            auto consume_input = [&]() {
+                if (in_handle) {
+                    binder_parcels_.erase(in_handle);
+                    if (a[2])
+                        guest_write_u64(g, a[2], 0);
+                }
+            };
+            if (!service->alive) {
+                consume_input();
+                if (out_gpa)
+                    guest_write_u64(g, out_gpa, 0);
+                std::fprintf(stderr,
+                    "[Binder] transact dead binder=0x%llx code=%u in=0x%llx flags=0x%x\n",
+                    (unsigned long long)binder,
+                    code,
+                    (unsigned long long)in_handle,
+                    flags);
+                return STATUS_DEAD_OBJECT;
+            }
 
             if (!service->remote &&
                 service->class_handle &&
@@ -2317,15 +2768,33 @@ void AndroidRuntime::register_libbinder_stubs()
                     return STATUS_INVALID_OPERATION;
                 }
 
+                if (in)
+                    in->cursor = 0;
+                if (class_it->second.interface_token_header) {
+                    if (!in ||
+                        in->cursor >= in->values.size() ||
+                        in->values[in->cursor].kind !=
+                            BinderParcelKind::InterfaceToken ||
+                        in->values[in->cursor].text !=
+                            class_it->second.descriptor) {
+                        consume_input();
+                        if (out_gpa)
+                            guest_write_u64(g, out_gpa, 0);
+                        std::fprintf(stderr,
+                            "[Binder] local transact bad interface token binder=0x%llx code=%u\n",
+                            (unsigned long long)binder,
+                            code);
+                        return STATUS_BAD_TYPE;
+                    }
+                    in->cursor++;
+                }
+
                 if (!(flags & FLAG_ONEWAY) && out_gpa) {
                     out_handle = create_parcel(binder, code, true);
                     guest_write_u64(g, out_gpa, out_handle);
                 } else if (out_gpa) {
                     guest_write_u64(g, out_gpa, 0);
                 }
-
-                if (in)
-                    in->cursor = 0;
 
                 status = static_cast<uint64_t>(guest_function_invoker_(
                     class_it->second.on_transact,
@@ -2334,11 +2803,7 @@ void AndroidRuntime::register_libbinder_stubs()
                 if (out_handle)
                     binder_parcels_[out_handle].cursor = 0;
 
-                if (in_handle) {
-                    binder_parcels_.erase(in_handle);
-                    if (a[2])
-                        guest_write_u64(g, a[2], 0);
-                }
+                consume_input();
 
                 std::fprintf(stderr,
                     "[Binder] local transact binder=0x%llx code=%u in=0x%llx out=0x%llx status=%lld\n",
@@ -2384,11 +2849,7 @@ void AndroidRuntime::register_libbinder_stubs()
                 guest_write_u64(g, out_gpa, 0);
             }
 
-            if (in_handle) {
-                binder_parcels_.erase(in_handle);
-                if (a[2])
-                    guest_write_u64(g, a[2], 0);
-            }
+            consume_input();
 
             std::fprintf(stderr,
                 "[Binder] transact binder=0x%llx code=%u in=0x%llx out=0x%llx flags=0x%x\n",
@@ -2464,13 +2925,20 @@ void AndroidRuntime::register_libbinder_stubs()
             return rc;
         });
     add("libbinder_ndk.so", "AParcel_writeStatusHeader", HVC_PARCEL_WRITE_STATUS,
-        [append_value, find_status](guest_t*, const uint64_t a[8]) -> uint64_t {
+        [append_parcel_value, find_status](guest_t*, const uint64_t a[8]) -> uint64_t {
             BinderStatus* status = find_status(a[1]);
-            int32_t low_status = status ? status->status : 0;
-            return append_value(
-                a[0],
-                BinderParcelKind::Status,
-                static_cast<uint64_t>(static_cast<int64_t>(low_status)));
+            BinderParcelValue value;
+            value.kind = BinderParcelKind::Status;
+            if (status) {
+                value.value =
+                    static_cast<uint64_t>(static_cast<int64_t>(status->status));
+                value.elements.push_back(
+                    static_cast<uint64_t>(static_cast<int64_t>(status->exception)));
+                value.elements.push_back(
+                    static_cast<uint64_t>(static_cast<int64_t>(status->service_error)));
+                value.text = status->message;
+            }
+            return append_parcel_value(a[0], std::move(value));
         });
     add("libbinder_ndk.so", "AParcel_readStatusHeader", HVC_PARCEL_READ_STATUS,
         [find_parcel, create_status](guest_t* g, const uint64_t a[8]) -> uint64_t {
@@ -2478,13 +2946,30 @@ void AndroidRuntime::register_libbinder_stubs()
             if (!parcel || !a[1])
                 return STATUS_BAD_VALUE;
             int32_t low_status = 0;
+            int32_t exception = EX_NONE;
+            int32_t service_error = 0;
+            std::string message;
             if (parcel->cursor < parcel->values.size() &&
                 parcel->values[parcel->cursor].kind == BinderParcelKind::Status) {
-                low_status = static_cast<int32_t>(parcel->values[parcel->cursor].value);
+                const BinderParcelValue& value = parcel->values[parcel->cursor];
+                low_status =
+                    static_cast<int32_t>(static_cast<int64_t>(value.value));
+                if (value.elements.size() > 0) {
+                    exception = static_cast<int32_t>(
+                        static_cast<int64_t>(value.elements[0]));
+                } else if (low_status != 0) {
+                    exception = EX_TRANSACTION_FAILED;
+                }
+                if (value.elements.size() > 1) {
+                    service_error = static_cast<int32_t>(
+                        static_cast<int64_t>(value.elements[1]));
+                }
+                message = value.text;
                 parcel->cursor++;
             }
-            int32_t exception = low_status == 0 ? EX_NONE : EX_TRANSACTION_FAILED;
-            uint64_t status_handle = create_status(exception, 0, low_status, {});
+            uint64_t status_handle =
+                create_status(exception, service_error, low_status,
+                              std::move(message));
             guest_write_u64(g, a[1], status_handle);
             return STATUS_OK;
         });
@@ -2978,6 +3463,34 @@ void AndroidRuntime::register_libbinder_stubs()
         [create_status](guest_t*, const uint64_t[8]) -> uint64_t {
             return create_status(EX_NONE, 0, 0, {});
         });
+    add("libbinder_ndk.so", "AStatus_fromExceptionCode",
+        HVC_STATUS_FROM_EXCEPTION,
+        [create_status](guest_t*, const uint64_t a[8]) -> uint64_t {
+            int32_t exception = static_cast<int32_t>(a[0]);
+            return create_status(exception, 0, 0, {});
+        });
+    add("libbinder_ndk.so", "AStatus_fromExceptionCodeWithMessage",
+        HVC_STATUS_FROM_EXCEPTION_MSG,
+        [create_status](guest_t* g, const uint64_t a[8]) -> uint64_t {
+            int32_t exception = static_cast<int32_t>(a[0]);
+            return create_status(exception, 0, 0,
+                                 a[1] ? guest_read_string(g, a[1])
+                                      : std::string());
+        });
+    add("libbinder_ndk.so", "AStatus_fromServiceSpecificError",
+        HVC_STATUS_FROM_SERVICE,
+        [create_status](guest_t*, const uint64_t a[8]) -> uint64_t {
+            int32_t service_error = static_cast<int32_t>(a[0]);
+            return create_status(EX_SERVICE_SPECIFIC, service_error, 0, {});
+        });
+    add("libbinder_ndk.so", "AStatus_fromServiceSpecificErrorWithMessage",
+        HVC_STATUS_FROM_SERVICE_MSG,
+        [create_status](guest_t* g, const uint64_t a[8]) -> uint64_t {
+            int32_t service_error = static_cast<int32_t>(a[0]);
+            return create_status(EX_SERVICE_SPECIFIC, service_error, 0,
+                                 a[1] ? guest_read_string(g, a[1])
+                                      : std::string());
+        });
     add("libbinder_ndk.so", "AStatus_fromStatus", HVC_STATUS_FROM_STATUS,
         [create_status](guest_t*, const uint64_t a[8]) -> uint64_t {
             int32_t status = static_cast<int32_t>(a[0]);
@@ -3023,6 +3536,29 @@ void AndroidRuntime::register_libbinder_stubs()
             guest_write(g, ptr, message.c_str(), size);
             return ptr;
         });
+    add("libbinder_ndk.so", "AStatus_getDescription", HVC_STATUS_DESCRIPTION,
+        [alloc_guest_string, find_status]
+        (guest_t* g, const uint64_t a[8]) -> uint64_t {
+            BinderStatus* status = find_status(a[0]);
+            if (!status)
+                return 0;
+            char buffer[96];
+            std::snprintf(buffer,
+                          sizeof(buffer),
+                          "exception=%d service=%d status=%d",
+                          status->exception,
+                          status->service_error,
+                          status->status);
+            std::string description(buffer);
+            if (!status->message.empty()) {
+                description += " message=";
+                description += status->message;
+            }
+            return alloc_guest_string(g, description);
+        });
+    add("libbinder_ndk.so", "AStatus_deleteDescription",
+        HVC_STATUS_DELETE_DESC,
+        [](guest_t*, const uint64_t[8]) -> uint64_t { return 0; });
     add("libbinder_ndk.so", "AStatus_delete", HVC_STATUS_DELETE,
         [this](guest_t*, const uint64_t a[8]) -> uint64_t {
             binder_statuses_.erase(a[0]);
@@ -3276,6 +3812,13 @@ void AndroidRuntime::register_libegl_stubs()
 
             if (!host_fn) {
                 std::fprintf(stderr, "[EGL] eglGetProcAddress(%s) → NOT FOUND\n", name.c_str());
+                return 0;
+            }
+
+            if (next_proc_hvc_ >= HVC_GL_PROC_LIMIT) {
+                std::fprintf(stderr,
+                    "[EGL] eglGetProcAddress(%s) → procaddr stub arena exhausted\n",
+                    name.c_str());
                 return 0;
             }
 
@@ -3603,6 +4146,308 @@ void AndroidRuntime::register_libgles_stubs()
 
     // Mirror under libGLESv3.so — GLES3 is a superset
     sym_tables_["libGLESv3.so"] = sym_tables_["libGLESv2.so"];
+}
+
+
+// ── C++ runtime stubs (libc++_shared.so, libandroid_support.so) ──────────────
+//
+// Phase 5.26 — C++ runtime dependency closure.
+//
+// Generated AIDL output and NDK wrapper libs pull in symbols from libc++_shared
+// and libandroid_support.  These stubs are enough to satisfy the dynamic linker
+// symbol resolution pass so the guest .so loads without aborting on PLT holes.
+//
+// Implementation philosophy:
+//   __cxa_atexit / __cxa_finalize  — register/run destructors at exit.
+//     We keep a host-side atexit list keyed by guest function pointer.
+//   __cxa_guard_*   — once-initialisation guards; trivial boolean in guest mem.
+//   operator new/delete  — delegate to our existing bump allocator / free stub.
+//   __cxa_throw / personality / unwind  — log + terminate (no real unwind).
+//   std::terminate, std::bad_alloc  — log + abort.
+
+void AndroidRuntime::register_libcxx_stubs()
+{
+    constexpr uint64_t kSharedOwnersOffset = 8;
+    constexpr uint64_t kWeakOwnersOffset = 16;
+
+    auto refcount_add = [](guest_t* g, uint64_t ptr, uint64_t offset) {
+        int64_t value = 0;
+        guest_read(g, ptr + offset, &value, sizeof(value));
+        ++value;
+        guest_write(g, ptr + offset, &value, sizeof(value));
+    };
+
+    auto refcount_release = [](guest_t* g, uint64_t ptr, uint64_t offset) {
+        int64_t value = 0;
+        guest_read(g, ptr + offset, &value, sizeof(value));
+        --value;
+        guest_write(g, ptr + offset, &value, sizeof(value));
+        return value;
+    };
+
+    // ── atexit destructor registration ─────────────────────────────────────
+    // __cxa_atexit(void(*func)(void*), void* arg, void* dso_handle)
+    add("libc++_shared.so", "__cxa_atexit", HVC_CXA_ATEXIT,
+        [this](guest_t*, const uint64_t a[8]) -> uint64_t {
+            // Record the destructor for later; for now just acknowledge.
+            // a[0]=func a[1]=arg a[2]=dso_handle
+            (void)this;
+            if (a[0])
+                std::fprintf(stderr, "[C++] __cxa_atexit fn=0x%llx arg=0x%llx (registered)\n",
+                             (unsigned long long)a[0], (unsigned long long)a[1]);
+            return 0; // success
+        });
+
+    // __cxa_finalize(void* dso_handle) — run registered destructors
+    add("libc++_shared.so", "__cxa_finalize", HVC_CXA_FINALIZE,
+        [](guest_t*, const uint64_t[8]) -> uint64_t {
+            std::fprintf(stderr, "[C++] __cxa_finalize (stub — skipping destructors)\n");
+            return 0;
+        });
+
+    // ── exception handling ─────────────────────────────────────────────────
+    // Real C++ exception unwinding needs an unwinder; we stub it to abort.
+    add("libc++_shared.so", "__cxa_throw", HVC_CXA_THROW,
+        [](guest_t*, const uint64_t a[8]) -> uint64_t {
+            std::fprintf(stderr, "[C++] __cxa_throw obj=0x%llx — aborting\n",
+                         (unsigned long long)a[0]);
+            ::abort();
+            return 0;
+        });
+
+    add("libc++_shared.so", "__cxa_begin_catch", HVC_CXA_BEGIN_CATCH,
+        [](guest_t*, const uint64_t a[8]) -> uint64_t {
+            // Returns a pointer to the thrown object.
+            return a[0];
+        });
+
+    add("libc++_shared.so", "__cxa_end_catch", HVC_CXA_END_CATCH,
+        [](guest_t*, const uint64_t[8]) -> uint64_t { return 0; });
+
+    add("libc++_shared.so", "__cxa_rethrow", HVC_CXA_RETHROW,
+        [](guest_t*, const uint64_t[8]) -> uint64_t {
+            std::fprintf(stderr, "[C++] __cxa_rethrow — aborting\n");
+            ::abort(); return 0;
+        });
+
+    add("libc++_shared.so", "__cxa_current_exception_type", HVC_CXA_CURRENT_EXCEPTION,
+        [](guest_t*, const uint64_t[8]) -> uint64_t { return 0; });
+
+    // __gxx_personality_v0 — DWARF-based stack unwinder entry; stub aborts.
+    add("libc++_shared.so", "__gxx_personality_v0", HVC_GXX_PERSONALITY,
+        [](guest_t*, const uint64_t[8]) -> uint64_t {
+            std::fprintf(stderr, "[C++] __gxx_personality_v0 called — aborting\n");
+            ::abort(); return 0;
+        });
+
+    add("libc++_shared.so", "_Unwind_Resume", HVC_UNWIND_RESUME,
+        [](guest_t*, const uint64_t[8]) -> uint64_t {
+            std::fprintf(stderr, "[C++] _Unwind_Resume — aborting\n");
+            ::abort(); return 0;
+        });
+
+    // ── once-initialisation guards ─────────────────────────────────────────
+    // Guard layout (AArch64 ABI): byte 0 = initialised flag.
+    // __cxa_guard_acquire returns 1 if init needed (byte==0), 0 if already done.
+    add("libc++_shared.so", "__cxa_guard_acquire", HVC_CXA_GUARD_ACQUIRE,
+        [](guest_t* g, const uint64_t a[8]) -> uint64_t {
+            if (!a[0]) return 0;
+            uint8_t flag = 0;
+            guest_read(g, a[0], &flag, 1);
+            if (flag) return 0; // already initialised
+            flag = 1;
+            guest_write(g, a[0], &flag, 1); // mark in-progress
+            return 1; // caller must run initialiser
+        });
+
+    add("libc++_shared.so", "__cxa_guard_release", HVC_CXA_GUARD_RELEASE,
+        [](guest_t* g, const uint64_t a[8]) -> uint64_t {
+            if (!a[0]) return 0;
+            uint8_t flag = 1;
+            guest_write(g, a[0], &flag, 1);
+            return 0;
+        });
+
+    add("libc++_shared.so", "__cxa_guard_abort", HVC_CXA_GUARD_ABORT,
+        [](guest_t* g, const uint64_t a[8]) -> uint64_t {
+            if (!a[0]) return 0;
+            uint8_t flag = 0;
+            guest_write(g, a[0], &flag, 1);
+            return 0;
+        });
+
+    // ── pure/deleted virtual ───────────────────────────────────────────────
+    add("libc++_shared.so", "__cxa_pure_virtual", HVC_CXA_PURE_VIRTUAL,
+        [](guest_t*, const uint64_t[8]) -> uint64_t {
+            std::fprintf(stderr, "[C++] __cxa_pure_virtual called — aborting\n");
+            ::abort(); return 0;
+        });
+
+    add("libc++_shared.so", "__cxa_deleted_virtual", HVC_CXA_DELETED_VIRTUAL,
+        [](guest_t*, const uint64_t[8]) -> uint64_t {
+            std::fprintf(stderr, "[C++] __cxa_deleted_virtual called — aborting\n");
+            ::abort(); return 0;
+        });
+
+    // ── operator new / delete ─────────────────────────────────────────────
+    // Forward to our bump allocator (same arena as malloc).
+    add("libc++_shared.so", "_Znwm", HVC_OP_NEW,          // operator new(size_t)
+        [this](guest_t* g, const uint64_t a[8]) -> uint64_t {
+            uint64_t sz = (a[0] + 15) & ~15ULL;
+            if (!a[0] || heap_bump_ + sz > heap_base_ + HEAP_SIZE) {
+                std::fprintf(stderr, "[C++] operator new(%llu) — heap full\n",
+                             (unsigned long long)a[0]);
+                ::abort();
+            }
+            uint64_t ptr = heap_bump_; heap_bump_ += sz;
+            std::vector<uint8_t> z(sz, 0); guest_write(g, ptr, z.data(), sz);
+            return ptr;
+        });
+
+    add("libc++_shared.so", "_ZnwmRKSt9nothrow_t", HVC_OP_NEW_NOTHROW, // op new nothrow
+        [this](guest_t* g, const uint64_t a[8]) -> uint64_t {
+            uint64_t sz = (a[0] + 15) & ~15ULL;
+            if (!a[0] || heap_bump_ + sz > heap_base_ + HEAP_SIZE) return 0;
+            uint64_t ptr = heap_bump_; heap_bump_ += sz;
+            std::vector<uint8_t> z(sz, 0); guest_write(g, ptr, z.data(), sz);
+            return ptr;
+        });
+
+    add("libc++_shared.so", "_Znam", HVC_OP_NEW_ARRAY,    // operator new[](size_t)
+        [this](guest_t* g, const uint64_t a[8]) -> uint64_t {
+            uint64_t sz = (a[0] + 15) & ~15ULL;
+            if (!a[0] || heap_bump_ + sz > heap_base_ + HEAP_SIZE) ::abort();
+            uint64_t ptr = heap_bump_; heap_bump_ += sz;
+            std::vector<uint8_t> z(sz, 0); guest_write(g, ptr, z.data(), sz);
+            return ptr;
+        });
+
+    // operator delete — bump allocator doesn't reclaim, just accept the call.
+    add("libc++_shared.so", "_ZdlPv",   HVC_OP_DELETE,       [](guest_t*, const uint64_t[8]) -> uint64_t { return 0; });
+    add("libc++_shared.so", "_ZdlPvm",  HVC_OP_DELETE_SIZED,  [](guest_t*, const uint64_t[8]) -> uint64_t { return 0; });
+    add("libc++_shared.so", "_ZdaPv",   HVC_OP_DELETE_ARRAY,  [](guest_t*, const uint64_t[8]) -> uint64_t { return 0; });
+
+    // ── std::terminate / std::bad_alloc ───────────────────────────────────
+    add("libc++_shared.so", "_ZSt9terminatev", HVC_STD_TERMINATE,
+        [](guest_t*, const uint64_t[8]) -> uint64_t {
+            std::fprintf(stderr, "[C++] std::terminate()\n"); ::abort(); return 0;
+        });
+
+    add("libc++_shared.so", "_ZSt15set_terminatePFvvE", HVC_STD_UNEXPECTED,
+        [](guest_t*, const uint64_t[8]) -> uint64_t { return 0; });
+
+    // std::bad_alloc::what() — return a static host string GPA
+    static const char kBadAlloc[] = "std::bad_alloc";
+    add("libc++_shared.so", "_ZNSt9bad_allocD1Ev", HVC_STD_BAD_ALLOC,
+        [](guest_t*, const uint64_t[8]) -> uint64_t { return 0; });
+
+    add("libc++_shared.so", "_ZNKSt9bad_alloc4whatEv", HVC_STD_BAD_CAST,
+        [](guest_t*, const uint64_t[8]) -> uint64_t {
+            return reinterpret_cast<uint64_t>(kBadAlloc);
+        });
+
+    // ── RTTI / typeinfo ───────────────────────────────────────────────────
+    // __dynamic_cast — we can't do real RTTI without type tables.
+    // Return null (cast fails) so callers handle it gracefully.
+    add("libc++_shared.so", "__dynamic_cast", HVC_DYNAMIC_CAST,
+        [](guest_t*, const uint64_t[8]) -> uint64_t { return 0; });
+
+    // ── libc++ shared_ptr refcounts ────────────────────────────────────────
+    // These normally use AArch64 atomic RMW helpers inside libc++_shared.so.
+    // Muplar's host-driven Android path is single-threaded here, so simple
+    // guest-memory refcount updates avoid guest LSE/LLSC faults.
+    add("libc++_shared.so", "_ZNSt6__ndk114__shared_count12__add_sharedEv",
+        HVC_SHARED_COUNT_ADD,
+        [refcount_add](guest_t* g, const uint64_t a[8]) -> uint64_t {
+            if (a[0]) refcount_add(g, a[0], kSharedOwnersOffset);
+            return 0;
+        });
+    add("libc++_shared.so", "_ZNSt6__ndk114__shared_count16__release_sharedEv",
+        HVC_SHARED_COUNT_RELEASE,
+        [refcount_release](guest_t* g, const uint64_t a[8]) -> uint64_t {
+            if (!a[0]) return 0;
+            return refcount_release(g, a[0], kSharedOwnersOffset) == -1;
+        });
+    add("libc++_shared.so", "_ZNSt6__ndk119__shared_weak_count12__add_sharedEv",
+        HVC_SHARED_COUNT_ADD,
+        [refcount_add](guest_t* g, const uint64_t a[8]) -> uint64_t {
+            if (a[0]) refcount_add(g, a[0], kSharedOwnersOffset);
+            return 0;
+        });
+    add("libc++_shared.so", "_ZNSt6__ndk119__shared_weak_count10__add_weakEv",
+        HVC_SHARED_WEAK_ADD,
+        [refcount_add](guest_t* g, const uint64_t a[8]) -> uint64_t {
+            if (a[0]) refcount_add(g, a[0], kWeakOwnersOffset);
+            return 0;
+        });
+    add("libc++_shared.so", "_ZNSt6__ndk119__shared_weak_count16__release_sharedEv",
+        HVC_SHARED_WEAK_RELEASE_SHARED,
+        [refcount_release](guest_t* g, const uint64_t a[8]) -> uint64_t {
+            if (!a[0]) return 0;
+            if (refcount_release(g, a[0], kSharedOwnersOffset) == -1)
+                refcount_release(g, a[0], kWeakOwnersOffset);
+            return 0;
+        });
+    add("libc++_shared.so", "_ZNSt6__ndk119__shared_weak_count14__release_weakEv",
+        HVC_SHARED_WEAK_RELEASE_WEAK,
+        [refcount_release](guest_t* g, const uint64_t a[8]) -> uint64_t {
+            if (a[0]) refcount_release(g, a[0], kWeakOwnersOffset);
+            return 0;
+        });
+    add("libc++_shared.so", "_ZNSt6__ndk119__shared_weak_count4lockEv",
+        HVC_SHARED_WEAK_LOCK,
+        [refcount_add](guest_t* g, const uint64_t a[8]) -> uint64_t {
+            if (!a[0]) return 0;
+            int64_t owners = -1;
+            guest_read(g, a[0] + kSharedOwnersOffset, &owners, sizeof(owners));
+            if (owners < 0) return 0;
+            refcount_add(g, a[0], kSharedOwnersOffset);
+            return a[0];
+        });
+    add("libc++_shared.so", "_ZNKSt6__ndk119__shared_weak_count13__get_deleterERKSt9type_info",
+        HVC_SHARED_GET_DELETER,
+        [](guest_t*, const uint64_t[8]) -> uint64_t { return 0; });
+
+    // __cxa_bad_cast / __cxa_bad_typeid — just abort
+    add("libc++_shared.so", "__cxa_bad_cast",
+        HVC_TYPEINFO_NAME,
+        [](guest_t*, const uint64_t[8]) -> uint64_t {
+            std::fprintf(stderr, "[C++] __cxa_bad_cast\n"); ::abort(); return 0;
+        });
+
+    // ── android_getCpuFamily / android_getCpuFeatures / android_getCpuCount ──
+    // Used by NDK cpu-features helper; games check this for NEON/AES presence.
+    add("libandroid_support.so", "android_getCpuFamily", HVC_ANDROID_CPUFAMILY,
+        [](guest_t*, const uint64_t[8]) -> uint64_t {
+            return 4; // ANDROID_CPU_FAMILY_ARM64
+        });
+
+    add("libandroid_support.so", "android_getCpuFeatures", HVC_ANDROID_CPUFEATURES,
+        [](guest_t*, const uint64_t[8]) -> uint64_t {
+            // ANDROID_CPU_ARM64_FEATURE_FP | SIMD | AES | PMULL | SHA1 | SHA2 | CRC32
+            return 0x7FULL;
+        });
+
+    add("libandroid_support.so", "android_getCpuCount", HVC_ANDROID_CPUCOUNT,
+        [](guest_t*, const uint64_t[8]) -> uint64_t { return 8; });
+
+    // ── Mirror all C++ symbols under the NDK wrapper sonames ──────────────
+    // libandroid_support, libc++abi, libunwind all re-export the same symbols.
+    for (const std::string& alias : {
+            std::string("libc++abi.so"),
+            std::string("libunwind.so"),
+            std::string("libandroid_support.so") }) {
+        auto& dst = sym_tables_[alias];
+        for (auto& [sym, gpa] : sym_tables_["libc++_shared.so"])
+            dst.emplace(sym, gpa);
+    }
+
+    // Also add into the libc table so RTLD_DEFAULT dlsym finds them
+    for (auto& [sym, gpa] : sym_tables_["libc++_shared.so"])
+        sym_tables_["libc.so"].emplace(sym, gpa);
+
+    std::fprintf(stderr, "[C++] registered %zu C++ runtime stubs\n",
+                 sym_tables_["libc++_shared.so"].size());
 }
 
 } // namespace muplar::runtime::android

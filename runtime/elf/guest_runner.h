@@ -67,6 +67,11 @@ namespace muplar::runtime::elf {
         // before invoking JNI_OnLoad or ANativeActivity_onCreate.
         std::vector<std::string> native_lib_search_dirs;
 
+        // Fail before guest execution if direct Android .so relocation leaves
+        // any required strong import unresolved.  The default is exploratory:
+        // install trap stubs and fail only if the guest actually calls one.
+        bool strict_direct_imports = false;
+
         // Optional host directory containing extracted APK assets.
         // Exposed to the guest through libandroid AAssetManager/AAsset stubs.
         std::string apk_assets_dir;
