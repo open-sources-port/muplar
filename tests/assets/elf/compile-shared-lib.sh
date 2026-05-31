@@ -6,6 +6,7 @@ ROOT_DIR="$(cd "$SCRIPT_DIR/../../.." && pwd)"
 
 NDK_PREBUILT=$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/darwin-x86_64
 CC=$NDK_PREBUILT/bin/aarch64-linux-android35-clang
+CXX=$NDK_PREBUILT/bin/aarch64-linux-android35-clang++
 NDK_SYSROOT=$NDK_PREBUILT/sysroot
 SYSROOT_TMP="$ROOT_DIR/build/sysroot/data/local/tmp"
 SYSROOT_LIB="$ROOT_DIR/build/sysroot/system/lib64"
@@ -78,10 +79,21 @@ echo "[compile] Built: $SYSROOT_TMP/libnativeappgluecmdtest.so"
 file "$SYSROOT_TMP/libnativeappgluecmdtest.so"
 
 # --- APK-local dependency fixture ---
+echo "[compile] Building libapkdepbase.so ..."
+$CC -shared -fPIC \
+    -Wl,-z,max-page-size=4096 \
+    "$ROOT_DIR/tests/assets/elf/libapkdepbase.c" \
+    -o "$SYSROOT_TMP/libapkdepbase.so"
+
+echo "[compile] Built: $SYSROOT_TMP/libapkdepbase.so"
+file "$SYSROOT_TMP/libapkdepbase.so"
+
 echo "[compile] Building libapkdephelper.so ..."
 $CC -shared -fPIC \
     -Wl,-z,max-page-size=4096 \
     "$ROOT_DIR/tests/assets/elf/libapkdephelper.c" \
+    -L "$SYSROOT_TMP" \
+    -lapkdepbase \
     -o "$SYSROOT_TMP/libapkdephelper.so"
 
 echo "[compile] Built: $SYSROOT_TMP/libapkdephelper.so"
@@ -101,6 +113,20 @@ $CC -shared -fPIC \
 
 echo "[compile] Built: $SYSROOT_TMP/libapkdeptest.so"
 file "$SYSROOT_TMP/libapkdeptest.so"
+
+# --- APK unsupported import trap fixture ---
+echo "[compile] Building libunsupportedimporttest.so ..."
+$CC -shared -fPIC \
+    -Wl,-z,max-page-size=4096 \
+    -isystem "$NDK_SYSROOT/usr/include" \
+    -isystem "$NDK_SYSROOT/usr/include/aarch64-linux-android" \
+    "$ROOT_DIR/tests/assets/elf/libunsupportedimporttest.c" \
+    -landroid \
+    -llog \
+    -o "$SYSROOT_TMP/libunsupportedimporttest.so"
+
+echo "[compile] Built: $SYSROOT_TMP/libunsupportedimporttest.so"
+file "$SYSROOT_TMP/libunsupportedimporttest.so"
 
 # --- APK asset fixture ---
 echo "[compile] Building libassettest.so ..."
@@ -235,11 +261,121 @@ $CC -shared -fPIC \
 echo "[compile] Built: $SYSROOT_TMP/libbinderlifecycletest.so"
 file "$SYSROOT_TMP/libbinderlifecycletest.so"
 
+# --- APK binder driver realism fixture ---
+echo "[compile] Building libbinderdrivertest.so ..."
+$CC -shared -fPIC \
+    -Wl,-z,max-page-size=4096 \
+    -isystem "$NDK_SYSROOT/usr/include" \
+    -isystem "$NDK_SYSROOT/usr/include/aarch64-linux-android" \
+    "$ROOT_DIR/tests/assets/elf/libbinderdrivertest.c" \
+    -lbinder_ndk \
+    -landroid \
+    -llog \
+    -o "$SYSROOT_TMP/libbinderdrivertest.so"
+
+echo "[compile] Built: $SYSROOT_TMP/libbinderdrivertest.so"
+file "$SYSROOT_TMP/libbinderdrivertest.so"
+
+# --- APK AIDL-style Binder smoke fixture ---
+echo "[compile] Building libaidlsmoketest.so ..."
+$CC -shared -fPIC \
+    -Wl,-z,max-page-size=4096 \
+    -isystem "$NDK_SYSROOT/usr/include" \
+    -isystem "$NDK_SYSROOT/usr/include/aarch64-linux-android" \
+    "$ROOT_DIR/tests/assets/elf/libaidlsmoketest.c" \
+    -lbinder_ndk \
+    -landroid \
+    -llog \
+    -o "$SYSROOT_TMP/libaidlsmoketest.so"
+
+echo "[compile] Built: $SYSROOT_TMP/libaidlsmoketest.so"
+file "$SYSROOT_TMP/libaidlsmoketest.so"
+
+# --- APK generated-AIDL-style Binder fixture ---
+echo "[compile] Building libaidlgeneratedtest.so ..."
+$CC -shared -fPIC \
+    -Wl,-z,max-page-size=4096 \
+    -isystem "$NDK_SYSROOT/usr/include" \
+    -isystem "$NDK_SYSROOT/usr/include/aarch64-linux-android" \
+    "$ROOT_DIR/tests/assets/elf/libaidlgeneratedtest.c" \
+    -lbinder_ndk \
+    -landroid \
+    -llog \
+    -o "$SYSROOT_TMP/libaidlgeneratedtest.so"
+
+echo "[compile] Built: $SYSROOT_TMP/libaidlgeneratedtest.so"
+file "$SYSROOT_TMP/libaidlgeneratedtest.so"
+
+# --- APK Binder weak/extension fixture ---
+echo "[compile] Building libbinderweaktest.so ..."
+$CC -shared -fPIC \
+    -Wl,-z,max-page-size=4096 \
+    -isystem "$NDK_SYSROOT/usr/include" \
+    -isystem "$NDK_SYSROOT/usr/include/aarch64-linux-android" \
+    "$ROOT_DIR/tests/assets/elf/libbinderweaktest.c" \
+    -lbinder_ndk \
+    -landroid \
+    -llog \
+    -o "$SYSROOT_TMP/libbinderweaktest.so"
+
+echo "[compile] Built: $SYSROOT_TMP/libbinderweaktest.so"
+file "$SYSROOT_TMP/libbinderweaktest.so"
+
+# --- APK real generated-AIDL-source import fixture ---
+echo "[compile] Building libaidlrealsourcetest.so ..."
+$CXX -shared -fPIC \
+    -std=c++17 \
+    -fno-exceptions \
+    -fno-rtti \
+    -mgeneral-regs-only \
+    -nostdlib++ \
+    -Wl,-z,max-page-size=4096 \
+    -isystem "$NDK_SYSROOT/usr/include" \
+    -isystem "$NDK_SYSROOT/usr/include/aarch64-linux-android" \
+    -I "$ROOT_DIR/tests/assets/aidl/generated" \
+    "$ROOT_DIR/tests/assets/elf/libaidlrealsourcetest.cpp" \
+    "$ROOT_DIR/tests/assets/aidl/generated/com/example/muplar/IRealAdder.cpp" \
+    -lbinder_ndk \
+    -landroid \
+    -llog \
+    -o "$SYSROOT_TMP/libaidlrealsourcetest.so"
+
+echo "[compile] Built: $SYSROOT_TMP/libaidlrealsourcetest.so"
+file "$SYSROOT_TMP/libaidlrealsourcetest.so"
+
+echo "[compile] Building libaidlndktest.so ..."
+
+$CXX -shared -fPIC \
+    -std=c++17 \
+    -mbranch-protection=none \
+    -Wl,-z,max-page-size=4096 \
+    -I"$ROOT_DIR/platform/android/ndk_cpp" \
+    -I"$ROOT_DIR/tests/assets/aidl/generated-ndk/include" \
+    -I"$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/darwin-x86_64/sysroot/usr/include" \
+    "$ROOT_DIR/tests/assets/elf/libaidlndktest.cpp" \
+    "$ROOT_DIR/tests/assets/aidl/generated-ndk/cpp/com/example/muplar/IRealAdder.cpp" \
+    -landroid \
+    -llog \
+    -lbinder_ndk \
+    -lc++_shared \
+    -o "$SYSROOT_TMP/libaidlndktest.so"
+
+if [ $? -ne 0 ]; then
+    echo "Building shared test binary error."
+    exit 1
+fi
+
+echo "[compile] Built: $SYSROOT_TMP/libaidlndktest.so"
+file "$SYSROOT_TMP/libaidlndktest.so"
+
 # --- test_shared ---
 # -nostartfiles: skip crtbegin_dynamic.o which calls __libc_init (needs real libc)
 # We supply our own _start in test_shared_start.S that calls main() directly.
 echo "[compile] Building test_shared ..."
-$CC -Wl,-z,max-page-size=4096 \
+$CC -fPIE -pie \
+    -mgeneral-regs-only \
+    -Wl,-z,max-page-size=4096 \
+    -Wl,--dynamic-linker=/system/bin/linker64 \
     -nostartfiles \
     "$ROOT_DIR/tests/assets/elf/test_shared_start.S" \
     "$ROOT_DIR/tests/assets/elf/test_shared.c" \
@@ -255,3 +391,8 @@ file "$ROOT_DIR/build/bin/test_shared"
 echo "[compile] Building linker64 ..."
 chmod +x "$ROOT_DIR/linker64/build-linker64.sh"
 "$ROOT_DIR/linker64/build-linker64.sh"
+
+echo "Building native aidl..."
+cp "$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/darwin-x86_64/sysroot/usr/lib/aarch64-linux-android/libc++_shared.so" \
+   "$SYSROOT_TMP/libc++_shared.so"
+"$ROOT_DIR/tests/assets/apk/create-native-aidl-ndk-apk.sh"

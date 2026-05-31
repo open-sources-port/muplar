@@ -5,10 +5,6 @@ if [ ! -d "third_party/elfuse" ]; then
   git commit -m "Add elfuse as submodule"
 fi
 
-if [ ! -d "third_party/angle" ]; then
-  git submodule add https://github.com/google/angle.git third_party/angle
-  git commit -m "Add angle as submodule"
-fi
-
 echo "Updating submodules...."
-git submodule update --init --recursive
+# git submodule update --init --recursive
+git submodule update --remote --recursive

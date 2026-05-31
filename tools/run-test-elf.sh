@@ -71,6 +71,17 @@ fi
 echo "Building APK dependency test done."
 
 echo "========================================="
+echo "Building APK unsupported import trap test..."
+export scriptToRun=$ROOT_DIR/tests/assets/apk/create-native-unsupported-import-apk.sh
+sh ${scriptToRun}
+returnCode=$?
+if [ "$returnCode" -ne 0 ]; then
+    echo "Building APK unsupported import trap test error."
+  exit 1
+fi
+echo "Building APK unsupported import trap test done."
+
+echo "========================================="
 echo "Building APK asset test..."
 export scriptToRun=$ROOT_DIR/tests/assets/apk/create-native-assets-apk.sh
 sh ${scriptToRun}
@@ -170,6 +181,61 @@ fi
 echo "Building APK binder lifecycle test done."
 
 echo "========================================="
+echo "Building APK binder driver test..."
+export scriptToRun=$ROOT_DIR/tests/assets/apk/create-native-binder-driver-apk.sh
+sh ${scriptToRun}
+returnCode=$?
+if [ "$returnCode" -ne 0 ]; then
+    echo "Building APK binder driver test error."
+  exit 1
+fi
+echo "Building APK binder driver test done."
+
+echo "========================================="
+echo "Building APK AIDL smoke test..."
+export scriptToRun=$ROOT_DIR/tests/assets/apk/create-native-aidl-smoke-apk.sh
+sh ${scriptToRun}
+returnCode=$?
+if [ "$returnCode" -ne 0 ]; then
+    echo "Building APK AIDL smoke test error."
+  exit 1
+fi
+echo "Building APK AIDL smoke test done."
+
+echo "========================================="
+echo "Building APK generated AIDL coverage test..."
+export scriptToRun=$ROOT_DIR/tests/assets/apk/create-native-aidl-generated-apk.sh
+sh ${scriptToRun}
+returnCode=$?
+if [ "$returnCode" -ne 0 ]; then
+    echo "Building APK generated AIDL coverage test error."
+  exit 1
+fi
+echo "Building APK generated AIDL coverage test done."
+
+echo "========================================="
+echo "Building APK binder weak/extension test..."
+export scriptToRun=$ROOT_DIR/tests/assets/apk/create-native-binder-weak-apk.sh
+sh ${scriptToRun}
+returnCode=$?
+if [ "$returnCode" -ne 0 ]; then
+    echo "Building APK binder weak/extension test error."
+  exit 1
+fi
+echo "Building APK binder weak/extension test done."
+
+echo "========================================="
+echo "Building APK real generated AIDL source test..."
+export scriptToRun=$ROOT_DIR/tests/assets/apk/create-native-aidl-real-source-apk.sh
+sh ${scriptToRun}
+returnCode=$?
+if [ "$returnCode" -ne 0 ]; then
+    echo "Building APK real generated AIDL source test error."
+  exit 1
+fi
+echo "Building APK real generated AIDL source test done."
+
+echo "========================================="
 echo "Running Muplar ELF loader..."
 echo "codesign -d --entitlements - $ROOT_DIR/build/bin/mup"
 cat > $ROOT_DIR/mup.entitlements << 'EOF'
@@ -231,6 +297,26 @@ echo "========================\nCalling $APK..."
 "$ROOT_DIR/build/bin/mup" --sysroot "$ROOT_DIR/build/sysroot" "$APK"
 echo "Exit code: $?"
 
+APK="$SYSROOT_TMP/nativeunsupportedimporttest.apk"
+echo "========================\nCalling $APK..."
+"$ROOT_DIR/build/bin/mup" --sysroot "$ROOT_DIR/build/sysroot" "$APK"
+echo "Exit code: $?"
+
+STRICT_LOG="$ROOT_DIR/build/nativeunsupportedimporttest-strict.log"
+echo "========================\nCalling $APK with --strict-direct-imports (expected failure)..."
+"$ROOT_DIR/build/bin/mup" --strict-direct-imports --sysroot "$ROOT_DIR/build/sysroot" "$APK" > "$STRICT_LOG" 2>&1
+strictCode=$?
+cat "$STRICT_LOG"
+echo "Exit code: $strictCode"
+if [ "$strictCode" -eq 0 ]; then
+    echo "Strict direct import test unexpectedly succeeded."
+    exit 1
+fi
+if ! grep -q "strict direct import mode" "$STRICT_LOG"; then
+    echo "Strict direct import test did not report strict-mode failure."
+    exit 1
+fi
+
 APK="$SYSROOT_TMP/nativeassettest.apk"
 echo "========================\nCalling $APK..."
 "$ROOT_DIR/build/bin/mup" --sysroot "$ROOT_DIR/build/sysroot" "$APK"
@@ -272,6 +358,36 @@ echo "========================\nCalling $APK..."
 echo "Exit code: $?"
 
 APK="$SYSROOT_TMP/nativebinderlifecycletest.apk"
+echo "========================\nCalling $APK..."
+"$ROOT_DIR/build/bin/mup" --sysroot "$ROOT_DIR/build/sysroot" "$APK"
+echo "Exit code: $?"
+
+APK="$SYSROOT_TMP/nativebinderdrivertest.apk"
+echo "========================\nCalling $APK..."
+"$ROOT_DIR/build/bin/mup" --sysroot "$ROOT_DIR/build/sysroot" "$APK"
+echo "Exit code: $?"
+
+APK="$SYSROOT_TMP/nativeaidlsmoketest.apk"
+echo "========================\nCalling $APK..."
+"$ROOT_DIR/build/bin/mup" --sysroot "$ROOT_DIR/build/sysroot" "$APK"
+echo "Exit code: $?"
+
+APK="$SYSROOT_TMP/nativeaidlgeneratedtest.apk"
+echo "========================\nCalling $APK..."
+"$ROOT_DIR/build/bin/mup" --sysroot "$ROOT_DIR/build/sysroot" "$APK"
+echo "Exit code: $?"
+
+APK="$SYSROOT_TMP/nativebinderweaktest.apk"
+echo "========================\nCalling $APK..."
+"$ROOT_DIR/build/bin/mup" --sysroot "$ROOT_DIR/build/sysroot" "$APK"
+echo "Exit code: $?"
+
+APK="$SYSROOT_TMP/nativeaidlrealsourcetest.apk"
+echo "========================\nCalling $APK..."
+"$ROOT_DIR/build/bin/mup" --sysroot "$ROOT_DIR/build/sysroot" "$APK"
+echo "Exit code: $?"
+
+APK="$SYSROOT_TMP/nativeaidlndktest.apk"
 echo "========================\nCalling $APK..."
 "$ROOT_DIR/build/bin/mup" --sysroot "$ROOT_DIR/build/sysroot" "$APK"
 echo "Exit code: $?"
