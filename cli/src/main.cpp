@@ -34,6 +34,7 @@ static void print_usage(const char* prog)
               << "              [--host-window] [--host-window-ms VALUE]\n"
               << "              [--jni-call CLASS METHOD SIGNATURE]"
               << " [--jni-int VALUE ...]\n"
+              << "              (omitted JNI args are synthesized from SIGNATURE)\n"
               << "              <elf-file|apk-file> [args...]\n";
 }
 
@@ -151,6 +152,7 @@ int main(int argc, char** argv)
             auto apk = muplar::runtime::apk::prepare_apk_launch(apk_cfg);
             cfg.elf_path = apk.so_path.string();
             cfg.native_activity = true;
+            cfg.force_android_so = true;
             cfg.native_lib_search_dirs.push_back(
                 (apk.extract_dir / "lib" / "arm64-v8a").string());
             cfg.apk_assets_dir = apk.assets_dir.string();

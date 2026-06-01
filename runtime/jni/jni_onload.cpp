@@ -267,10 +267,20 @@ int JniOnLoad::call_jni_onload(
 {
     // ── Save current PC/LR so we can restore after JNI_OnLoad ─────────────
     uint64_t saved_pc, saved_lr, saved_x0, saved_x1;
+    uint64_t saved_sp_el1 = 0;
+    uint64_t saved_sctlr = 0;
+    uint64_t call_sp = 0;
     hv_vcpu_get_reg(vcpu, HV_REG_PC, &saved_pc);
     hv_vcpu_get_reg(vcpu, HV_REG_LR, &saved_lr);
     hv_vcpu_get_reg(vcpu, HV_REG_X0, &saved_x0);
     hv_vcpu_get_reg(vcpu, HV_REG_X1, &saved_x1);
+    hv_vcpu_get_sys_reg(vcpu, HV_SYS_REG_SP_EL1, &saved_sp_el1);
+    hv_vcpu_get_sys_reg(vcpu, HV_SYS_REG_SP_EL0, &call_sp);
+    hv_vcpu_get_sys_reg(vcpu, HV_SYS_REG_SCTLR_EL1, &saved_sctlr);
+    // Host-entered JNI calls run on the app stack, not elfuse's high EL1 stack.
+    if (call_sp)
+        hv_vcpu_set_sys_reg(vcpu, HV_SYS_REG_SP_EL1, call_sp);
+    hv_vcpu_set_sys_reg(vcpu, HV_SYS_REG_SCTLR_EL1, saved_sctlr | (1ULL << 6));
 
     // ── Set X0 = JavaVM* (points to our JavaVM pointer) ───────────────────
     hv_vcpu_set_reg(vcpu, HV_REG_X0, java_vm_ptr_gpa_);
@@ -300,6 +310,8 @@ int JniOnLoad::call_jni_onload(
     hv_vcpu_set_reg(vcpu, HV_REG_LR, saved_lr);
     hv_vcpu_set_reg(vcpu, HV_REG_X0, saved_x0);
     hv_vcpu_set_reg(vcpu, HV_REG_X1, saved_x1);
+    hv_vcpu_set_sys_reg(vcpu, HV_SYS_REG_SP_EL1, saved_sp_el1);
+    hv_vcpu_set_sys_reg(vcpu, HV_SYS_REG_SCTLR_EL1, saved_sctlr);
 
     int ret = static_cast<int>(onload_retval_);
     std::fprintf(stderr, "[JNI_OnLoad] JNI_OnLoad returned %d\n", ret);
@@ -315,13 +327,39 @@ int64_t JniOnLoad::call_guest_function(
     std::function<int(hv_vcpu_t, hv_vcpu_exit_t*, guest_t*)> run_loop_cb)
 {
     uint64_t saved_pc = 0;
-    uint64_t saved_lr = 0;
-    uint64_t saved_x[8] = {};
+    uint64_t saved_x[31] = {};
+    uint64_t saved_fpcr = 0;
+    uint64_t saved_fpsr = 0;
+    uint64_t saved_cpsr = 0;
+    uint64_t saved_sp_el0 = 0;
+    uint64_t saved_sp_el1 = 0;
+    uint64_t saved_spsr_el1 = 0;
+    uint64_t saved_sctlr = 0;
+    uint64_t call_sp = 0;
 
     hv_vcpu_get_reg(vcpu, HV_REG_PC, &saved_pc);
-    hv_vcpu_get_reg(vcpu, HV_REG_LR, &saved_lr);
-    for (int i = 0; i < 8; ++i)
-        hv_vcpu_get_reg(vcpu, static_cast<hv_reg_t>(HV_REG_X0 + i), &saved_x[i]);
+    for (int i = 0; i < 29; ++i)
+        hv_vcpu_get_reg(vcpu,
+                        static_cast<hv_reg_t>(HV_REG_X0 + i),
+                        &saved_x[i]);
+    hv_vcpu_get_reg(vcpu, HV_REG_X29, &saved_x[29]);
+    hv_vcpu_get_reg(vcpu, HV_REG_LR, &saved_x[30]);
+    hv_vcpu_get_reg(vcpu, HV_REG_FPCR, &saved_fpcr);
+    hv_vcpu_get_reg(vcpu, HV_REG_FPSR, &saved_fpsr);
+    hv_vcpu_get_reg(vcpu, HV_REG_CPSR, &saved_cpsr);
+    hv_vcpu_get_sys_reg(vcpu, HV_SYS_REG_SP_EL0, &saved_sp_el0);
+    hv_vcpu_get_sys_reg(vcpu, HV_SYS_REG_SP_EL1, &saved_sp_el1);
+    hv_vcpu_get_sys_reg(vcpu, HV_SYS_REG_SPSR_EL1, &saved_spsr_el1);
+    hv_vcpu_get_sys_reg(vcpu, HV_SYS_REG_SCTLR_EL1, &saved_sctlr);
+
+    // Nested guest callbacks must reuse the active guest stack. SP_EL0 still
+    // points near the outer entry stack top and can overlap the caller frame.
+    call_sp = saved_sp_el0;
+    if (saved_sp_el1 && saved_sp_el1 < 0x100000000ULL)
+        call_sp = saved_sp_el1;
+    if (call_sp)
+        hv_vcpu_set_sys_reg(vcpu, HV_SYS_REG_SP_EL1, call_sp);
+    hv_vcpu_set_sys_reg(vcpu, HV_SYS_REG_SCTLR_EL1, saved_sctlr | (1ULL << 6));
 
     for (int i = 0; i < 8; ++i)
         hv_vcpu_set_reg(vcpu, static_cast<hv_reg_t>(HV_REG_X0 + i), 0);
@@ -350,9 +388,19 @@ int64_t JniOnLoad::call_guest_function(
     run_loop_cb(vcpu, vexit, guest_);
 
     hv_vcpu_set_reg(vcpu, HV_REG_PC, saved_pc);
-    hv_vcpu_set_reg(vcpu, HV_REG_LR, saved_lr);
-    for (int i = 0; i < 8; ++i)
-        hv_vcpu_set_reg(vcpu, static_cast<hv_reg_t>(HV_REG_X0 + i), saved_x[i]);
+    for (int i = 0; i < 29; ++i)
+        hv_vcpu_set_reg(vcpu,
+                        static_cast<hv_reg_t>(HV_REG_X0 + i),
+                        saved_x[i]);
+    hv_vcpu_set_reg(vcpu, HV_REG_X29, saved_x[29]);
+    hv_vcpu_set_reg(vcpu, HV_REG_LR, saved_x[30]);
+    hv_vcpu_set_reg(vcpu, HV_REG_FPCR, saved_fpcr);
+    hv_vcpu_set_reg(vcpu, HV_REG_FPSR, saved_fpsr);
+    hv_vcpu_set_reg(vcpu, HV_REG_CPSR, saved_cpsr);
+    hv_vcpu_set_sys_reg(vcpu, HV_SYS_REG_SP_EL0, saved_sp_el0);
+    hv_vcpu_set_sys_reg(vcpu, HV_SYS_REG_SP_EL1, saved_sp_el1);
+    hv_vcpu_set_sys_reg(vcpu, HV_SYS_REG_SPSR_EL1, saved_spsr_el1);
+    hv_vcpu_set_sys_reg(vcpu, HV_SYS_REG_SCTLR_EL1, saved_sctlr);
 
     int64_t ret = static_cast<int64_t>(onload_retval_);
     std::fprintf(stderr, "[JNI] guest function returned %lld\n", (long long)ret);

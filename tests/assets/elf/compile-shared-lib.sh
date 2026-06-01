@@ -34,6 +34,19 @@ $CC -shared -fPIC \
 echo "[compile] Built: $SYSROOT_TMP/libjnitest.so"
 file "$SYSROOT_TMP/libjnitest.so"
 
+# --- JNI-only APK fixture ---
+echo "[compile] Building libjnionlyapktest.so ..."
+$CC -shared -fPIC \
+    -Wl,-z,max-page-size=4096 \
+    -isystem "$NDK_SYSROOT/usr/include" \
+    -isystem "$NDK_SYSROOT/usr/include/aarch64-linux-android" \
+    "$ROOT_DIR/tests/assets/elf/libjnionlyapktest.c" \
+    -llog \
+    -o "$SYSROOT_TMP/libjnionlyapktest.so"
+
+echo "[compile] Built: $SYSROOT_TMP/libjnionlyapktest.so"
+file "$SYSROOT_TMP/libjnionlyapktest.so"
+
 # --- libnativeactivitytest.so ---
 echo "[compile] Building libnativeactivitytest.so ..."
 $CC -shared -fPIC \

@@ -29,6 +29,38 @@ static constexpr uint32_t JNI_ExceptionClear         = 0x100E;
 static constexpr uint32_t JNI_DeleteLocalRef         = 0x100F;
 static constexpr uint32_t JNI_GetObjectClass         = 0x1010;
 static constexpr uint32_t JNI_CallObjectMethod       = 0x1011;
+static constexpr uint32_t JNI_GetFieldID             = 0x1012;
+static constexpr uint32_t JNI_ExceptionOccurred      = 0x1013;
+static constexpr uint32_t JNI_ExceptionDescribe      = 0x1014;
+static constexpr uint32_t JNI_PushLocalFrame         = 0x1015;
+static constexpr uint32_t JNI_PopLocalFrame          = 0x1016;
+static constexpr uint32_t JNI_NewGlobalRef           = 0x1017;
+static constexpr uint32_t JNI_DeleteGlobalRef        = 0x1018;
+static constexpr uint32_t JNI_IsSameObject           = 0x1019;
+static constexpr uint32_t JNI_NewLocalRef            = 0x101A;
+static constexpr uint32_t JNI_EnsureLocalCapacity    = 0x101B;
+static constexpr uint32_t JNI_NewDirectByteBuffer     = 0x101C;
+static constexpr uint32_t JNI_GetDirectBufferAddress  = 0x101D;
+static constexpr uint32_t JNI_GetDirectBufferCapacity = 0x101E;
+static constexpr uint32_t JNI_GetArrayLength          = 0x101F;
+static constexpr uint32_t JNI_NewObjectArray          = 0x1020;
+static constexpr uint32_t JNI_GetObjectArrayElement   = 0x1021;
+static constexpr uint32_t JNI_SetObjectArrayElement   = 0x1022;
+static constexpr uint32_t JNI_NewIntArray             = 0x1023;
+static constexpr uint32_t JNI_NewLongArray            = 0x1024;
+static constexpr uint32_t JNI_NewFloatArray           = 0x1025;
+static constexpr uint32_t JNI_GetIntArrayElements     = 0x1026;
+static constexpr uint32_t JNI_GetLongArrayElements    = 0x1027;
+static constexpr uint32_t JNI_GetFloatArrayElements   = 0x1028;
+static constexpr uint32_t JNI_ReleaseIntArrayElements = 0x1029;
+static constexpr uint32_t JNI_ReleaseLongArrayElements = 0x102A;
+static constexpr uint32_t JNI_ReleaseFloatArrayElements = 0x102B;
+static constexpr uint32_t JNI_GetIntArrayRegion       = 0x102C;
+static constexpr uint32_t JNI_GetLongArrayRegion      = 0x102D;
+static constexpr uint32_t JNI_GetFloatArrayRegion     = 0x102E;
+static constexpr uint32_t JNI_SetIntArrayRegion       = 0x102F;
+static constexpr uint32_t JNI_SetLongArrayRegion      = 0x1030;
+static constexpr uint32_t JNI_SetFloatArrayRegion     = 0x1031;
 
 // ────────────────────────────────────────────────────────────────────────────
 JniEnv::JniEnv() = default;
@@ -55,6 +87,38 @@ uint64_t JniEnv::dispatch(uint32_t call_nr, const uint64_t args[8])
     case JNI_DeleteLocalRef:         return jni_DeleteLocalRef(args);
     case JNI_GetObjectClass:         return jni_GetObjectClass(args);
     case JNI_CallObjectMethod:       return jni_CallObjectMethod(args);
+    case JNI_GetFieldID:             return jni_GetFieldID(args);
+    case JNI_ExceptionOccurred:      return jni_ExceptionOccurred(args);
+    case JNI_ExceptionDescribe:      return jni_ExceptionDescribe(args);
+    case JNI_PushLocalFrame:         return jni_PushLocalFrame(args);
+    case JNI_PopLocalFrame:          return jni_PopLocalFrame(args);
+    case JNI_NewGlobalRef:           return jni_NewGlobalRef(args);
+    case JNI_DeleteGlobalRef:        return jni_DeleteGlobalRef(args);
+    case JNI_IsSameObject:           return jni_IsSameObject(args);
+    case JNI_NewLocalRef:            return jni_NewLocalRef(args);
+    case JNI_EnsureLocalCapacity:    return jni_EnsureLocalCapacity(args);
+    case JNI_NewDirectByteBuffer:    return jni_NewDirectByteBuffer(args);
+    case JNI_GetDirectBufferAddress: return jni_GetDirectBufferAddress(args);
+    case JNI_GetDirectBufferCapacity: return jni_GetDirectBufferCapacity(args);
+    case JNI_GetArrayLength:         return jni_GetArrayLength(args);
+    case JNI_NewObjectArray:         return jni_NewObjectArray(args);
+    case JNI_GetObjectArrayElement:  return jni_GetObjectArrayElement(args);
+    case JNI_SetObjectArrayElement:  return jni_SetObjectArrayElement(args);
+    case JNI_NewIntArray:            return jni_NewIntArray(args);
+    case JNI_NewLongArray:           return jni_NewLongArray(args);
+    case JNI_NewFloatArray:          return jni_NewFloatArray(args);
+    case JNI_GetIntArrayElements:    return jni_GetIntArrayElements(args);
+    case JNI_GetLongArrayElements:   return jni_GetLongArrayElements(args);
+    case JNI_GetFloatArrayElements:  return jni_GetFloatArrayElements(args);
+    case JNI_ReleaseIntArrayElements: return jni_ReleaseIntArrayElements(args);
+    case JNI_ReleaseLongArrayElements: return jni_ReleaseLongArrayElements(args);
+    case JNI_ReleaseFloatArrayElements: return jni_ReleaseFloatArrayElements(args);
+    case JNI_GetIntArrayRegion:      return jni_GetIntArrayRegion(args);
+    case JNI_GetLongArrayRegion:     return jni_GetLongArrayRegion(args);
+    case JNI_GetFloatArrayRegion:    return jni_GetFloatArrayRegion(args);
+    case JNI_SetIntArrayRegion:      return jni_SetIntArrayRegion(args);
+    case JNI_SetLongArrayRegion:     return jni_SetLongArrayRegion(args);
+    case JNI_SetFloatArrayRegion:    return jni_SetFloatArrayRegion(args);
     default:
         std::fprintf(stderr, "[JNI] Unknown call 0x%X\n", call_nr);
         return static_cast<uint64_t>(-1);
@@ -82,15 +146,38 @@ uint64_t JniEnv::dispatch(uint32_t call_nr, const uint64_t args[8])
 //   slot 34 : CallObjectMethod  stub GPA
 //   slot 49 : CallIntMethod     stub GPA
 //   slot 61 : CallVoidMethod    stub GPA
+//   slot 94 : GetFieldID        stub GPA
 //   slot 167: NewStringUTF      stub GPA
 //   slot 169: GetStringUTFChars stub GPA
 //   slot 170: ReleaseStringUTFChars stub GPA
+//   slot 171: GetArrayLength   stub GPA
+//   slot 172: NewObjectArray   stub GPA
+//   slot 173: GetObjectArrayElement stub GPA
+//   slot 174: SetObjectArrayElement stub GPA
 //   slot 176: NewByteArray      stub GPA
+//   slot 179: NewIntArray       stub GPA
+//   slot 180: NewLongArray      stub GPA
+//   slot 181: NewFloatArray     stub GPA
 //   slot 184: GetByteArrayElements stub GPA
+//   slot 187: GetIntArrayElements stub GPA
+//   slot 188: GetLongArrayElements stub GPA
+//   slot 189: GetFloatArrayElements stub GPA
 //   slot 192: ReleaseByteArrayElements stub GPA
+//   slot 195: ReleaseIntArrayElements stub GPA
+//   slot 196: ReleaseLongArrayElements stub GPA
+//   slot 197: ReleaseFloatArrayElements stub GPA
+//   slot 203: GetIntArrayRegion stub GPA
+//   slot 204: GetLongArrayRegion stub GPA
+//   slot 205: GetFloatArrayRegion stub GPA
 //   slot 208: SetByteArrayRegion stub GPA
+//   slot 211: SetIntArrayRegion stub GPA
+//   slot 212: SetLongArrayRegion stub GPA
+//   slot 213: SetFloatArrayRegion stub GPA
 //   slot 215: RegisterNatives   stub GPA
 //   slot 228: ExceptionCheck    stub GPA
+//   slot 229: NewDirectByteBuffer stub GPA
+//   slot 230: GetDirectBufferAddress stub GPA
+//   slot 231: GetDirectBufferCapacity stub GPA
 //
 // Stubs live at stub_base_gpa + (call_nr - 0x1000) * JNI_STUB_SIZE.
 // Each stub is `mov x8, #call_nr ; hvc #6 ; ret`.
@@ -131,22 +218,54 @@ JniEnv::install_entries(uint64_t stub_base_gpa) const
     return {
         {  4, stub(JNI_GetVersion)              },
         {  6, stub(JNI_FindClass)               },
+        { 15, stub(JNI_ExceptionOccurred)       },
+        { 16, stub(JNI_ExceptionDescribe)       },
         { 17, stub(JNI_ExceptionClear)          },
+        { 19, stub(JNI_PushLocalFrame)          },
+        { 20, stub(JNI_PopLocalFrame)           },
+        { 21, stub(JNI_NewGlobalRef)            },
+        { 22, stub(JNI_DeleteGlobalRef)         },
         { 23, stub(JNI_DeleteLocalRef)          },
+        { 24, stub(JNI_IsSameObject)            },
+        { 25, stub(JNI_NewLocalRef)             },
+        { 26, stub(JNI_EnsureLocalCapacity)     },
         { 31, stub(JNI_GetObjectClass)          },
         { 33, stub(JNI_GetMethodID)             },
         { 34, stub(JNI_CallObjectMethod)        },
         { 49, stub(JNI_CallIntMethod)           },
         { 61, stub(JNI_CallVoidMethod)          },
+        { 94, stub(JNI_GetFieldID)              },
         {167, stub(JNI_NewStringUTF)            },
         {169, stub(JNI_GetStringUTFChars)       },
         {170, stub(JNI_ReleaseStringUTFChars)   },
+        {171, stub(JNI_GetArrayLength)          },
+        {172, stub(JNI_NewObjectArray)          },
+        {173, stub(JNI_GetObjectArrayElement)   },
+        {174, stub(JNI_SetObjectArrayElement)   },
         {176, stub(JNI_NewByteArray)            },
+        {179, stub(JNI_NewIntArray)             },
+        {180, stub(JNI_NewLongArray)            },
+        {181, stub(JNI_NewFloatArray)           },
         {184, stub(JNI_GetByteArrayElements)    },
+        {187, stub(JNI_GetIntArrayElements)     },
+        {188, stub(JNI_GetLongArrayElements)    },
+        {189, stub(JNI_GetFloatArrayElements)   },
         {192, stub(JNI_ReleaseByteArrayElements)},
+        {195, stub(JNI_ReleaseIntArrayElements) },
+        {196, stub(JNI_ReleaseLongArrayElements)},
+        {197, stub(JNI_ReleaseFloatArrayElements)},
+        {203, stub(JNI_GetIntArrayRegion)       },
+        {204, stub(JNI_GetLongArrayRegion)      },
+        {205, stub(JNI_GetFloatArrayRegion)     },
         {208, stub(JNI_SetByteArrayRegion)      },
+        {211, stub(JNI_SetIntArrayRegion)       },
+        {212, stub(JNI_SetLongArrayRegion)      },
+        {213, stub(JNI_SetFloatArrayRegion)     },
         {215, stub(JNI_RegisterNatives)         },
         {228, stub(JNI_ExceptionCheck)          },
+        {229, stub(JNI_NewDirectByteBuffer)     },
+        {230, stub(JNI_GetDirectBufferAddress)  },
+        {231, stub(JNI_GetDirectBufferCapacity) },
     };
 }
 
@@ -190,6 +309,75 @@ uint64_t JniEnv::make_string(const std::string& value)
 {
     uint64_t h = alloc_handle();
     strings_[h] = value;
+    register_class("java/lang/String");
+    objects_[h] = { find_class("java/lang/String") };
+    return h;
+}
+
+jbyteArray JniEnv::make_byte_array(size_t length)
+{
+    register_class("[B");
+    uint64_t h = alloc_handle();
+    objects_[h] = { find_class("[B") };
+    byte_arrays_[h].assign(length, 0);
+    return h;
+}
+
+jintArray JniEnv::make_int_array(size_t length)
+{
+    register_class("[I");
+    uint64_t h = alloc_handle();
+    objects_[h] = { find_class("[I") };
+    int_arrays_[h].assign(length, 0);
+    return h;
+}
+
+jlongArray JniEnv::make_long_array(size_t length)
+{
+    register_class("[J");
+    uint64_t h = alloc_handle();
+    objects_[h] = { find_class("[J") };
+    long_arrays_[h].assign(length, 0);
+    return h;
+}
+
+jfloatArray JniEnv::make_float_array(size_t length)
+{
+    register_class("[F");
+    uint64_t h = alloc_handle();
+    objects_[h] = { find_class("[F") };
+    float_arrays_[h].assign(length, 0.0f);
+    return h;
+}
+
+jobjectArray JniEnv::make_object_array(const std::string& element_descriptor,
+                                       size_t length,
+                                       jobject initial)
+{
+    std::string desc = element_descriptor;
+    if (desc.empty())
+        desc = "java/lang/Object";
+    if (desc[0] != '[' &&
+        !(desc.front() == 'L' && desc.back() == ';'))
+        desc = "L" + desc + ";";
+    std::string array_desc = "[" + desc;
+
+    register_class(array_desc);
+    uint64_t h = alloc_handle();
+    objects_[h] = { find_class(array_desc) };
+    object_arrays_[h].assign(length, initial);
+    return h;
+}
+
+jobject JniEnv::make_direct_buffer(uint64_t guest_address, uint64_t capacity)
+{
+    register_class("java/nio/DirectByteBuffer");
+    uint64_t h = alloc_handle();
+    objects_[h] = {
+        find_class("java/nio/DirectByteBuffer"),
+        guest_address,
+        capacity
+    };
     return h;
 }
 
@@ -273,6 +461,42 @@ uint64_t JniEnv::jni_GetMethodID(const uint64_t* a)
     std::fprintf(stderr, "[JNI] GetMethodID: %s%s → 0x%llx\n",
                  name.c_str(), sig.c_str(), (unsigned long long)mh);
     return mh;
+}
+
+// args[1] = jclass, args[2] = name GPA, args[3] = sig GPA
+uint64_t JniEnv::jni_GetFieldID(const uint64_t* a)
+{
+    uint64_t cls_h    = a[1];
+    uint64_t name_gpa = a[2];
+    uint64_t sig_gpa  = a[3];
+
+    auto cit = classes_.find(cls_h);
+    if (cit == classes_.end()) {
+        std::fprintf(stderr, "[JNI] GetFieldID: unknown class 0x%llx\n",
+                     (unsigned long long)cls_h);
+        pending_exception_ = true;
+        return JNI_NULL;
+    }
+
+    std::string name, sig;
+    auto ns = strings_.find(name_gpa);
+    auto ss = strings_.find(sig_gpa);
+    if (ns != strings_.end()) name = ns->second;
+    if (ss != strings_.end()) sig = ss->second;
+
+    for (auto& [h, fe] : fields_) {
+        if (fe.class_handle == cls_h && fe.name == name && fe.sig == sig)
+            return h;
+    }
+
+    uint64_t fh = alloc_handle();
+    fields_[fh] = { cls_h, name, sig };
+    std::fprintf(stderr, "[JNI] GetFieldID: %s.%s%s -> 0x%llx\n",
+                 cit->second.descriptor.c_str(),
+                 name.c_str(),
+                 sig.c_str(),
+                 (unsigned long long)fh);
+    return fh;
 }
 
 // args[1] = jclass, args[2] = GPA of JNINativeMethod array, args[3] = count
@@ -435,13 +659,64 @@ uint64_t JniEnv::jni_ReleaseStringUTFChars(const uint64_t* /*a*/)
     return 0;
 }
 
+uint64_t JniEnv::jni_GetArrayLength(const uint64_t* a)
+{
+    return static_cast<uint64_t>(array_length(a[1]));
+}
+
+uint64_t JniEnv::jni_NewObjectArray(const uint64_t* a)
+{
+    size_t len = static_cast<size_t>(a[1]);
+    uint64_t element_class = a[2];
+    std::string element_desc = "java/lang/Object";
+    auto cit = classes_.find(element_class);
+    if (cit != classes_.end())
+        element_desc = cit->second.descriptor;
+    return make_object_array(element_desc, len, a[3]);
+}
+
+uint64_t JniEnv::jni_GetObjectArrayElement(const uint64_t* a)
+{
+    auto it = object_arrays_.find(a[1]);
+    size_t index = static_cast<size_t>(a[2]);
+    if (it == object_arrays_.end() || index >= it->second.size()) {
+        pending_exception_ = true;
+        return JNI_NULL;
+    }
+    return it->second[index];
+}
+
+uint64_t JniEnv::jni_SetObjectArrayElement(const uint64_t* a)
+{
+    auto it = object_arrays_.find(a[1]);
+    size_t index = static_cast<size_t>(a[2]);
+    if (it == object_arrays_.end() || index >= it->second.size()) {
+        pending_exception_ = true;
+        return 1;
+    }
+    it->second[index] = a[3];
+    return 0;
+}
+
 // args[1] = length
 uint64_t JniEnv::jni_NewByteArray(const uint64_t* a)
 {
-    uint64_t len = a[1];
-    uint64_t h   = alloc_handle();
-    byte_arrays_[h].assign(static_cast<size_t>(len), 0);
-    return h;
+    return make_byte_array(static_cast<size_t>(a[1]));
+}
+
+uint64_t JniEnv::jni_NewIntArray(const uint64_t* a)
+{
+    return make_int_array(static_cast<size_t>(a[1]));
+}
+
+uint64_t JniEnv::jni_NewLongArray(const uint64_t* a)
+{
+    return make_long_array(static_cast<size_t>(a[1]));
+}
+
+uint64_t JniEnv::jni_NewFloatArray(const uint64_t* a)
+{
+    return make_float_array(static_cast<size_t>(a[1]));
 }
 
 // args[1] = jbyteArray, args[2] = start, args[3] = len, args[4] = GPA of src
@@ -481,10 +756,82 @@ void JniEnv::set_byte_array_region(uint64_t handle,
     std::memcpy(it->second.data() + start, src, len);
 }
 
+void JniEnv::set_int_array_region(uint64_t handle,
+                                  size_t start,
+                                  const int32_t* src,
+                                  size_t len)
+{
+    auto it = int_arrays_.find(handle);
+    if (it == int_arrays_.end()) return;
+    if (start + len > it->second.size()) return;
+    std::memcpy(it->second.data() + start, src, len * sizeof(int32_t));
+}
+
+void JniEnv::set_long_array_region(uint64_t handle,
+                                   size_t start,
+                                   const int64_t* src,
+                                   size_t len)
+{
+    auto it = long_arrays_.find(handle);
+    if (it == long_arrays_.end()) return;
+    if (start + len > it->second.size()) return;
+    std::memcpy(it->second.data() + start, src, len * sizeof(int64_t));
+}
+
+void JniEnv::set_float_array_region(uint64_t handle,
+                                    size_t start,
+                                    const float* src,
+                                    size_t len)
+{
+    auto it = float_arrays_.find(handle);
+    if (it == float_arrays_.end()) return;
+    if (start + len > it->second.size()) return;
+    std::memcpy(it->second.data() + start, src, len * sizeof(float));
+}
+
 const std::vector<uint8_t>* JniEnv::get_byte_array(uint64_t handle) const
 {
     auto it = byte_arrays_.find(handle);
     return (it != byte_arrays_.end()) ? &it->second : nullptr;
+}
+
+const std::vector<int32_t>* JniEnv::get_int_array(uint64_t handle) const
+{
+    auto it = int_arrays_.find(handle);
+    return (it != int_arrays_.end()) ? &it->second : nullptr;
+}
+
+const std::vector<int64_t>* JniEnv::get_long_array(uint64_t handle) const
+{
+    auto it = long_arrays_.find(handle);
+    return (it != long_arrays_.end()) ? &it->second : nullptr;
+}
+
+const std::vector<float>* JniEnv::get_float_array(uint64_t handle) const
+{
+    auto it = float_arrays_.find(handle);
+    return (it != float_arrays_.end()) ? &it->second : nullptr;
+}
+
+const std::vector<jobject>* JniEnv::get_object_array(uint64_t handle) const
+{
+    auto it = object_arrays_.find(handle);
+    return (it != object_arrays_.end()) ? &it->second : nullptr;
+}
+
+size_t JniEnv::array_length(uint64_t handle) const
+{
+    if (auto it = byte_arrays_.find(handle); it != byte_arrays_.end())
+        return it->second.size();
+    if (auto it = int_arrays_.find(handle); it != int_arrays_.end())
+        return it->second.size();
+    if (auto it = long_arrays_.find(handle); it != long_arrays_.end())
+        return it->second.size();
+    if (auto it = float_arrays_.find(handle); it != float_arrays_.end())
+        return it->second.size();
+    if (auto it = object_arrays_.find(handle); it != object_arrays_.end())
+        return it->second.size();
+    return 0;
 }
 
 // args[1] = jbyteArray, args[2] = isCopy* (ignored)
@@ -497,6 +844,81 @@ uint64_t JniEnv::jni_GetByteArrayElements(const uint64_t* a)
 uint64_t JniEnv::jni_ReleaseByteArrayElements(const uint64_t* /*a*/)
 {
     return 0;
+}
+
+uint64_t JniEnv::jni_GetIntArrayElements(const uint64_t* a)
+{
+    return a[1];
+}
+
+uint64_t JniEnv::jni_GetLongArrayElements(const uint64_t* a)
+{
+    return a[1];
+}
+
+uint64_t JniEnv::jni_GetFloatArrayElements(const uint64_t* a)
+{
+    return a[1];
+}
+
+uint64_t JniEnv::jni_ReleaseIntArrayElements(const uint64_t* /*a*/)
+{
+    return 0;
+}
+
+uint64_t JniEnv::jni_ReleaseLongArrayElements(const uint64_t* /*a*/)
+{
+    return 0;
+}
+
+uint64_t JniEnv::jni_ReleaseFloatArrayElements(const uint64_t* /*a*/)
+{
+    return 0;
+}
+
+uint64_t JniEnv::jni_GetIntArrayRegion(const uint64_t* a)
+{
+    auto it = int_arrays_.find(a[1]);
+    if (it == int_arrays_.end() || a[2] + a[3] > it->second.size()) {
+        pending_exception_ = true;
+        return 1;
+    }
+    return 0;
+}
+
+uint64_t JniEnv::jni_GetLongArrayRegion(const uint64_t* a)
+{
+    auto it = long_arrays_.find(a[1]);
+    if (it == long_arrays_.end() || a[2] + a[3] > it->second.size()) {
+        pending_exception_ = true;
+        return 1;
+    }
+    return 0;
+}
+
+uint64_t JniEnv::jni_GetFloatArrayRegion(const uint64_t* a)
+{
+    auto it = float_arrays_.find(a[1]);
+    if (it == float_arrays_.end() || a[2] + a[3] > it->second.size()) {
+        pending_exception_ = true;
+        return 1;
+    }
+    return 0;
+}
+
+uint64_t JniEnv::jni_SetIntArrayRegion(const uint64_t* a)
+{
+    return jni_GetIntArrayRegion(a);
+}
+
+uint64_t JniEnv::jni_SetLongArrayRegion(const uint64_t* a)
+{
+    return jni_GetLongArrayRegion(a);
+}
+
+uint64_t JniEnv::jni_SetFloatArrayRegion(const uint64_t* a)
+{
+    return jni_GetFloatArrayRegion(a);
 }
 
 uint64_t JniEnv::jni_ExceptionCheck(const uint64_t* /*a*/)
@@ -514,6 +936,76 @@ uint64_t JniEnv::jni_DeleteLocalRef(const uint64_t* /*a*/)
 {
     // No-op for arena allocator; future: reference-count if needed.
     return 0;
+}
+
+uint64_t JniEnv::jni_ExceptionOccurred(const uint64_t* /*a*/)
+{
+    if (!pending_exception_)
+        return JNI_NULL;
+    return register_object("java/lang/Throwable");
+}
+
+uint64_t JniEnv::jni_ExceptionDescribe(const uint64_t* /*a*/)
+{
+    if (pending_exception_)
+        std::fprintf(stderr, "[JNI] ExceptionDescribe: pending exception\n");
+    return 0;
+}
+
+uint64_t JniEnv::jni_PushLocalFrame(const uint64_t* /*a*/)
+{
+    return 0;
+}
+
+uint64_t JniEnv::jni_PopLocalFrame(const uint64_t* a)
+{
+    return a[1];
+}
+
+uint64_t JniEnv::jni_NewGlobalRef(const uint64_t* a)
+{
+    return a[1];
+}
+
+uint64_t JniEnv::jni_DeleteGlobalRef(const uint64_t* /*a*/)
+{
+    return 0;
+}
+
+uint64_t JniEnv::jni_IsSameObject(const uint64_t* a)
+{
+    return a[1] == a[2] ? 1u : 0u;
+}
+
+uint64_t JniEnv::jni_NewLocalRef(const uint64_t* a)
+{
+    return a[1];
+}
+
+uint64_t JniEnv::jni_EnsureLocalCapacity(const uint64_t* /*a*/)
+{
+    return 0;
+}
+
+uint64_t JniEnv::jni_NewDirectByteBuffer(const uint64_t* a)
+{
+    return make_direct_buffer(a[1], a[2]);
+}
+
+uint64_t JniEnv::jni_GetDirectBufferAddress(const uint64_t* a)
+{
+    auto it = objects_.find(a[1]);
+    if (it == objects_.end())
+        return JNI_NULL;
+    return it->second.direct_buffer_address;
+}
+
+uint64_t JniEnv::jni_GetDirectBufferCapacity(const uint64_t* a)
+{
+    auto it = objects_.find(a[1]);
+    if (it == objects_.end())
+        return static_cast<uint64_t>(-1);
+    return it->second.direct_buffer_capacity;
 }
 
 } // namespace muplar::runtime::jni

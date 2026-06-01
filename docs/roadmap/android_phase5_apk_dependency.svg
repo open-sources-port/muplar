@@ -1,19 +1,16 @@
-<svg width="100%" viewBox="0 0 680 620" role="img" xmlns="http://www.w3.org/2000/svg">
-<title>Muplar Android Phase 5 APK dependency roadmap</title>
-<desc>Completed roadmap slice for real APK native dependency closure.</desc>
+<svg width="100%" viewBox="0 0 680 644" role="img" xmlns="http://www.w3.org/2000/svg">
+<title>Muplar Android APK dependency roadmap</title>
+<desc>Stable APK dependency and compatibility-scanning checklist summary.</desc>
 
 <style>
 text{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}
 .done{fill:#DCFCE7;stroke:#16A34A;stroke-width:1}
 .done-title{fill:#166534;font-size:14px;font-weight:600}
 .done-subtitle{fill:#15803D;font-size:12px}
-.current{fill:#DBEAFE;stroke:#2563EB;stroke-width:1}
-.current-title{fill:#1D4ED8;font-size:14px;font-weight:600}
-.current-subtitle{fill:#2563EB;font-size:12px}
-.future{fill:#F9FAFB;stroke:#9CA3AF;stroke-width:1}
-.future-title{fill:#4B5563;font-size:14px;font-weight:600}
-.future-subtitle{fill:#6B7280;font-size:12px}
-.phase-label{font-size:12px;font-weight:600}
+.next{fill:#DBEAFE;stroke:#2563EB;stroke-width:1}
+.next-title{fill:#1D4ED8;font-size:14px;font-weight:600}
+.next-subtitle{fill:#2563EB;font-size:12px}
+.label{font-size:12px;font-weight:600}
 .arrow{stroke:#6B7280;stroke-width:1.5;fill:none}
 </style>
 
@@ -24,52 +21,45 @@ text{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}
 </defs>
 
 <g>
-<rect class="done" x="40" y="24" width="600" height="76" rx="8"/>
-<text class="done-title" x="60" y="48">APK launch and local dependency foundation</text>
-<text class="done-subtitle" x="60" y="66">Extract APK native libs, pick NativeActivity lib, map local DT_NEEDED deps</text>
-<text class="done-subtitle" x="60" y="84">Assets, package metadata, and NativeActivity context are available</text>
-<text class="done-title phase-label" x="560" y="58" text-anchor="middle">5.10-5.13 Done</text>
+<rect class="done" x="40" y="24" width="600" height="84" rx="8"/>
+<text class="done-title" x="60" y="48">APK native dependency loading</text>
+<text class="done-subtitle" x="60" y="66">Extract arm64-v8a libs, select NativeActivity lib, map local DT_NEEDED deps</text>
+<text class="done-subtitle" x="60" y="84">Resolve transitive APK-local dependency chains and direct relocations</text>
+<text class="done-title label" x="560" y="58" text-anchor="middle">Done</text>
 </g>
 
-<line class="arrow" x1="340" y1="100" x2="340" y2="128" marker-end="url(#arrow)"/>
+<line class="arrow" x1="340" y1="108" x2="340" y2="136" marker-end="url(#arrow)"/>
 
 <g>
-<rect class="done" x="40" y="132" width="600" height="76" rx="8"/>
-<text class="done-title" x="60" y="156">C++ and generated AIDL dependency closure</text>
-<text class="done-subtitle" x="60" y="174">Direct .so relocations can resolve app symbols, stubs, and libc++ wrappers</text>
-<text class="done-subtitle" x="60" y="192">Generated NDK AIDL APK runs through compiler output</text>
-<text class="done-title phase-label" x="560" y="166" text-anchor="middle">5.26 Done</text>
+<rect class="done" x="40" y="140" width="600" height="96" rx="8"/>
+<text class="done-title" x="60" y="164">Import diagnostics and strict mode</text>
+<text class="done-subtitle" x="60" y="182">Missing required libraries fail early with the missing soname</text>
+<text class="done-subtitle" x="60" y="200">Unresolved strong imports trap in exploratory mode or fail in strict mode</text>
+<text class="done-subtitle" x="60" y="218">Generated NDK AIDL fixture passes strict native import scanning</text>
+<text class="done-title label" x="560" y="174" text-anchor="middle">Done</text>
 </g>
 
-<line class="arrow" x1="340" y1="208" x2="340" y2="236" marker-end="url(#arrow)"/>
+<line class="arrow" x1="340" y1="236" x2="340" y2="264" marker-end="url(#arrow)"/>
 
 <g>
-<rect class="done" x="40" y="240" width="600" height="96" rx="8"/>
-<text class="done-title" x="60" y="264">Real APK native dependency closure</text>
-<text class="done-subtitle" x="60" y="282">Transitive APK-local chain is covered: app .so to helper .so to base .so</text>
-<text class="done-subtitle" x="60" y="300">Missing required DT_NEEDED libraries fail early with the missing soname</text>
-<text class="done-subtitle" x="60" y="318">Unresolved direct imports trap by default or fail with --strict-direct-imports</text>
-<text class="done-subtitle" x="60" y="334">Unsupported-import APK fixture exercises both tolerant and strict paths</text>
-<text class="done-title phase-label" x="560" y="276" text-anchor="middle">5.27 Done</text>
+<rect class="done" x="40" y="268" width="600" height="84" rx="8"/>
+<text class="done-title" x="60" y="292">Compatibility scan harness</text>
+<text class="done-subtitle" x="60" y="310">Batch strict-mode APK scans create per-APK logs and status summaries</text>
+<text class="done-subtitle" x="60" y="328">Markdown reports group missing libraries and unresolved imports as a backlog</text>
+<text class="done-title label" x="560" y="302" text-anchor="middle">Done</text>
 </g>
 
-<line class="arrow" x1="340" y1="336" x2="340" y2="364" marker-end="url(#arrow)"/>
+<line class="arrow" x1="340" y1="352" x2="340" y2="380" marker-end="url(#arrow)"/>
 
 <g>
-<rect class="future" x="40" y="368" width="600" height="76" rx="8"/>
-<text class="future-title" x="60" y="392">Broaden from fixture APKs to real native APKs</text>
-<text class="future-subtitle" x="60" y="410">Run less-controlled APKs and promote observed missing imports into focused stubs</text>
-<text class="future-subtitle" x="60" y="428">Keep failures early and explainable instead of guest-crash-shaped</text>
-<text class="future-title phase-label" x="560" y="402" text-anchor="middle">Next</text>
+<rect class="next" x="40" y="384" width="600" height="84" rx="8"/>
+<text class="next-title" x="60" y="408">Next dependency work</text>
+<text class="next-subtitle" x="60" y="426">Run real APK batches and promote repeated import gaps into focused runtime stubs</text>
+<text class="next-subtitle" x="60" y="444">Keep intentionally unsupported imports visible in strict scan reports</text>
+<text class="next-title label" x="560" y="418" text-anchor="middle">Next</text>
 </g>
 
-<line class="arrow" x1="340" y1="444" x2="340" y2="472" marker-end="url(#arrow)"/>
-
-<g>
-<rect class="future" x="40" y="476" width="600" height="76" rx="8"/>
-<text class="future-title" x="60" y="500">Toward Java/ART-facing app compatibility</text>
-<text class="future-subtitle" x="60" y="518">After native APK dependency loading is reliable, expand Java-side app surfaces</text>
-<text class="future-subtitle" x="60" y="536">Prioritize real failures from app startup over speculative API coverage</text>
-<text class="future-title phase-label" x="560" y="510" text-anchor="middle">Later</text>
-</g>
+<text class="done-subtitle" x="60" y="536">Checklists:</text>
+<text class="done-subtitle" x="60" y="554">docs/roadmap/android/apk-dependencies.md</text>
+<text class="done-subtitle" x="60" y="572">docs/roadmap/android/compatibility-scanning.md</text>
 </svg>

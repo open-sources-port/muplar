@@ -94,7 +94,7 @@ public:
         "libandroid.so", "libbinder_ndk.so", "libstdc++.so",
         "libEGL.so", "libGLESv2.so", "libGLESv3.so",
         "libc++_shared.so", "libc++abi.so", "libunwind.so",
-        "libandroid_support.so",
+        "libandroid_support.so", "libjnigraphics.so",
         nullptr
     };
 
@@ -122,6 +122,7 @@ private:
     void register_libc_stubs();
     void register_liblog_stubs();
     void register_libandroid_stubs();
+    void register_libjnigraphics_stubs();
     void register_libdl_stubs();
     void register_libcxx_stubs();
     void register_libbinder_stubs();

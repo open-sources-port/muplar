@@ -71,6 +71,17 @@ fi
 echo "Building APK dependency test done."
 
 echo "========================================="
+echo "Building APK JNI-only test..."
+export scriptToRun=$ROOT_DIR/tests/assets/apk/create-native-jni-only-apk.sh
+sh ${scriptToRun}
+returnCode=$?
+if [ "$returnCode" -ne 0 ]; then
+    echo "Building APK JNI-only test error."
+  exit 1
+fi
+echo "Building APK JNI-only test done."
+
+echo "========================================="
 echo "Building APK unsupported import trap test..."
 export scriptToRun=$ROOT_DIR/tests/assets/apk/create-native-unsupported-import-apk.sh
 sh ${scriptToRun}
@@ -297,6 +308,26 @@ echo "========================\nCalling $APK..."
 "$ROOT_DIR/build/bin/mup" --sysroot "$ROOT_DIR/build/sysroot" "$APK"
 echo "Exit code: $?"
 
+APK="$SYSROOT_TMP/nativejnionlytest.apk"
+JNI_ONLY_LOG="$ROOT_DIR/build/nativejnionlytest.log"
+echo "========================\nCalling $APK..."
+"$ROOT_DIR/build/bin/mup" --sysroot "$ROOT_DIR/build/sysroot" "$APK" > "$JNI_ONLY_LOG" 2>&1
+jniOnlyCode=$?
+cat "$JNI_ONLY_LOG"
+echo "Exit code: $jniOnlyCode"
+if [ "$jniOnlyCode" -ne 0 ]; then
+    echo "JNI-only APK test failed."
+    exit 1
+fi
+if ! grep -q "JNI_OnLoad-only APK path complete" "$JNI_ONLY_LOG"; then
+    echo "JNI-only APK did not complete through the JNI_OnLoad-only path."
+    exit 1
+fi
+if ! grep -q "patched .* unaligned zero-vector stack store" "$JNI_ONLY_LOG"; then
+    echo "JNI-only APK did not exercise the unaligned vector stack patch."
+    exit 1
+fi
+
 APK="$SYSROOT_TMP/nativeunsupportedimporttest.apk"
 echo "========================\nCalling $APK..."
 "$ROOT_DIR/build/bin/mup" --sysroot "$ROOT_DIR/build/sysroot" "$APK"
@@ -314,6 +345,73 @@ if [ "$strictCode" -eq 0 ]; then
 fi
 if ! grep -q "strict direct import mode" "$STRICT_LOG"; then
     echo "Strict direct import test did not report strict-mode failure."
+    exit 1
+fi
+
+SCAN_LOG="$ROOT_DIR/build/apk-compat-scan-test.log"
+SCAN_REPORT="$ROOT_DIR/build/apk-compat-scan-test.md"
+echo "========================\nRunning APK compatibility scan smoke tests..."
+"$ROOT_DIR/tools/run-apk-compat-scan.sh" --report "$SCAN_REPORT" "$SYSROOT_TMP/nativeapkdeptest.apk" > "$SCAN_LOG" 2>&1
+scanCode=$?
+cat "$SCAN_LOG"
+if [ "$scanCode" -ne 0 ]; then
+    echo "Compatibility scan unexpectedly failed for dependency APK."
+    exit 1
+fi
+if ! grep -q "status: launch-ok" "$SCAN_LOG"; then
+    echo "Compatibility scan did not mark dependency APK as launch-ok."
+    exit 1
+fi
+if ! grep -q "No missing APK-local libraries or unresolved direct imports found." "$SCAN_REPORT"; then
+    echo "Compatibility scan report did not show a clean dependency APK backlog."
+    exit 1
+fi
+
+"$ROOT_DIR/tools/run-apk-compat-scan.sh" --report "$SCAN_REPORT" "$SYSROOT_TMP/nativejnionlytest.apk" > "$SCAN_LOG" 2>&1
+scanCode=$?
+cat "$SCAN_LOG"
+if [ "$scanCode" -ne 0 ]; then
+    echo "Compatibility scan unexpectedly failed for JNI-only APK."
+    exit 1
+fi
+if ! grep -q "status: launch-ok" "$SCAN_LOG"; then
+    echo "Compatibility scan did not mark JNI-only APK as launch-ok."
+    exit 1
+fi
+if ! grep -q "No missing APK-local libraries or unresolved direct imports found." "$SCAN_REPORT"; then
+    echo "Compatibility scan report did not show a clean JNI-only APK backlog."
+    exit 1
+fi
+
+"$ROOT_DIR/tools/run-apk-compat-scan.sh" --report "$SCAN_REPORT" "$SYSROOT_TMP/nativeunsupportedimporttest.apk" > "$SCAN_LOG" 2>&1
+scanCode=$?
+cat "$SCAN_LOG"
+if [ "$scanCode" -eq 0 ]; then
+    echo "Compatibility scan unexpectedly passed unsupported-import APK."
+    exit 1
+fi
+if ! grep -q "status: native-deps-incomplete" "$SCAN_LOG"; then
+    echo "Compatibility scan did not classify unsupported-import APK correctly."
+    exit 1
+fi
+if ! grep -q 'libunsupportedimporttest.so needs muplar_missing_native_import' "$SCAN_REPORT"; then
+    echo "Compatibility scan report did not include the unsupported import backlog."
+    exit 1
+fi
+
+"$ROOT_DIR/tools/run-apk-compat-scan.sh" --report "$SCAN_REPORT" "$SYSROOT_TMP/nativeaidlndktest.apk" > "$SCAN_LOG" 2>&1
+scanCode=$?
+cat "$SCAN_LOG"
+if [ "$scanCode" -ne 0 ]; then
+    echo "Compatibility scan unexpectedly failed for NDK AIDL APK."
+    exit 1
+fi
+if ! grep -q "status: launch-ok" "$SCAN_LOG"; then
+    echo "Compatibility scan did not mark NDK AIDL APK as launch-ok."
+    exit 1
+fi
+if ! grep -q "No missing APK-local libraries or unresolved direct imports found." "$SCAN_REPORT"; then
+    echo "Compatibility scan report did not show a clean NDK AIDL backlog."
     exit 1
 fi
 
