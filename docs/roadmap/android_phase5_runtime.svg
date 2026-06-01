@@ -1,13 +1,16 @@
-<svg width="100%" viewBox="0 0 680 1160" role="img" xmlns="http://www.w3.org/2000/svg">
-<title>Muplar Android Phase 5 runtime roadmap</title>
-<desc>Detailed Phase 5.1 through 5.13 NativeActivity and APK runtime milestones.</desc>
+<svg width="100%" viewBox="0 0 680 536" role="img" xmlns="http://www.w3.org/2000/svg">
+<title>Muplar Android runtime roadmap</title>
+<desc>Stable NativeActivity and APK runtime checklist summary.</desc>
 
 <style>
 text{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}
 .done{fill:#DCFCE7;stroke:#16A34A;stroke-width:1}
 .done-title{fill:#166534;font-size:14px;font-weight:600}
 .done-subtitle{fill:#15803D;font-size:12px}
-.phase-label{font-size:12px;font-weight:600}
+.next{fill:#DBEAFE;stroke:#2563EB;stroke-width:1}
+.next-title{fill:#1D4ED8;font-size:14px;font-weight:600}
+.next-subtitle{fill:#2563EB;font-size:12px}
+.label{font-size:12px;font-weight:600}
 .arrow{stroke:#6B7280;stroke-width:1.5;fill:none}
 </style>
 
@@ -18,92 +21,41 @@ text{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}
 </defs>
 
 <g>
-<rect class="done" x="40" y="20" width="600" height="76" rx="8"/>
-<text class="done-title" x="60" y="44">Direct Android JNI/native execution</text>
-<text class="done-subtitle" x="60" y="62">Run JNI_OnLoad, resolve RegisterNatives, invoke native methods</text>
-<text class="done-title phase-label" x="560" y="54" text-anchor="middle">5.1 Done</text>
+<rect class="done" x="40" y="24" width="600" height="76" rx="8"/>
+<text class="done-title" x="60" y="48">JNI and direct native execution</text>
+<text class="done-subtitle" x="60" y="66">JNI_OnLoad, RegisterNatives, direct native method calls</text>
+<text class="done-title label" x="560" y="58" text-anchor="middle">Done</text>
 </g>
-<line class="arrow" x1="340" y1="96" x2="340" y2="112" marker-end="url(#arrow)"/>
+
+<line class="arrow" x1="340" y1="100" x2="340" y2="128" marker-end="url(#arrow)"/>
 
 <g>
-<rect class="done" x="40" y="116" width="600" height="76" rx="8"/>
-<text class="done-title" x="60" y="140">NativeActivity window + EGL smoke</text>
-<text class="done-subtitle" x="60" y="158">Lifecycle callbacks, ANativeWindow, host window, EGL/GLES frame</text>
-<text class="done-title phase-label" x="560" y="150" text-anchor="middle">5.2 Done</text>
+<rect class="done" x="40" y="132" width="600" height="84" rx="8"/>
+<text class="done-title" x="60" y="156">NativeActivity runtime</text>
+<text class="done-subtitle" x="60" y="174">Lifecycle callbacks, host window, ANativeWindow, EGL/GLES smoke path</text>
+<text class="done-subtitle" x="60" y="192">Input queue, choreographer callbacks, app glue scheduler, command pipe</text>
+<text class="done-title label" x="560" y="166" text-anchor="middle">Done</text>
 </g>
-<line class="arrow" x1="340" y1="192" x2="340" y2="208" marker-end="url(#arrow)"/>
+
+<line class="arrow" x1="340" y1="216" x2="340" y2="244" marker-end="url(#arrow)"/>
 
 <g>
-<rect class="done" x="40" y="212" width="600" height="76" rx="8"/>
-<text class="done-title" x="60" y="236">NativeActivity glue pthread + looper callbacks</text>
-<text class="done-subtitle" x="60" y="254">Run pthread guest entrypoints; deliver ALooper addFd/poll callbacks</text>
-<text class="done-title phase-label" x="560" y="246" text-anchor="middle">5.3 Done</text>
+<rect class="done" x="40" y="248" width="600" height="84" rx="8"/>
+<text class="done-title" x="60" y="272">APK runtime envelope</text>
+<text class="done-subtitle" x="60" y="290">APK native lib selection, asset extraction, AssetManager, package context</text>
+<text class="done-subtitle" x="60" y="308">NativeActivity paths and lightweight Java context methods</text>
+<text class="done-title label" x="560" y="282" text-anchor="middle">Done</text>
 </g>
-<line class="arrow" x1="340" y1="288" x2="340" y2="304" marker-end="url(#arrow)"/>
+
+<line class="arrow" x1="340" y1="332" x2="340" y2="360" marker-end="url(#arrow)"/>
 
 <g>
-<rect class="done" x="40" y="308" width="600" height="76" rx="8"/>
-<text class="done-title" x="60" y="332">Input queue + repeated app-loop scheduling</text>
-<text class="done-subtitle" x="60" y="350">AInputQueue attach/detach, repeated poll, synthetic motion events</text>
-<text class="done-title phase-label" x="560" y="342" text-anchor="middle">5.4 Done</text>
+<rect class="next" x="40" y="364" width="600" height="84" rx="8"/>
+<text class="next-title" x="60" y="388">Next runtime work</text>
+<text class="next-subtitle" x="60" y="406">Run real host-window APKs and record first missing lifecycle/window/input APIs</text>
+<text class="next-subtitle" x="60" y="424">Promote each real failure into a focused fixture before expanding behavior</text>
+<text class="next-title label" x="560" y="398" text-anchor="middle">Next</text>
 </g>
-<line class="arrow" x1="340" y1="384" x2="340" y2="400" marker-end="url(#arrow)"/>
 
-<g>
-<rect class="done" x="40" y="404" width="600" height="76" rx="8"/>
-<text class="done-title" x="60" y="428">Choreographer + frame-loop callbacks</text>
-<text class="done-subtitle" x="60" y="446">Frame callbacks, reposted frames, app-loop drain budget</text>
-<text class="done-title phase-label" x="560" y="438" text-anchor="middle">5.5 Done</text>
-</g>
-<line class="arrow" x1="340" y1="480" x2="340" y2="496" marker-end="url(#arrow)"/>
-
-<g>
-<rect class="done" x="40" y="500" width="600" height="76" rx="8"/>
-<text class="done-title" x="60" y="524">Host input capture + queue rearm</text>
-<text class="done-subtitle" x="60" y="542">Mouse/key events enqueue into AInputQueue; looper fd is rearmed</text>
-<text class="done-title phase-label" x="560" y="534" text-anchor="middle">5.6 Done</text>
-</g>
-<line class="arrow" x1="340" y1="576" x2="340" y2="592" marker-end="url(#arrow)"/>
-
-<g>
-<rect class="done" x="40" y="596" width="600" height="76" rx="8"/>
-<text class="done-title" x="60" y="620">Persistent host-driven app loop</text>
-<text class="done-subtitle" x="60" y="638">Guest callbacks stay alive while host window pumps input/frame ticks</text>
-<text class="done-title phase-label" x="560" y="630" text-anchor="middle">5.7 Done</text>
-</g>
-<line class="arrow" x1="340" y1="672" x2="340" y2="688" marker-end="url(#arrow)"/>
-
-<g>
-<rect class="done" x="40" y="692" width="600" height="76" rx="8"/>
-<text class="done-title" x="60" y="716">Native app glue scheduler</text>
-<text class="done-subtitle" x="60" y="734">Guest pthreads yield on blocking ALooper polls and resume on host/input ticks</text>
-<text class="done-title phase-label" x="560" y="726" text-anchor="middle">5.8 Done</text>
-</g>
-<line class="arrow" x1="340" y1="768" x2="340" y2="784" marker-end="url(#arrow)"/>
-
-<g>
-<rect class="done" x="40" y="788" width="600" height="76" rx="8"/>
-<text class="done-title" x="60" y="812">Native app glue command pipe</text>
-<text class="done-subtitle" x="60" y="830">Deliver APP_CMD_* through guest pipe + ALooper</text>
-<text class="done-subtitle" x="60" y="848">libc pipe/read/write/close stubs wake persistent guest app threads</text>
-<text class="done-title phase-label" x="560" y="822" text-anchor="middle">5.9 Done</text>
-</g>
-<line class="arrow" x1="340" y1="864" x2="340" y2="880" marker-end="url(#arrow)"/>
-
-<g>
-<rect class="done" x="40" y="884" width="600" height="76" rx="8"/>
-<text class="done-title" x="60" y="908">APK launch envelope</text>
-<text class="done-subtitle" x="60" y="926">Extract arm64-v8a native libraries and infer android.app.lib_name</text>
-<text class="done-subtitle" x="60" y="944">Run APK NativeActivity path through existing guest bootstrap</text>
-<text class="done-title phase-label" x="560" y="918" text-anchor="middle">5.10 Done</text>
-</g>
-<line class="arrow" x1="340" y1="960" x2="340" y2="976" marker-end="url(#arrow)"/>
-
-<g>
-<rect class="done" x="40" y="980" width="600" height="76" rx="8"/>
-<text class="done-title" x="60" y="1004">APK-local dependencies, assets, and context</text>
-<text class="done-subtitle" x="60" y="1022">Map APK-local DT_NEEDED libraries; expose AAssetManager/AAsset</text>
-<text class="done-subtitle" x="60" y="1040">Parse manifest package name and populate NativeActivity data paths</text>
-<text class="done-title phase-label" x="560" y="1014" text-anchor="middle">5.11-5.13 Done</text>
-</g>
+<text class="done-subtitle" x="60" y="500">Checklist: docs/roadmap/android/runtime.md</text>
 </svg>

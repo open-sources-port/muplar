@@ -4,6 +4,7 @@
 #include <cstdlib>
 #include <cstdio>
 #include <cstring>
+#include <ctime>
 #include <filesystem>
 #include <fstream>
 #include <string>
@@ -96,11 +97,99 @@ static constexpr uint32_t HVC_READ                = 0x203E;
 static constexpr uint32_t HVC_WRITE               = 0x203F;
 static constexpr uint32_t HVC_CLOSE               = 0x2049;
 static constexpr uint32_t HVC_REGISTER_ATFORK     = 0x204A;
+static constexpr uint32_t HVC_FPRINTF             = 0x204B;
+static constexpr uint32_t HVC_VFPRINTF            = 0x204C;
+static constexpr uint32_t HVC_FFLUSH              = 0x204D;
+static constexpr uint32_t HVC_FWRITE              = 0x204E;
+static constexpr uint32_t HVC_VASPRINTF           = 0x204F;
+static constexpr uint32_t HVC_SYSCALL             = 0x2050;
+static constexpr uint32_t HVC_OPENLOG             = 0x2051;
+static constexpr uint32_t HVC_SYSLOG              = 0x2052;
+static constexpr uint32_t HVC_CLOSELOG            = 0x2053;
+static constexpr uint32_t HVC_ASSERT              = 0x2054;
+static constexpr uint32_t HVC_ASSERT2             = 0x2055;
+static constexpr uint32_t HVC_PTHREAD_RWLOCK_INIT = 0x2056;
+static constexpr uint32_t HVC_PTHREAD_RWLOCK_RDLOCK = 0x2057;
+static constexpr uint32_t HVC_PTHREAD_RWLOCK_WRLOCK = 0x2058;
+static constexpr uint32_t HVC_PTHREAD_RWLOCK_UNLOCK = 0x2059;
+static constexpr uint32_t HVC_PTHREAD_RWLOCK_DESTROY = 0x205A;
+static constexpr uint32_t HVC_ANDROID_ABORT_MESSAGE = 0x205B;
+static constexpr uint32_t HVC_ERRNO               = 0x205C;
+static constexpr uint32_t HVC_POSIX_MEMALIGN      = 0x205D;
+static constexpr uint32_t HVC_VSNPRINTF           = 0x205E;
+static constexpr uint32_t HVC_MEMCHR              = 0x205F;
+static constexpr uint32_t HVC_ISATTY              = 0x2060;
+static constexpr uint32_t HVC_FILENO              = 0x2061;
+static constexpr uint32_t HVC_LIBC_RET0           = 0x2062;
+static constexpr uint32_t HVC_LIBC_RET_NEG1       = 0x2063;
+static constexpr uint32_t HVC_LIBC_RET_NULL       = 0x2064;
+static constexpr uint32_t HVC_GETAUXVAL           = 0x2065;
+static constexpr uint32_t HVC_LOCALECONV          = 0x2066;
+static constexpr uint32_t HVC_WCSLEN              = 0x2067;
+static constexpr uint32_t HVC_WMEMCHR             = 0x2068;
+static constexpr uint32_t HVC_WMEMCMP             = 0x2069;
+static constexpr uint32_t HVC_FPUTC               = 0x206A;
+static constexpr uint32_t HVC_GETC                = 0x206B;
+static constexpr uint32_t HVC_UNGETC              = 0x206C;
+static constexpr uint32_t HVC_CTYPE_MB_CUR_MAX    = 0x206D;
+static constexpr uint32_t HVC_STACK_CHK_FAIL      = 0x206E;
+static constexpr uint32_t HVC_MEMMOVE_CHK         = 0x206F;
+static constexpr uint32_t HVC_STRLEN_CHK          = 0x2070;
+static constexpr uint32_t HVC_STRNCPY_CHK2        = 0x2071;
+static constexpr uint32_t HVC_STRRCHR_CHK         = 0x2072;
+static constexpr uint32_t HVC_VSNPRINTF_CHK       = 0x2073;
+static constexpr uint32_t HVC_ISLOWER             = 0x2074;
+static constexpr uint32_t HVC_ISUPPER             = 0x2075;
+static constexpr uint32_t HVC_ISXDIGIT            = 0x2076;
+static constexpr uint32_t HVC_TOLOWER             = 0x2077;
+static constexpr uint32_t HVC_TOUPPER             = 0x2078;
+static constexpr uint32_t HVC_ISWALPHA            = 0x2079;
+static constexpr uint32_t HVC_ISWBLANK            = 0x207A;
+static constexpr uint32_t HVC_ISWCNTRL            = 0x207B;
+static constexpr uint32_t HVC_ISWDIGIT            = 0x207C;
+static constexpr uint32_t HVC_ISWLOWER            = 0x207D;
+static constexpr uint32_t HVC_ISWPRINT            = 0x207E;
+static constexpr uint32_t HVC_ISWPUNCT            = 0x207F;
+static constexpr uint32_t HVC_ISWSPACE            = 0x2080;
+static constexpr uint32_t HVC_ISWUPPER            = 0x2081;
+static constexpr uint32_t HVC_ISWXDIGIT           = 0x2082;
+static constexpr uint32_t HVC_TOWLOWER            = 0x2083;
+static constexpr uint32_t HVC_TOWUPPER            = 0x2084;
+static constexpr uint32_t HVC_STRCOLL             = 0x2085;
+static constexpr uint32_t HVC_STRXFRM             = 0x2086;
+static constexpr uint32_t HVC_STRFTIME            = 0x2087;
+static constexpr uint32_t HVC_WCSCOLL             = 0x2088;
+static constexpr uint32_t HVC_WCSXFRM             = 0x2089;
+static constexpr uint32_t HVC_WMEMCPY             = 0x208A;
+static constexpr uint32_t HVC_WMEMMOVE            = 0x208B;
+static constexpr uint32_t HVC_WMEMSET             = 0x208C;
+static constexpr uint32_t HVC_PRCTL               = 0x208D;
+static constexpr uint32_t HVC_SF                  = 0x208E;
+static constexpr uint32_t HVC_MEMCPY_CHK          = 0x208F;
+static constexpr uint32_t HVC_STRNCPY_CHK         = 0x2090;
+static constexpr uint32_t HVC_STRCHR              = 0x2091;
+static constexpr uint32_t HVC_STRSTR              = 0x2092;
+static constexpr uint32_t HVC_STRERROR            = 0x2093;
+static constexpr uint32_t HVC_PTHREAD_EQUAL       = 0x2094;
+static constexpr uint32_t HVC_PTHREAD_SETNAME_NP  = 0x2095;
+static constexpr uint32_t HVC_LIBM_RET0           = 0x2096;
+static constexpr uint32_t HVC_LIBM_SINCOS         = 0x2097;
+static constexpr uint32_t HVC_LIBM_SINCOSF        = 0x2098;
+static constexpr uint32_t HVC_OPEN_2              = 0x2099;
+static constexpr uint32_t HVC_GETTID              = 0x209A;
+static constexpr uint32_t HVC_MUNMAP              = 0x209B;
+static constexpr uint32_t HVC_SETPRIORITY         = 0x209C;
+static constexpr uint32_t HVC_MMAP                = 0x209D;
+static constexpr uint32_t HVC_SCHED_SETAFFINITY   = 0x209E;
+static constexpr uint32_t HVC_MPROTECT            = 0x209F;
+static constexpr uint32_t HVC_READ_CHK            = 0x20A0;
+static constexpr uint32_t HVC_STRLCPY             = 0x20A1;
 
 // liblog
 static constexpr uint32_t HVC_LOG_PRINT           = 0x2100;
 static constexpr uint32_t HVC_LOG_WRITE           = 0x2101;
 static constexpr uint32_t HVC_LOG_BUF_WRITE       = 0x2102;
+static constexpr uint32_t HVC_LOG_VPRINT          = 0x2103;
 
 // libandroid
 static constexpr uint32_t HVC_ALOOPER_PREPARE     = 0x2200;
@@ -128,6 +217,7 @@ static constexpr uint32_t HVC_NATIVE_WINDOW_RELEASE = 0x2234;
 static constexpr uint32_t HVC_NATIVE_WINDOW_WIDTH   = 0x2235;
 static constexpr uint32_t HVC_NATIVE_WINDOW_HEIGHT  = 0x2236;
 static constexpr uint32_t HVC_NATIVE_WINDOW_FORMAT  = 0x2237;
+static constexpr uint32_t HVC_NATIVE_WINDOW_FROM_SURFACE = 0x2238;
 static constexpr uint32_t HVC_PROP_GET              = 0x2240;
 static constexpr uint32_t HVC_INPUT_QUEUE_ATTACH    = 0x2250;
 static constexpr uint32_t HVC_INPUT_QUEUE_DETACH    = 0x2251;
@@ -144,12 +234,16 @@ static constexpr uint32_t HVC_KEY_EVENT_GET_KEYCODE = 0x2265;
 static constexpr uint32_t HVC_CHOREOGRAPHER_CB_DELAYED = 0x2270;
 static constexpr uint32_t HVC_CHOREOGRAPHER_CB64       = 0x2271;
 static constexpr uint32_t HVC_CHOREOGRAPHER_CB64_DELAYED = 0x2272;
+static constexpr uint32_t HVC_BITMAP_GET_INFO          = 0x2290;
+static constexpr uint32_t HVC_BITMAP_LOCK_PIXELS       = 0x2291;
+static constexpr uint32_t HVC_BITMAP_UNLOCK_PIXELS     = 0x2292;
 
 // libdl
 static constexpr uint32_t HVC_DLOPEN              = 0x2300;
 static constexpr uint32_t HVC_DLSYM               = 0x2301;
 static constexpr uint32_t HVC_DLCLOSE             = 0x2302;
 static constexpr uint32_t HVC_DLERROR             = 0x2303;
+static constexpr uint32_t HVC_DL_ITERATE_PHDR     = 0x2304;
 
 // libEGL
 static constexpr uint32_t HVC_EGL_GET_DISPLAY         = 0x2400;
@@ -169,6 +263,7 @@ static constexpr uint32_t HVC_EGL_SWAP_INTERVAL        = 0x240D;
 static constexpr uint32_t HVC_EGL_TERMINATE            = 0x240E;
 static constexpr uint32_t HVC_EGL_RELEASE_THREAD       = 0x240F;
 static constexpr uint32_t HVC_EGL_GET_PROC_ADDRESS     = 0x2410;
+static constexpr uint32_t HVC_EGL_SURFACE_ATTRIB       = 0x2411;
 
 // libGLESv2 — direct wrappers for the most common draw-loop calls.
 // Less common calls come through eglGetProcAddress (0x2800+).
@@ -231,6 +326,61 @@ static constexpr uint32_t HVC_GL_GET_SHADER_IV        = 0x2537;
 static constexpr uint32_t HVC_GL_GET_PROGRAM_IV       = 0x2538;
 static constexpr uint32_t HVC_GL_GET_SHADER_INFO_LOG  = 0x2539;
 static constexpr uint32_t HVC_GL_GET_PROGRAM_INFO_LOG = 0x253A;
+static constexpr uint32_t HVC_GL_BUFFER_SUB_DATA      = 0x253B;
+static constexpr uint32_t HVC_GL_DRAW_RANGE_ELEMENTS  = 0x253C;
+static constexpr uint32_t HVC_GL_GEN_VERTEX_ARRAYS    = 0x253D;
+static constexpr uint32_t HVC_GL_TEX_STORAGE_2D       = 0x253E;
+static constexpr uint32_t HVC_GL_BLEND_FUNC_SEPARATE  = 0x253F;
+static constexpr uint32_t HVC_GL_CLIENT_WAIT_SYNC     = 0x2540;
+static constexpr uint32_t HVC_GL_DISABLE_VERT_ATTRIB  = 0x2541;
+static constexpr uint32_t HVC_GL_END_QUERY            = 0x2542;
+static constexpr uint32_t HVC_GL_GET_STRINGI          = 0x2543;
+static constexpr uint32_t HVC_GL_GET_VERTEX_ATTRIB_IV = 0x2544;
+static constexpr uint32_t HVC_GL_MAP_BUFFER_RANGE     = 0x2545;
+static constexpr uint32_t HVC_GL_UNIFORM_BLOCK_BINDING = 0x2546;
+static constexpr uint32_t HVC_GL_COMPRESSED_TEX_SUB_IMAGE_3D = 0x2547;
+static constexpr uint32_t HVC_GL_FENCE_SYNC           = 0x2548;
+static constexpr uint32_t HVC_GL_GENERATE_MIPMAP      = 0x2549;
+static constexpr uint32_t HVC_GL_POLYGON_OFFSET       = 0x254A;
+static constexpr uint32_t HVC_GL_BIND_VERTEX_ARRAY    = 0x254B;
+static constexpr uint32_t HVC_GL_BLEND_EQUATION_SEPARATE = 0x254C;
+static constexpr uint32_t HVC_GL_CLEAR_BUFFER_FV      = 0x254D;
+static constexpr uint32_t HVC_GL_GEN_QUERIES          = 0x254E;
+static constexpr uint32_t HVC_GL_TEX_SUB_IMAGE_3D     = 0x254F;
+static constexpr uint32_t HVC_GL_VERTEX_ATTRIB_I4UI   = 0x2550;
+static constexpr uint32_t HVC_GL_CLEAR_BUFFER_FI      = 0x2551;
+static constexpr uint32_t HVC_GL_CLEAR_BUFFER_IV      = 0x2552;
+static constexpr uint32_t HVC_GL_DELETE_VERTEX_ARRAYS = 0x2553;
+static constexpr uint32_t HVC_GL_INVALIDATE_FRAMEBUFFER = 0x2554;
+static constexpr uint32_t HVC_GL_SAMPLER_PARAMETERF   = 0x2555;
+static constexpr uint32_t HVC_GL_TEX_STORAGE_3D       = 0x2556;
+static constexpr uint32_t HVC_GL_UNMAP_BUFFER         = 0x2557;
+static constexpr uint32_t HVC_GL_COMPRESSED_TEX_SUB_IMAGE_2D = 0x2558;
+static constexpr uint32_t HVC_GL_DELETE_SAMPLERS      = 0x2559;
+static constexpr uint32_t HVC_GL_DRAW_BUFFERS         = 0x255A;
+static constexpr uint32_t HVC_GL_IS_ENABLED           = 0x255B;
+static constexpr uint32_t HVC_GL_READ_PIXELS          = 0x255C;
+static constexpr uint32_t HVC_GL_WAIT_SYNC            = 0x255D;
+static constexpr uint32_t HVC_GL_BEGIN_QUERY          = 0x255E;
+static constexpr uint32_t HVC_GL_DELETE_QUERIES       = 0x255F;
+static constexpr uint32_t HVC_GL_GET_QUERY_OBJECT_UIV = 0x2560;
+static constexpr uint32_t HVC_GL_HINT                 = 0x2561;
+static constexpr uint32_t HVC_GL_RENDERBUFFER_STORAGE_MS = 0x2562;
+static constexpr uint32_t HVC_GL_BIND_BUFFER_RANGE    = 0x2563;
+static constexpr uint32_t HVC_GL_BIND_SAMPLER         = 0x2564;
+static constexpr uint32_t HVC_GL_DETACH_SHADER        = 0x2565;
+static constexpr uint32_t HVC_GL_TEX_SUB_IMAGE_2D     = 0x2566;
+static constexpr uint32_t HVC_GL_BLIT_FRAMEBUFFER     = 0x2567;
+static constexpr uint32_t HVC_GL_DELETE_FRAMEBUFFERS2 = 0x2568;
+static constexpr uint32_t HVC_GL_DELETE_RENDERBUFFERS2 = 0x2569;
+static constexpr uint32_t HVC_GL_DELETE_SYNC          = 0x256A;
+static constexpr uint32_t HVC_GL_FRAMEBUFFER_TEXTURE_LAYER = 0x256B;
+static constexpr uint32_t HVC_GL_GEN_SAMPLERS         = 0x256C;
+static constexpr uint32_t HVC_GL_GET_FLOATV           = 0x256D;
+static constexpr uint32_t HVC_GL_GET_UNIFORM_BLOCK_INDEX = 0x256E;
+static constexpr uint32_t HVC_GL_SAMPLER_PARAMETERI   = 0x256F;
+static constexpr uint32_t HVC_GL_VERTEX_ATTRIB4F      = 0x2570;
+static constexpr uint32_t HVC_GL_VERTEX_ATTRIB_IPOINTER = 0x2571;
 
 // libbinder_ndk
 static constexpr uint32_t HVC_SERVICE_CHECK           = 0x2700;
@@ -481,6 +631,16 @@ static std::string format_guest_log(guest_t* g,
         char tmp[64] = {};
         char spec = fmt[++i];
         if (spec == '%') { out.push_back('%'); continue; }
+        int64_t precision = -1;
+        if (spec == '.' && i + 2 < fmt.size() && fmt[i + 1] == '*') {
+            if (arg >= vararg_count) {
+                out += "%.*";
+                continue;
+            }
+            precision = static_cast<int64_t>(varargs[arg++]);
+            i += 2;
+            spec = fmt[i];
+        }
         if (spec == 'l' && i + 1 < fmt.size()) {
             if (fmt[i + 1] == 'l' && i + 2 < fmt.size()) {
                 i += 2;
@@ -510,8 +670,15 @@ static std::string format_guest_log(guest_t* g,
             std::snprintf(tmp, sizeof(tmp), "%llx", (unsigned long long)value); out += tmp; break;
         case 'p':
             std::snprintf(tmp, sizeof(tmp), "0x%llx", (unsigned long long)value); out += tmp; break;
-        case 's':
-            out += guest_read_string(g, value); break;
+        case 's': {
+            std::string s = guest_read_string(g, value);
+            if (precision >= 0 &&
+                static_cast<uint64_t>(precision) < s.size()) {
+                s.resize(static_cast<size_t>(precision));
+            }
+            out += s;
+            break;
+        }
         case 'f': case 'g': case 'e': {
             // float passed as bits in a uint64 — reinterpret
             float f; memcpy(&f, &value, 4);
@@ -931,6 +1098,7 @@ void AndroidRuntime::install()
     register_libc_stubs();
     register_liblog_stubs();
     register_libandroid_stubs();
+    register_libjnigraphics_stubs();
     register_libdl_stubs();
     register_libcxx_stubs();
     register_libbinder_stubs();
@@ -1109,6 +1277,48 @@ void AndroidRuntime::register_libc_stubs()
             return a[0];
         });
 
+    add("libc.so", "strchr", HVC_STRCHR,
+        [](guest_t* g, const uint64_t a[8]) -> uint64_t {
+            if (!a[0])
+                return 0;
+            char needle = static_cast<char>(a[1] & 0xff);
+            for (uint64_t i = 0; i < 1024 * 1024; ++i) {
+                char ch = 0;
+                if (guest_read(g, a[0] + i, &ch, sizeof(ch)) != 0)
+                    return 0;
+                if (ch == needle)
+                    return a[0] + i;
+                if (!ch)
+                    return 0;
+            }
+            return 0;
+        });
+
+    add("libc.so", "strstr", HVC_STRSTR,
+        [](guest_t* g, const uint64_t a[8]) -> uint64_t {
+            if (!a[0] || !a[1])
+                return 0;
+            auto haystack = guest_read_string(g, a[0]);
+            auto needle = guest_read_string(g, a[1]);
+            if (needle.empty())
+                return a[0];
+            size_t pos = haystack.find(needle);
+            return pos == std::string::npos ? 0 : a[0] + pos;
+        });
+
+    add("libc.so", "strlcpy", HVC_STRLCPY,
+        [](guest_t* g, const uint64_t a[8]) -> uint64_t {
+            auto src = guest_read_string(g, a[1]);
+            if (a[0] && a[2]) {
+                size_t cap = static_cast<size_t>(
+                    std::min<uint64_t>(a[2] - 1, src.size()));
+                guest_write(g, a[0], src.data(), cap);
+                uint8_t nul = 0;
+                guest_write(g, a[0] + cap, &nul, 1);
+            }
+            return static_cast<uint64_t>(src.size());
+        });
+
     add("libc.so", "strdup", HVC_STRDUP,
         [this](guest_t* g, const uint64_t a[8]) -> uint64_t {
             auto s = guest_read_string(g,a[0]);
@@ -1119,11 +1329,731 @@ void AndroidRuntime::register_libc_stubs()
             return ptr;
         });
 
+    add("libc.so", "strerror", HVC_STRERROR,
+        [this](guest_t* g, const uint64_t a[8]) -> uint64_t {
+            const char* host = std::strerror(static_cast<int>(a[0]));
+            std::string s = host ? host : "unknown error";
+            uint64_t sz = (s.size() + 1 + 15) & ~15ULL;
+            if (heap_bump_ + sz > heap_base_ + HEAP_SIZE)
+                return 0;
+            uint64_t ptr = heap_bump_;
+            heap_bump_ += sz;
+            guest_write(g, ptr, s.c_str(), s.size() + 1);
+            return ptr;
+        });
+
     add("libc.so", "printf", HVC_PRINTF,
         [](guest_t* g, const uint64_t a[8]) -> uint64_t {
             auto fmt = guest_read_string(g,a[0]);
             std::fprintf(stderr, "[guest printf] %s\n", fmt.c_str());
             return (uint64_t)fmt.size();
+        });
+
+    add("libc.so", "fprintf", HVC_FPRINTF,
+        [](guest_t* g, const uint64_t a[8]) -> uint64_t {
+            auto fmt = guest_read_string(g, a[1]);
+            auto msg = format_guest_log(g, fmt, a + 2, 6);
+            std::fprintf(stderr, "[guest fprintf] %s\n", msg.c_str());
+            return static_cast<uint64_t>(msg.size());
+        });
+
+    add("libc.so", "vfprintf", HVC_VFPRINTF,
+        [](guest_t* g, const uint64_t a[8]) -> uint64_t {
+            auto fmt = guest_read_string(g, a[1]);
+            std::fprintf(stderr, "[guest vfprintf] %s\n", fmt.c_str());
+            return static_cast<uint64_t>(fmt.size());
+        });
+
+    add("libc.so", "fflush", HVC_FFLUSH,
+        [](guest_t*, const uint64_t[8]) -> uint64_t { return 0; });
+
+    add("libc.so", "fwrite", HVC_FWRITE,
+        [](guest_t* g, const uint64_t a[8]) -> uint64_t {
+            uint64_t ptr = a[0];
+            uint64_t size = a[1];
+            uint64_t nmemb = a[2];
+            if (!ptr || !size || !nmemb)
+                return 0;
+            uint64_t total = size * nmemb;
+            if (size != 0 && total / size != nmemb)
+                return 0;
+            uint64_t preview = std::min<uint64_t>(total, 256);
+            if (preview) {
+                std::vector<uint8_t> bytes(static_cast<size_t>(preview));
+                if (guest_read(g, ptr, bytes.data(), preview) == 0) {
+                    std::fprintf(stderr, "[guest fwrite] ");
+                    std::fwrite(bytes.data(), 1, bytes.size(), stderr);
+                    if (preview < total)
+                        std::fprintf(stderr, "...");
+                    std::fprintf(stderr, "\n");
+                }
+            }
+            return nmemb;
+        });
+
+    add("libc.so", "vasprintf", HVC_VASPRINTF,
+        [this](guest_t* g, const uint64_t a[8]) -> uint64_t {
+            if (!a[0] || !a[1])
+                return guest_negative_one();
+            auto fmt = guest_read_string(g, a[1]);
+            uint64_t size = (fmt.size() + 1 + 15) & ~15ULL;
+            if (!size || heap_bump_ + size > heap_base_ + HEAP_SIZE)
+                return guest_negative_one();
+            uint64_t ptr = heap_bump_;
+            heap_bump_ += size;
+            guest_write(g, ptr, fmt.c_str(), fmt.size() + 1);
+            guest_write_u64(g, a[0], ptr);
+            return static_cast<uint64_t>(fmt.size());
+        });
+
+    add("libc.so", "snprintf", HVC_SNPRINTF,
+        [](guest_t* g, const uint64_t a[8]) -> uint64_t {
+            auto fmt = guest_read_string(g, a[2]);
+            auto msg = format_guest_log(g, fmt, a + 3, 5);
+            if (a[0] && a[1]) {
+                size_t cap = static_cast<size_t>(std::min<uint64_t>(a[1] - 1, msg.size()));
+                guest_write(g, a[0], msg.data(), cap);
+                uint8_t nul = 0;
+                guest_write(g, a[0] + cap, &nul, 1);
+            }
+            return static_cast<uint64_t>(msg.size());
+        });
+
+    add("libc.so", "vsnprintf", HVC_VSNPRINTF,
+        [](guest_t* g, const uint64_t a[8]) -> uint64_t {
+            auto fmt = guest_read_string(g, a[2]);
+            if (a[0] && a[1]) {
+                size_t cap = static_cast<size_t>(std::min<uint64_t>(a[1] - 1, fmt.size()));
+                guest_write(g, a[0], fmt.data(), cap);
+                uint8_t nul = 0;
+                guest_write(g, a[0] + cap, &nul, 1);
+            }
+            return static_cast<uint64_t>(fmt.size());
+        });
+
+    add("libc.so", "sprintf", HVC_SPRINTF,
+        [](guest_t* g, const uint64_t a[8]) -> uint64_t {
+            auto fmt = guest_read_string(g, a[1]);
+            auto msg = format_guest_log(g, fmt, a + 2, 6);
+            if (a[0])
+                guest_write(g, a[0], msg.c_str(), msg.size() + 1);
+            return static_cast<uint64_t>(msg.size());
+        });
+
+    add("libc.so", "__errno", HVC_ERRNO,
+        [this](guest_t* g, const uint64_t[8]) -> uint64_t {
+            uint64_t errno_gpa = arena_gpa_ + 0x080800;
+            uint32_t zero = 0;
+            guest_write(g, errno_gpa, &zero, sizeof(zero));
+            return errno_gpa;
+        });
+
+    add("libc.so", "posix_memalign", HVC_POSIX_MEMALIGN,
+        [this](guest_t* g, const uint64_t a[8]) -> uint64_t {
+            if (!a[0] || !a[1])
+                return 22; // EINVAL
+            uint64_t align = std::max<uint64_t>(a[1], 16);
+            uint64_t ptr = (heap_bump_ + align - 1) & ~(align - 1);
+            uint64_t size = (a[2] + 15) & ~15ULL;
+            if (ptr + size > heap_base_ + HEAP_SIZE)
+                return 12; // ENOMEM
+            heap_bump_ = ptr + size;
+            std::vector<uint8_t> z(size, 0);
+            if (size)
+                guest_write(g, ptr, z.data(), size);
+            guest_write_u64(g, a[0], ptr);
+            return 0;
+        });
+
+    add("libc.so", "memchr", HVC_MEMCHR,
+        [](guest_t* g, const uint64_t a[8]) -> uint64_t {
+            if (!a[0] || !a[2])
+                return 0;
+            size_t n = static_cast<size_t>(std::min<uint64_t>(a[2], 1024 * 1024));
+            std::vector<uint8_t> buf(n);
+            if (guest_read(g, a[0], buf.data(), n) != 0)
+                return 0;
+            uint8_t needle = static_cast<uint8_t>(a[1]);
+            for (size_t i = 0; i < buf.size(); ++i)
+                if (buf[i] == needle)
+                    return a[0] + i;
+            return 0;
+        });
+
+    add("libc.so", "isatty", HVC_ISATTY,
+        [](guest_t*, const uint64_t[8]) -> uint64_t { return 0; });
+    add("libc.so", "fileno", HVC_FILENO,
+        [](guest_t*, const uint64_t[8]) -> uint64_t { return guest_negative_one(); });
+    add("libc.so", "getauxval", HVC_GETAUXVAL,
+        [](guest_t*, const uint64_t[8]) -> uint64_t { return 0; });
+    add("libc.so", "localeconv", HVC_LOCALECONV,
+        [](guest_t*, const uint64_t[8]) -> uint64_t { return 0; });
+    add("libc.so", "__ctype_get_mb_cur_max", HVC_CTYPE_MB_CUR_MAX,
+        [](guest_t*, const uint64_t[8]) -> uint64_t { return 1; });
+
+    add("libc.so", "fputc", HVC_FPUTC,
+        [](guest_t*, const uint64_t a[8]) -> uint64_t {
+            uint8_t c = static_cast<uint8_t>(a[0]);
+            std::fwrite(&c, 1, 1, stderr);
+            return a[0] & 0xff;
+        });
+    add("libc.so", "getc", HVC_GETC,
+        [](guest_t*, const uint64_t[8]) -> uint64_t { return guest_negative_one(); });
+    add("libc.so", "ungetc", HVC_UNGETC,
+        [](guest_t*, const uint64_t a[8]) -> uint64_t { return a[0] & 0xff; });
+
+    add("libc.so", "strtol", HVC_STRTOL,
+        [](guest_t* g, const uint64_t a[8]) -> uint64_t {
+            auto s = guest_read_string(g, a[0]);
+            char* end = nullptr;
+            long value = std::strtol(s.c_str(), &end, static_cast<int>(a[2]));
+            if (a[1])
+                guest_write_u64(g, a[1], a[0] + static_cast<uint64_t>(end - s.c_str()));
+            return static_cast<uint64_t>(value);
+        });
+    add("libc.so", "strtoll", HVC_STRTOL,
+        [](guest_t* g, const uint64_t a[8]) -> uint64_t {
+            auto s = guest_read_string(g, a[0]);
+            char* end = nullptr;
+            long long value = std::strtoll(s.c_str(), &end, static_cast<int>(a[2]));
+            if (a[1])
+                guest_write_u64(g, a[1], a[0] + static_cast<uint64_t>(end - s.c_str()));
+            return static_cast<uint64_t>(value);
+        });
+    add("libc.so", "strtoul", HVC_STRTOL,
+        [](guest_t* g, const uint64_t a[8]) -> uint64_t {
+            auto s = guest_read_string(g, a[0]);
+            char* end = nullptr;
+            unsigned long value = std::strtoul(s.c_str(), &end, static_cast<int>(a[2]));
+            if (a[1])
+                guest_write_u64(g, a[1], a[0] + static_cast<uint64_t>(end - s.c_str()));
+            return static_cast<uint64_t>(value);
+        });
+    add("libc.so", "strtoull", HVC_STRTOL,
+        [](guest_t* g, const uint64_t a[8]) -> uint64_t {
+            auto s = guest_read_string(g, a[0]);
+            char* end = nullptr;
+            unsigned long long value = std::strtoull(s.c_str(), &end, static_cast<int>(a[2]));
+            if (a[1])
+                guest_write_u64(g, a[1], a[0] + static_cast<uint64_t>(end - s.c_str()));
+            return static_cast<uint64_t>(value);
+        });
+
+    add("libc.so", "strtod", HVC_STRTOD,
+        [](guest_t* g, const uint64_t a[8]) -> uint64_t {
+            auto s = guest_read_string(g, a[0]);
+            if (a[1])
+                guest_write_u64(g, a[1], a[0]);
+            (void)s;
+            return 0;
+        });
+    add("libc.so", "strtof", HVC_STRTOD,
+        [](guest_t* g, const uint64_t a[8]) -> uint64_t {
+            if (a[1])
+                guest_write_u64(g, a[1], a[0]);
+            return 0;
+        });
+
+    add("libc.so", "wcslen", HVC_WCSLEN,
+        [](guest_t* g, const uint64_t a[8]) -> uint64_t {
+            if (!a[0])
+                return 0;
+            uint64_t p = a[0];
+            uint32_t ch = 0;
+            uint64_t len = 0;
+            while (len < 1024 * 1024) {
+                guest_read(g, p, &ch, sizeof(ch));
+                if (!ch)
+                    break;
+                p += sizeof(ch);
+                ++len;
+            }
+            return len;
+        });
+    add("libc.so", "wmemchr", HVC_WMEMCHR,
+        [](guest_t* g, const uint64_t a[8]) -> uint64_t {
+            if (!a[0] || !a[2])
+                return 0;
+            uint32_t needle = static_cast<uint32_t>(a[1]);
+            uint64_t count = std::min<uint64_t>(a[2], 1024 * 1024);
+            for (uint64_t i = 0; i < count; ++i) {
+                uint32_t ch = 0;
+                guest_read(g, a[0] + i * 4, &ch, sizeof(ch));
+                if (ch == needle)
+                    return a[0] + i * 4;
+            }
+            return 0;
+        });
+    add("libc.so", "wmemcmp", HVC_WMEMCMP,
+        [](guest_t* g, const uint64_t a[8]) -> uint64_t {
+            for (uint64_t i = 0; i < a[2]; ++i) {
+                uint32_t lhs = 0, rhs = 0;
+                guest_read(g, a[0] + i * 4, &lhs, sizeof(lhs));
+                guest_read(g, a[1] + i * 4, &rhs, sizeof(rhs));
+                if (lhs != rhs)
+                    return lhs < rhs ? guest_negative_one() : 1;
+            }
+            return 0;
+        });
+
+    auto ascii_lower = [](uint64_t c) -> bool {
+        return c >= 'a' && c <= 'z';
+    };
+    auto ascii_upper = [](uint64_t c) -> bool {
+        return c >= 'A' && c <= 'Z';
+    };
+    auto ascii_digit = [](uint64_t c) -> bool {
+        return c >= '0' && c <= '9';
+    };
+    auto ascii_alpha = [ascii_lower, ascii_upper](uint64_t c) -> bool {
+        return ascii_lower(c) || ascii_upper(c);
+    };
+    auto ascii_xdigit = [ascii_digit](uint64_t c) -> bool {
+        return ascii_digit(c) ||
+               (c >= 'a' && c <= 'f') ||
+               (c >= 'A' && c <= 'F');
+    };
+    auto ascii_print = [](uint64_t c) -> bool {
+        return c >= 0x20 && c < 0x7f;
+    };
+    auto ascii_space = [](uint64_t c) -> bool {
+        return c == ' ' || c == '\t' || c == '\n' ||
+               c == '\r' || c == '\f' || c == '\v';
+    };
+
+    add("libc.so", "__memcpy_chk", HVC_MEMCPY_CHK,
+        [](guest_t* g, const uint64_t a[8]) -> uint64_t {
+            if (!a[0] || !a[1] || !a[2]) return a[0];
+            uint64_t n = a[2];
+            if (a[3])
+                n = std::min<uint64_t>(n, a[3]);
+            n = std::min<uint64_t>(n, 1024 * 1024);
+            std::vector<uint8_t> buf(static_cast<size_t>(n));
+            guest_read(g, a[1], buf.data(), n);
+            guest_write(g, a[0], buf.data(), n);
+            return a[0];
+        });
+    add("libc.so", "__read_chk", HVC_READ_CHK,
+        [](guest_t* g, const uint64_t a[8]) -> uint64_t {
+            uint64_t n = a[2];
+            if (a[3])
+                n = std::min<uint64_t>(n, a[3]);
+            n = std::min<uint64_t>(n, 1024 * 1024);
+            if (a[1] && n) {
+                std::vector<uint8_t> zero(static_cast<size_t>(n), 0);
+                guest_write(g, a[1], zero.data(), n);
+            }
+            return 0;
+        });
+    add("libc.so", "__memmove_chk", HVC_MEMMOVE_CHK,
+        [](guest_t* g, const uint64_t a[8]) -> uint64_t {
+            if (!a[0] || !a[1] || !a[2]) return a[0];
+            uint64_t n = a[2];
+            if (a[3])
+                n = std::min<uint64_t>(n, a[3]);
+            n = std::min<uint64_t>(n, 1024 * 1024);
+            std::vector<uint8_t> buf(static_cast<size_t>(n));
+            guest_read(g, a[1], buf.data(), n);
+            guest_write(g, a[0], buf.data(), n);
+            return a[0];
+        });
+    add("libc.so", "__strlen_chk", HVC_STRLEN_CHK,
+        [](guest_t* g, const uint64_t a[8]) -> uint64_t {
+            if (!a[0])
+                return 0;
+            uint64_t limit = std::min<uint64_t>(a[1] ? a[1] : 1024 * 1024,
+                                                1024 * 1024);
+            for (uint64_t i = 0; i < limit; ++i) {
+                char ch = 0;
+                guest_read(g, a[0] + i, &ch, sizeof(ch));
+                if (!ch)
+                    return i;
+            }
+            return limit;
+        });
+    add("libc.so", "__strncpy_chk", HVC_STRNCPY_CHK,
+        [](guest_t* g, const uint64_t a[8]) -> uint64_t {
+            if (!a[0] || !a[1] || !a[2]) return a[0];
+            uint64_t n = std::min<uint64_t>(a[2], 1024 * 1024);
+            if (a[3])
+                n = std::min<uint64_t>(n, a[3]);
+            std::vector<char> out(static_cast<size_t>(n), '\0');
+            for (uint64_t i = 0; i < n; ++i) {
+                char ch = 0;
+                guest_read(g, a[1] + i, &ch, sizeof(ch));
+                out[static_cast<size_t>(i)] = ch;
+                if (!ch)
+                    break;
+            }
+            guest_write(g, a[0], out.data(), n);
+            return a[0];
+        });
+    add("libc.so", "__strncpy_chk2", HVC_STRNCPY_CHK2,
+        [](guest_t* g, const uint64_t a[8]) -> uint64_t {
+            if (!a[0] || !a[1] || !a[2]) return a[0];
+            uint64_t n = std::min<uint64_t>(a[2], 1024 * 1024);
+            if (a[3])
+                n = std::min<uint64_t>(n, a[3]);
+            if (a[4])
+                n = std::min<uint64_t>(n, a[4]);
+            std::vector<char> out(static_cast<size_t>(n), '\0');
+            for (uint64_t i = 0; i < n; ++i) {
+                char ch = 0;
+                guest_read(g, a[1] + i, &ch, sizeof(ch));
+                out[static_cast<size_t>(i)] = ch;
+                if (!ch)
+                    break;
+            }
+            guest_write(g, a[0], out.data(), n);
+            return a[0];
+        });
+    add("libc.so", "__strrchr_chk", HVC_STRRCHR_CHK,
+        [](guest_t* g, const uint64_t a[8]) -> uint64_t {
+            if (!a[0])
+                return 0;
+            uint64_t limit = std::min<uint64_t>(a[2] ? a[2] : 1024 * 1024,
+                                                1024 * 1024);
+            uint64_t last = 0;
+            char needle = static_cast<char>(a[1] & 0xff);
+            for (uint64_t i = 0; i < limit; ++i) {
+                char ch = 0;
+                guest_read(g, a[0] + i, &ch, sizeof(ch));
+                if (ch == needle)
+                    last = a[0] + i;
+                if (!ch)
+                    break;
+            }
+            return last;
+        });
+    add("libc.so", "__vsnprintf_chk", HVC_VSNPRINTF_CHK,
+        [](guest_t* g, const uint64_t a[8]) -> uint64_t {
+            auto fmt = guest_read_string(g, a[4]);
+            if (a[0] && a[1]) {
+                size_t cap = static_cast<size_t>(
+                    std::min<uint64_t>(a[1] - 1, fmt.size()));
+                guest_write(g, a[0], fmt.data(), cap);
+                uint8_t nul = 0;
+                guest_write(g, a[0] + cap, &nul, 1);
+            }
+            return static_cast<uint64_t>(fmt.size());
+        });
+
+    add("libc.so", "islower", HVC_ISLOWER,
+        [ascii_lower](guest_t*, const uint64_t a[8]) -> uint64_t {
+            return ascii_lower(a[0]) ? 1 : 0;
+        });
+    add("libc.so", "isupper", HVC_ISUPPER,
+        [ascii_upper](guest_t*, const uint64_t a[8]) -> uint64_t {
+            return ascii_upper(a[0]) ? 1 : 0;
+        });
+    add("libc.so", "isxdigit", HVC_ISXDIGIT,
+        [ascii_xdigit](guest_t*, const uint64_t a[8]) -> uint64_t {
+            return ascii_xdigit(a[0]) ? 1 : 0;
+        });
+    add("libc.so", "tolower", HVC_TOLOWER,
+        [ascii_upper](guest_t*, const uint64_t a[8]) -> uint64_t {
+            return ascii_upper(a[0]) ? a[0] + 32 : a[0];
+        });
+    add("libc.so", "toupper", HVC_TOUPPER,
+        [ascii_lower](guest_t*, const uint64_t a[8]) -> uint64_t {
+            return ascii_lower(a[0]) ? a[0] - 32 : a[0];
+        });
+
+    add("libc.so", "iswalpha", HVC_ISWALPHA,
+        [ascii_alpha](guest_t*, const uint64_t a[8]) -> uint64_t {
+            return ascii_alpha(a[0]) ? 1 : 0;
+        });
+    add("libc.so", "iswblank", HVC_ISWBLANK,
+        [](guest_t*, const uint64_t a[8]) -> uint64_t {
+            return (a[0] == ' ' || a[0] == '\t') ? 1 : 0;
+        });
+    add("libc.so", "iswcntrl", HVC_ISWCNTRL,
+        [](guest_t*, const uint64_t a[8]) -> uint64_t {
+            return (a[0] < 0x20 || a[0] == 0x7f) ? 1 : 0;
+        });
+    add("libc.so", "iswdigit", HVC_ISWDIGIT,
+        [ascii_digit](guest_t*, const uint64_t a[8]) -> uint64_t {
+            return ascii_digit(a[0]) ? 1 : 0;
+        });
+    add("libc.so", "iswlower", HVC_ISWLOWER,
+        [ascii_lower](guest_t*, const uint64_t a[8]) -> uint64_t {
+            return ascii_lower(a[0]) ? 1 : 0;
+        });
+    add("libc.so", "iswprint", HVC_ISWPRINT,
+        [ascii_print](guest_t*, const uint64_t a[8]) -> uint64_t {
+            return ascii_print(a[0]) ? 1 : 0;
+        });
+    add("libc.so", "iswpunct", HVC_ISWPUNCT,
+        [ascii_alpha, ascii_digit, ascii_print, ascii_space](
+            guest_t*, const uint64_t a[8]) -> uint64_t {
+            return ascii_print(a[0]) && !ascii_alpha(a[0]) &&
+                   !ascii_digit(a[0]) && !ascii_space(a[0]);
+        });
+    add("libc.so", "iswspace", HVC_ISWSPACE,
+        [ascii_space](guest_t*, const uint64_t a[8]) -> uint64_t {
+            return ascii_space(a[0]) ? 1 : 0;
+        });
+    add("libc.so", "iswupper", HVC_ISWUPPER,
+        [ascii_upper](guest_t*, const uint64_t a[8]) -> uint64_t {
+            return ascii_upper(a[0]) ? 1 : 0;
+        });
+    add("libc.so", "iswxdigit", HVC_ISWXDIGIT,
+        [ascii_xdigit](guest_t*, const uint64_t a[8]) -> uint64_t {
+            return ascii_xdigit(a[0]) ? 1 : 0;
+        });
+    add("libc.so", "towlower", HVC_TOWLOWER,
+        [ascii_upper](guest_t*, const uint64_t a[8]) -> uint64_t {
+            return ascii_upper(a[0]) ? a[0] + 32 : a[0];
+        });
+    add("libc.so", "towupper", HVC_TOWUPPER,
+        [ascii_lower](guest_t*, const uint64_t a[8]) -> uint64_t {
+            return ascii_lower(a[0]) ? a[0] - 32 : a[0];
+        });
+
+    add("libc.so", "strcoll", HVC_STRCOLL,
+        [](guest_t* g, const uint64_t a[8]) -> uint64_t {
+            return static_cast<uint64_t>(
+                guest_read_string(g, a[0]).compare(guest_read_string(g, a[1])));
+        });
+    add("libc.so", "strxfrm", HVC_STRXFRM,
+        [](guest_t* g, const uint64_t a[8]) -> uint64_t {
+            auto src = guest_read_string(g, a[1]);
+            if (a[0] && a[2]) {
+                size_t cap = static_cast<size_t>(
+                    std::min<uint64_t>(a[2] - 1, src.size()));
+                guest_write(g, a[0], src.data(), cap);
+                uint8_t nul = 0;
+                guest_write(g, a[0] + cap, &nul, 1);
+            }
+            return static_cast<uint64_t>(src.size());
+        });
+    add("libc.so", "strftime", HVC_STRFTIME,
+        [](guest_t* g, const uint64_t a[8]) -> uint64_t {
+            if (!a[0] || !a[1] || !a[2] || !a[3])
+                return 0;
+            std::string fmt = guest_read_string(g, a[2]);
+            int32_t fields[9] = {};
+            guest_read(g, a[3], fields, sizeof(fields));
+            std::tm tm{};
+            tm.tm_sec = fields[0];
+            tm.tm_min = fields[1];
+            tm.tm_hour = fields[2];
+            tm.tm_mday = fields[3];
+            tm.tm_mon = fields[4];
+            tm.tm_year = fields[5];
+            tm.tm_wday = fields[6];
+            tm.tm_yday = fields[7];
+            tm.tm_isdst = fields[8];
+            size_t max = static_cast<size_t>(std::min<uint64_t>(a[1], 4096));
+            std::vector<char> out(max, '\0');
+            size_t n = std::strftime(out.data(), out.size(), fmt.c_str(), &tm);
+            if (n)
+                guest_write(g, a[0], out.data(), n + 1);
+            return static_cast<uint64_t>(n);
+        });
+
+    auto guest_wcslen32 = [](guest_t* g, uint64_t ptr) -> uint64_t {
+        if (!ptr)
+            return 0;
+        for (uint64_t i = 0; i < 1024 * 1024; ++i) {
+            uint32_t ch = 0;
+            guest_read(g, ptr + i * 4, &ch, sizeof(ch));
+            if (!ch)
+                return i;
+        }
+        return 1024 * 1024;
+    };
+
+    add("libc.so", "wcscoll", HVC_WCSCOLL,
+        [guest_wcslen32](guest_t* g, const uint64_t a[8]) -> uint64_t {
+            uint64_t n = std::min<uint64_t>(guest_wcslen32(g, a[0]),
+                                            guest_wcslen32(g, a[1]));
+            for (uint64_t i = 0; i < n; ++i) {
+                uint32_t lhs = 0, rhs = 0;
+                guest_read(g, a[0] + i * 4, &lhs, sizeof(lhs));
+                guest_read(g, a[1] + i * 4, &rhs, sizeof(rhs));
+                if (lhs != rhs)
+                    return lhs < rhs ? guest_negative_one() : 1;
+            }
+            uint64_t lhs_len = guest_wcslen32(g, a[0]);
+            uint64_t rhs_len = guest_wcslen32(g, a[1]);
+            if (lhs_len == rhs_len)
+                return 0;
+            return lhs_len < rhs_len ? guest_negative_one() : 1;
+        });
+    add("libc.so", "wcsxfrm", HVC_WCSXFRM,
+        [guest_wcslen32](guest_t* g, const uint64_t a[8]) -> uint64_t {
+            uint64_t len = guest_wcslen32(g, a[1]);
+            if (a[0] && a[2]) {
+                uint64_t count = std::min<uint64_t>(a[2] - 1, len);
+                std::vector<uint8_t> buf(static_cast<size_t>(count * 4));
+                if (count)
+                    guest_read(g, a[1], buf.data(), count * 4);
+                guest_write(g, a[0], buf.data(), count * 4);
+                uint32_t nul = 0;
+                guest_write(g, a[0] + count * 4, &nul, sizeof(nul));
+            }
+            return len;
+        });
+    add("libc.so", "wmemcpy", HVC_WMEMCPY,
+        [](guest_t* g, const uint64_t a[8]) -> uint64_t {
+            if (!a[0] || !a[1] || !a[2]) return a[0];
+            uint64_t count = std::min<uint64_t>(a[2], 1024 * 1024);
+            std::vector<uint8_t> buf(static_cast<size_t>(count * 4));
+            guest_read(g, a[1], buf.data(), count * 4);
+            guest_write(g, a[0], buf.data(), count * 4);
+            return a[0];
+        });
+    add("libc.so", "wmemmove", HVC_WMEMMOVE,
+        [](guest_t* g, const uint64_t a[8]) -> uint64_t {
+            if (!a[0] || !a[1] || !a[2]) return a[0];
+            uint64_t count = std::min<uint64_t>(a[2], 1024 * 1024);
+            std::vector<uint8_t> buf(static_cast<size_t>(count * 4));
+            guest_read(g, a[1], buf.data(), count * 4);
+            guest_write(g, a[0], buf.data(), count * 4);
+            return a[0];
+        });
+    add("libc.so", "wmemset", HVC_WMEMSET,
+        [](guest_t* g, const uint64_t a[8]) -> uint64_t {
+            if (!a[0] || !a[2]) return a[0];
+            uint64_t count = std::min<uint64_t>(a[2], 1024 * 1024);
+            std::vector<uint32_t> buf(static_cast<size_t>(count),
+                                      static_cast<uint32_t>(a[1]));
+            guest_write(g, a[0], buf.data(), count * 4);
+            return a[0];
+        });
+
+    add("libc.so", "prctl", HVC_PRCTL,
+        [](guest_t*, const uint64_t[8]) -> uint64_t { return 0; });
+    add("libc.so", "__sF", HVC_SF,
+        [](guest_t*, const uint64_t[8]) -> uint64_t { return 0; });
+
+    auto libc_ret0 = [](guest_t*, const uint64_t[8]) -> uint64_t { return 0; };
+    auto libc_ret_neg1 = [](guest_t*, const uint64_t[8]) -> uint64_t {
+        return guest_negative_one();
+    };
+    auto libc_ret_null = [](guest_t*, const uint64_t[8]) -> uint64_t { return 0; };
+
+    add("libc.so", "__open_2", HVC_OPEN_2,
+        [](guest_t* g, const uint64_t a[8]) -> uint64_t {
+            std::fprintf(stderr, "[ART] __open_2(%s, flags=0x%llx) -> ENOENT\n",
+                         guest_read_string(g, a[0]).c_str(),
+                         (unsigned long long)a[1]);
+            return guest_negative_one();
+        });
+    add("libc.so", "mmap", HVC_MMAP,
+        [this](guest_t* g, const uint64_t a[8]) -> uint64_t {
+            uint64_t size = (a[1] + 4095) & ~4095ULL;
+            if (!size || heap_bump_ + size > heap_base_ + HEAP_SIZE)
+                return guest_negative_one();
+            uint64_t ptr = (heap_bump_ + 4095) & ~4095ULL;
+            if (ptr + size > heap_base_ + HEAP_SIZE)
+                return guest_negative_one();
+            heap_bump_ = ptr + size;
+            std::vector<uint8_t> zero(static_cast<size_t>(size), 0);
+            guest_write(g, ptr, zero.data(), size);
+            return ptr;
+        });
+    add("libc.so", "mprotect", HVC_MPROTECT,
+        [](guest_t*, const uint64_t[8]) -> uint64_t { return 0; });
+    add("libc.so", "munmap", HVC_MUNMAP,
+        [](guest_t*, const uint64_t[8]) -> uint64_t { return 0; });
+    add("libc.so", "sched_setaffinity", HVC_SCHED_SETAFFINITY,
+        [](guest_t*, const uint64_t[8]) -> uint64_t { return 0; });
+    add("libc.so", "setpriority", HVC_SETPRIORITY,
+        [](guest_t*, const uint64_t[8]) -> uint64_t { return 0; });
+
+    for (const char* symbol : {
+            "btowc", "closedir", "fclose", "freelocale", "fputwc",
+            "fread", "fseek", "fseeko", "ftruncate", "getwc",
+            "iswalpha_l", "iswblank_l", "iswcntrl_l", "iswdigit_l",
+            "iswlower_l", "iswprint_l", "iswpunct_l", "iswspace_l",
+            "iswupper_l", "iswxdigit_l", "mbrlen", "mbrtowc",
+            "mbsnrtowcs", "mbsrtowcs", "mbtowc", "pthread_cond_timedwait",
+            "pthread_key_delete", "pthread_mutex_trylock",
+            "pthread_mutexattr_destroy", "pthread_mutexattr_init",
+            "pthread_mutexattr_settype", "setbuf", "strcoll_l",
+            "sscanf", "strerror_r", "strftime_l", "strtold", "strtold_l", "strtoll_l",
+            "strtoull_l", "strxfrm_l", "swprintf", "towlower_l",
+            "towupper_l", "ungetwc", "uselocale", "vsscanf", "wcrtomb",
+            "wcscoll_l", "wcsnrtombs", "wcstod", "wcstof", "wcstol",
+            "wcstold", "wcstoll", "wcstoul", "wcstoull", "wcsxfrm_l",
+            "wctob" }) {
+        add("libc.so", symbol, HVC_LIBC_RET0, libc_ret0);
+    }
+
+    for (const char* symbol : {
+            "chdir", "fchmod", "fchmodat", "fstat", "ftello",
+            "ftruncate", "ioctl", "link", "lstat", "mkdir", "open",
+            "openat", "pathconf", "readlink", "remove", "rename",
+            "sendfile", "stat", "statvfs", "symlink", "sysconf",
+            "truncate", "unlinkat", "utimensat" }) {
+        add("libc.so", symbol, HVC_LIBC_RET_NEG1, libc_ret_neg1);
+    }
+
+    for (const char* symbol : {
+            "fdopen", "fdopendir", "fopen", "getcwd", "newlocale",
+            "opendir", "readdir", "realpath", "setlocale" }) {
+        add("libc.so", symbol, HVC_LIBC_RET_NULL, libc_ret_null);
+    }
+
+    add("libc.so", "syscall", HVC_SYSCALL,
+        [](guest_t*, const uint64_t a[8]) -> uint64_t {
+            std::fprintf(stderr,
+                "[ART] libc syscall(%llu) unsupported via direct import\n",
+                (unsigned long long)a[0]);
+            return guest_negative_one();
+        });
+
+    add("libc.so", "openlog", HVC_OPENLOG,
+        [](guest_t* g, const uint64_t a[8]) -> uint64_t {
+            std::fprintf(stderr, "[guest openlog] %s\n",
+                         guest_read_string(g, a[0]).c_str());
+            return 0;
+        });
+    add("libc.so", "syslog", HVC_SYSLOG,
+        [](guest_t* g, const uint64_t a[8]) -> uint64_t {
+            auto fmt = guest_read_string(g, a[1]);
+            auto msg = format_guest_log(g, fmt, a + 2, 6);
+            std::fprintf(stderr, "[guest syslog] %s\n", msg.c_str());
+            return 0;
+        });
+    add("libc.so", "closelog", HVC_CLOSELOG,
+        [](guest_t*, const uint64_t[8]) -> uint64_t { return 0; });
+
+    add("libc.so", "android_set_abort_message", HVC_ANDROID_ABORT_MESSAGE,
+        [](guest_t* g, const uint64_t a[8]) -> uint64_t {
+            std::fprintf(stderr, "[ART] android_set_abort_message(%s)\n",
+                         guest_read_string(g, a[0]).c_str());
+            return 0;
+        });
+
+    add("libc.so", "__assert", HVC_ASSERT,
+        [](guest_t* g, const uint64_t a[8]) -> uint64_t {
+            std::fprintf(stderr, "[ART] __assert failed: %s:%llu %s\n",
+                         guest_read_string(g, a[0]).c_str(),
+                         (unsigned long long)a[1],
+                         guest_read_string(g, a[2]).c_str());
+            ::abort();
+            return 0;
+        });
+
+    add("libc.so", "__assert2", HVC_ASSERT2,
+        [](guest_t* g, const uint64_t a[8]) -> uint64_t {
+            std::fprintf(stderr, "[ART] __assert2 failed: %s:%llu %s %s\n",
+                         guest_read_string(g, a[0]).c_str(),
+                         (unsigned long long)a[1],
+                         guest_read_string(g, a[2]).c_str(),
+                         guest_read_string(g, a[3]).c_str());
+            ::abort();
+            return 0;
+        });
+
+    add("libc.so", "__stack_chk_fail", HVC_STACK_CHK_FAIL,
+        [](guest_t*, const uint64_t[8]) -> uint64_t {
+            std::fprintf(stderr, "[ART] __stack_chk_fail - aborting\n");
+            ::abort();
+            return 0;
         });
 
     add("libc.so", "abort", HVC_ABORT,
@@ -1139,6 +2069,8 @@ void AndroidRuntime::register_libc_stubs()
 
     add("libc.so", "getpid", HVC_GETPID,
         [](guest_t*, const uint64_t[8]) -> uint64_t { return (uint64_t)::getpid(); });
+    add("libc.so", "gettid", HVC_GETTID,
+        [](guest_t*, const uint64_t[8]) -> uint64_t { return 1; });
 
     add("libc.so", "getenv", HVC_GETENV_LIBC,
         [](guest_t*, const uint64_t[8]) -> uint64_t { return 0; });
@@ -1210,6 +2142,17 @@ void AndroidRuntime::register_libc_stubs()
 
     add("libc.so", "pthread_self", HVC_PTHREAD_SELF,
         [](guest_t*, const uint64_t[8]) -> uint64_t { return 1; });
+    add("libc.so", "pthread_equal", HVC_PTHREAD_EQUAL,
+        [](guest_t*, const uint64_t a[8]) -> uint64_t {
+            return a[0] == a[1] ? 1 : 0;
+        });
+    add("libc.so", "pthread_setname_np", HVC_PTHREAD_SETNAME_NP,
+        [](guest_t* g, const uint64_t a[8]) -> uint64_t {
+            std::fprintf(stderr, "[ART] pthread_setname_np thread=0x%llx name=%s\n",
+                         (unsigned long long)a[0],
+                         guest_read_string(g, a[1]).c_str());
+            return 0;
+        });
     add("libc.so", "pthread_mutex_init",
         HVC_PTHREAD_MUTEX_INIT,    [](guest_t*, const uint64_t[8]) -> uint64_t { return 0; });
     add("libc.so", "pthread_mutex_lock",
@@ -1218,6 +2161,16 @@ void AndroidRuntime::register_libc_stubs()
         HVC_PTHREAD_MUTEX_UNLOCK,  [](guest_t*, const uint64_t[8]) -> uint64_t { return 0; });
     add("libc.so", "pthread_mutex_destroy",
         HVC_PTHREAD_MUTEX_DESTROY, [](guest_t*, const uint64_t[8]) -> uint64_t { return 0; });
+    add("libc.so", "pthread_rwlock_init",
+        HVC_PTHREAD_RWLOCK_INIT,    [](guest_t*, const uint64_t[8]) -> uint64_t { return 0; });
+    add("libc.so", "pthread_rwlock_rdlock",
+        HVC_PTHREAD_RWLOCK_RDLOCK,  [](guest_t*, const uint64_t[8]) -> uint64_t { return 0; });
+    add("libc.so", "pthread_rwlock_wrlock",
+        HVC_PTHREAD_RWLOCK_WRLOCK,  [](guest_t*, const uint64_t[8]) -> uint64_t { return 0; });
+    add("libc.so", "pthread_rwlock_unlock",
+        HVC_PTHREAD_RWLOCK_UNLOCK,  [](guest_t*, const uint64_t[8]) -> uint64_t { return 0; });
+    add("libc.so", "pthread_rwlock_destroy",
+        HVC_PTHREAD_RWLOCK_DESTROY, [](guest_t*, const uint64_t[8]) -> uint64_t { return 0; });
 
     add("libc.so", "pthread_once", HVC_PTHREAD_ONCE,
         [](guest_t* g, const uint64_t a[8]) -> uint64_t {
@@ -1254,6 +2207,8 @@ void AndroidRuntime::register_libc_stubs()
         [](guest_t* g, const uint64_t a[8]) -> uint64_t {
             auto s = guest_read_string(g,a[0]); return s.empty() ? 0 : (uint64_t)std::stol(s);
         });
+    add("libc.so", "atof", HVC_ATOF,
+        [](guest_t*, const uint64_t[8]) -> uint64_t { return 0; });
     add("libc.so", "rand",  HVC_RAND,  [](guest_t*, const uint64_t[8]) -> uint64_t { return (uint64_t)::rand(); });
     add("libc.so", "srand", HVC_SRAND, [](guest_t*, const uint64_t a[8]) -> uint64_t { ::srand((unsigned)a[0]); return 0; });
 
@@ -1355,6 +2310,31 @@ void AndroidRuntime::register_libc_stubs()
     sym_tables_["libc.so"]["__sF"] = stdio_gpa;
 
     sym_tables_["libm.so"]      = sym_tables_["libc.so"];
+    // Import coverage for libm-heavy render stacks. Scalar FP arguments and
+    // return values are not carried through the current integer-only HVC shim,
+    // so these are conservative compatibility stubs.
+    auto libm_ret0 = [](guest_t*, const uint64_t[8]) -> uint64_t { return 0; };
+    for (const char* symbol : {
+            "acosf", "asinf", "atan", "atanf", "atan2f", "cosf", "exp2", "exp2f", "expf",
+            "fmod", "fmodf", "ilogbf", "log2f", "log10f", "logf", "powf", "sinf",
+            "tan", "nextafterf" }) {
+        add("libm.so", symbol, HVC_LIBM_RET0, libm_ret0);
+    }
+    add("libm.so", "sincos", HVC_LIBM_SINCOS,
+        [](guest_t* g, const uint64_t a[8]) -> uint64_t {
+            uint64_t zero = 0;
+            if (a[0]) guest_write(g, a[0], &zero, sizeof(zero));
+            if (a[1]) guest_write(g, a[1], &zero, sizeof(zero));
+            return 0;
+        });
+    add("libm.so", "sincosf", HVC_LIBM_SINCOSF,
+        [](guest_t* g, const uint64_t a[8]) -> uint64_t {
+            uint32_t zero = 0;
+            if (a[0]) guest_write_u32(g, a[0], zero);
+            if (a[1]) guest_write_u32(g, a[1], zero);
+            return 0;
+        });
+
     sym_tables_["libstdc++.so"] = sym_tables_["libc.so"];
     // libc++_shared.so and NDK wrapper libs re-export most libc symbols
     sym_tables_["libc++_shared.so"]    = sym_tables_["libc.so"];
@@ -1373,6 +2353,14 @@ void AndroidRuntime::register_liblog_stubs()
             auto msg = format_guest_log(g, fmt, a+3, 5);
             std::fprintf(stderr, "[logcat/%s] %s\n", tag.c_str(), msg.c_str());
             return (uint64_t)msg.size();
+        });
+
+    add("liblog.so", "__android_log_vprint", HVC_LOG_VPRINT,
+        [](guest_t* g, const uint64_t a[8]) -> uint64_t {
+            auto tag = guest_read_string(g, a[1]);
+            auto fmt = guest_read_string(g, a[2]);
+            std::fprintf(stderr, "[logcat/%s] %s\n", tag.c_str(), fmt.c_str());
+            return static_cast<uint64_t>(fmt.size());
         });
 
     add("liblog.so", "__android_log_write", HVC_LOG_WRITE,
@@ -1757,6 +2745,13 @@ void AndroidRuntime::register_libandroid_stubs()
         });
 
     // ANativeWindow — stable opaque handle plus a guest-visible software buffer.
+    add("libandroid.so", "ANativeWindow_fromSurface",
+        HVC_NATIVE_WINDOW_FROM_SURFACE,
+        [this](guest_t*, const uint64_t[8]) -> uint64_t {
+            native_window_.ref_count++;
+            return GUEST_NATIVE_WINDOW;
+        });
+
     add("libandroid.so", "ANativeWindow_acquire", HVC_NATIVE_WINDOW_ACQUIRE,
         [this](guest_t*, const uint64_t a[8]) -> uint64_t {
             if (a[0] == GUEST_NATIVE_WINDOW) native_window_.ref_count++;
@@ -1903,6 +2898,69 @@ void AndroidRuntime::register_libandroid_stubs()
         });
 }
 
+// ── libjnigraphics stubs ──────────────────────────────────────────────────────
+
+void AndroidRuntime::register_libjnigraphics_stubs()
+{
+    constexpr uint64_t RESULT_SUCCESS = 0;
+    constexpr uint64_t RESULT_BAD_PARAMETER =
+        static_cast<uint64_t>(static_cast<uint32_t>(-1));
+    constexpr uint64_t RESULT_ALLOCATION_FAILED =
+        static_cast<uint64_t>(static_cast<uint32_t>(-3));
+    constexpr uint32_t BITMAP_FORMAT_RGBA_8888 = 1;
+    constexpr uint32_t BITMAP_WIDTH = 1;
+    constexpr uint32_t BITMAP_HEIGHT = 1;
+    constexpr uint32_t BITMAP_STRIDE = BITMAP_WIDTH * 4;
+    constexpr size_t BITMAP_BYTES = BITMAP_STRIDE * BITMAP_HEIGHT;
+
+    auto alloc_pixels = [this](guest_t* g) -> uint64_t {
+        uint64_t ptr = (heap_bump_ + 15) & ~15ULL;
+        if (ptr + BITMAP_BYTES > heap_base_ + HEAP_SIZE)
+            return 0;
+
+        heap_bump_ = ptr + BITMAP_BYTES;
+        uint32_t pixel = 0;
+        guest_write(g, ptr, &pixel, sizeof(pixel));
+        return ptr;
+    };
+
+    add("libjnigraphics.so", "AndroidBitmap_getInfo", HVC_BITMAP_GET_INFO,
+        [](guest_t* g, const uint64_t a[8]) -> uint64_t {
+            uint64_t info = a[2];
+            if (!info)
+                return RESULT_BAD_PARAMETER;
+
+            // AndroidBitmapInfo: width, height, stride, format, flags.
+            guest_write_u32(g, info + 0x00, BITMAP_WIDTH);
+            guest_write_u32(g, info + 0x04, BITMAP_HEIGHT);
+            guest_write_u32(g, info + 0x08, BITMAP_STRIDE);
+            guest_write_u32(g, info + 0x0C, BITMAP_FORMAT_RGBA_8888);
+            guest_write_u32(g, info + 0x10, 0);
+            return RESULT_SUCCESS;
+        });
+
+    add("libjnigraphics.so", "AndroidBitmap_lockPixels",
+        HVC_BITMAP_LOCK_PIXELS,
+        [alloc_pixels](guest_t* g, const uint64_t a[8]) -> uint64_t {
+            uint64_t out_pixels = a[2];
+            if (!out_pixels)
+                return RESULT_BAD_PARAMETER;
+
+            uint64_t pixels = alloc_pixels(g);
+            if (!pixels)
+                return RESULT_ALLOCATION_FAILED;
+
+            guest_write_u64(g, out_pixels, pixels);
+            return RESULT_SUCCESS;
+        });
+
+    add("libjnigraphics.so", "AndroidBitmap_unlockPixels",
+        HVC_BITMAP_UNLOCK_PIXELS,
+        [](guest_t*, const uint64_t[8]) -> uint64_t {
+            return RESULT_SUCCESS;
+        });
+}
+
 // ── libdl stubs ───────────────────────────────────────────────────────────────
 
 void AndroidRuntime::register_libdl_stubs()
@@ -1986,6 +3044,13 @@ void AndroidRuntime::register_libdl_stubs()
         [this](guest_t*, const uint64_t a[8]) -> uint64_t { dl_handles_.erase(a[0]); return 0; });
     add("libdl.so", "dlerror", HVC_DLERROR,
         [](guest_t*, const uint64_t[8]) -> uint64_t { return 0; });
+    add("libdl.so", "dl_iterate_phdr", HVC_DL_ITERATE_PHDR,
+        [](guest_t*, const uint64_t a[8]) -> uint64_t {
+            std::fprintf(stderr,
+                "[ART] dl_iterate_phdr(callback=0x%llx) -> 0 entries\n",
+                (unsigned long long)a[0]);
+            return 0;
+        });
 
     sym_tables_["libdl_android.so"] = sym_tables_["libdl.so"];
 }
@@ -3769,6 +4834,18 @@ void AndroidRuntime::register_libegl_stubs()
             return eglSwapInterval(egl_display_, (EGLint)a[1]) ? 1 : 0;
         });
 
+    add("libEGL.so", "eglSurfaceAttrib", HVC_EGL_SURFACE_ATTRIB,
+        [this](guest_t*, const uint64_t a[8]) -> uint64_t {
+            if (egl_display_ == EGL_NO_DISPLAY)
+                return 0;
+            EGLSurface surface =
+                a[1] == GUEST_EGL_SURFACE ? egl_surface_ : (EGLSurface)(uintptr_t)a[1];
+            if (surface == EGL_NO_SURFACE)
+                return 1;
+            return eglSurfaceAttrib(egl_display_, surface,
+                                    (EGLint)a[2], (EGLint)a[3]) ? 1 : 0;
+        });
+
     // eglTerminate(display)
     add("libEGL.so", "eglTerminate", HVC_EGL_TERMINATE,
         [this](guest_t*, const uint64_t[8]) -> uint64_t {
@@ -3891,10 +4968,27 @@ void AndroidRuntime::register_libgles_stubs()
     add("libGLESv2.so", "glEnable",   HVC_GL_ENABLE,   [](guest_t*, const uint64_t a[8]) -> uint64_t { glEnable((GLenum)a[0]);  return 0; });
     add("libGLESv2.so", "glDisable",  HVC_GL_DISABLE,  [](guest_t*, const uint64_t a[8]) -> uint64_t { glDisable((GLenum)a[0]); return 0; });
     add("libGLESv2.so", "glBlendFunc",HVC_GL_BLEND_FUNC,[](guest_t*, const uint64_t a[8]) -> uint64_t { glBlendFunc((GLenum)a[0],(GLenum)a[1]); return 0; });
+    add("libGLESv2.so", "glBlendFuncSeparate", HVC_GL_BLEND_FUNC_SEPARATE,
+        [](guest_t*, const uint64_t a[8]) -> uint64_t {
+            glBlendFuncSeparate((GLenum)a[0], (GLenum)a[1],
+                                (GLenum)a[2], (GLenum)a[3]);
+            return 0;
+        });
+    add("libGLESv2.so", "glBlendEquationSeparate",
+        HVC_GL_BLEND_EQUATION_SEPARATE,
+        [](guest_t*, const uint64_t a[8]) -> uint64_t {
+            glBlendEquationSeparate((GLenum)a[0], (GLenum)a[1]);
+            return 0;
+        });
     add("libGLESv2.so", "glDepthFunc",HVC_GL_DEPTH_FUNC,[](guest_t*, const uint64_t a[8]) -> uint64_t { glDepthFunc((GLenum)a[0]); return 0; });
     add("libGLESv2.so", "glDepthMask",HVC_GL_DEPTH_MASK,[](guest_t*, const uint64_t a[8]) -> uint64_t { glDepthMask((GLboolean)a[0]); return 0; });
     add("libGLESv2.so", "glCullFace", HVC_GL_CULL_FACE, [](guest_t*, const uint64_t a[8]) -> uint64_t { glCullFace((GLenum)a[0]); return 0; });
     add("libGLESv2.so", "glFrontFace",HVC_GL_FRONT_FACE,[](guest_t*, const uint64_t a[8]) -> uint64_t { glFrontFace((GLenum)a[0]); return 0; });
+    add("libGLESv2.so", "glPolygonOffset", HVC_GL_POLYGON_OFFSET,
+        [](guest_t*, const uint64_t[8]) -> uint64_t {
+            glPolygonOffset(0.0f, 0.0f);
+            return 0;
+        });
     add("libGLESv2.so", "glScissor",  HVC_GL_SCISSOR,   [](guest_t*, const uint64_t a[8]) -> uint64_t { glScissor((GLint)a[0],(GLint)a[1],(GLsizei)a[2],(GLsizei)a[3]); return 0; });
     add("libGLESv2.so", "glColorMask",HVC_GL_COLOR_MASK, [](guest_t*, const uint64_t a[8]) -> uint64_t { glColorMask((GLboolean)a[0],(GLboolean)a[1],(GLboolean)a[2],(GLboolean)a[3]); return 0; });
     add("libGLESv2.so", "glPixelStorei",HVC_GL_PIXEL_STOREI,[](guest_t*, const uint64_t a[8]) -> uint64_t { glPixelStorei((GLenum)a[0],(GLint)a[1]); return 0; });
@@ -3917,6 +5011,11 @@ void AndroidRuntime::register_libgles_stubs()
         [](guest_t*, const uint64_t a[8]) -> uint64_t { glBindTexture((GLenum)a[0],(GLuint)a[1]); return 0; });
     add("libGLESv2.so", "glTexParameteri", HVC_GL_TEX_PARAMETERI,
         [](guest_t*, const uint64_t a[8]) -> uint64_t { glTexParameteri((GLenum)a[0],(GLenum)a[1],(GLint)a[2]); return 0; });
+    add("libGLESv2.so", "glGenerateMipmap", HVC_GL_GENERATE_MIPMAP,
+        [](guest_t*, const uint64_t a[8]) -> uint64_t {
+            glGenerateMipmap((GLenum)a[0]);
+            return 0;
+        });
     add("libGLESv2.so", "glDeleteTextures",HVC_GL_DELETE_TEXTURES,
         [](guest_t* g, const uint64_t a[8]) -> uint64_t {
             std::vector<GLuint> ids(a[0]);
@@ -3937,6 +5036,42 @@ void AndroidRuntime::register_libgles_stubs()
             (void)g;
             return 0;
         });
+    add("libGLESv2.so", "glTexSubImage2D", HVC_GL_TEX_SUB_IMAGE_2D,
+        [](guest_t*, const uint64_t[8]) -> uint64_t {
+            // Nine ABI arguments; trailing pixels pointer is not preserved.
+            return 0;
+        });
+
+    add("libGLESv2.so", "glTexStorage2D", HVC_GL_TEX_STORAGE_2D,
+        [](guest_t*, const uint64_t a[8]) -> uint64_t {
+            glTexStorage2D((GLenum)a[0], (GLsizei)a[1], (GLenum)a[2],
+                           (GLsizei)a[3], (GLsizei)a[4]);
+            return 0;
+        });
+    add("libGLESv2.so", "glTexStorage3D", HVC_GL_TEX_STORAGE_3D,
+        [](guest_t*, const uint64_t a[8]) -> uint64_t {
+            glTexStorage3D((GLenum)a[0], (GLsizei)a[1], (GLenum)a[2],
+                           (GLsizei)a[3], (GLsizei)a[4], (GLsizei)a[5]);
+            return 0;
+        });
+    add("libGLESv2.so", "glCompressedTexSubImage3D",
+        HVC_GL_COMPRESSED_TEX_SUB_IMAGE_3D,
+        [](guest_t*, const uint64_t[8]) -> uint64_t {
+            // This has more than eight ABI arguments; the current HVC shim
+            // does not preserve the trailing image pointer, so keep it a no-op.
+            return 0;
+        });
+    add("libGLESv2.so", "glCompressedTexSubImage2D",
+        HVC_GL_COMPRESSED_TEX_SUB_IMAGE_2D,
+        [](guest_t*, const uint64_t[8]) -> uint64_t {
+            // Nine ABI arguments; trailing image pointer is not preserved.
+            return 0;
+        });
+    add("libGLESv2.so", "glTexSubImage3D", HVC_GL_TEX_SUB_IMAGE_3D,
+        [](guest_t*, const uint64_t[8]) -> uint64_t {
+            // This also has more than eight ABI arguments; see compressed path.
+            return 0;
+        });
 
     // Buffers
     add("libGLESv2.so", "glGenBuffers", HVC_GL_GEN_BUFFERS,
@@ -3950,6 +5085,12 @@ void AndroidRuntime::register_libgles_stubs()
 
     add("libGLESv2.so", "glBindBuffer", HVC_GL_BIND_BUFFER,
         [](guest_t*, const uint64_t a[8]) -> uint64_t { glBindBuffer((GLenum)a[0],(GLuint)a[1]); return 0; });
+    add("libGLESv2.so", "glBindBufferRange", HVC_GL_BIND_BUFFER_RANGE,
+        [](guest_t*, const uint64_t a[8]) -> uint64_t {
+            glBindBufferRange((GLenum)a[0], (GLuint)a[1], (GLuint)a[2],
+                              (GLintptr)a[3], (GLsizeiptr)a[4]);
+            return 0;
+        });
     add("libGLESv2.so", "glDeleteBuffers", HVC_GL_DELETE_BUFFERS,
         [](guest_t* g, const uint64_t a[8]) -> uint64_t {
             std::vector<GLuint> ids(a[0]);
@@ -3972,6 +5113,37 @@ void AndroidRuntime::register_libgles_stubs()
             return 0;
         });
 
+    add("libGLESv2.so", "glBufferSubData", HVC_GL_BUFFER_SUB_DATA,
+        [](guest_t* g, const uint64_t a[8]) -> uint64_t {
+            // a[0]=target a[1]=offset a[2]=size a[3]=data_gpa
+            std::vector<uint8_t> buf;
+            if (a[3] && a[2]) {
+                buf.resize(static_cast<size_t>(a[2]));
+                guest_read(g, a[3], buf.data(), a[2]);
+            }
+            glBufferSubData((GLenum)a[0], (GLintptr)a[1], (GLsizeiptr)a[2],
+                            buf.empty() ? nullptr : buf.data());
+            return 0;
+        });
+
+    add("libGLESv2.so", "glMapBufferRange", HVC_GL_MAP_BUFFER_RANGE,
+        [this](guest_t* g, const uint64_t a[8]) -> uint64_t {
+            (void)a;
+            uint64_t len = std::min<uint64_t>(a[2], 1024 * 1024);
+            if (!len)
+                return 0;
+            uint64_t ptr = (heap_bump_ + 15) & ~15ULL;
+            uint64_t sz = (len + 15) & ~15ULL;
+            if (ptr + sz > heap_base_ + HEAP_SIZE)
+                return 0;
+            heap_bump_ = ptr + sz;
+            std::vector<uint8_t> zero(static_cast<size_t>(sz), 0);
+            guest_write(g, ptr, zero.data(), sz);
+            return ptr;
+        });
+    add("libGLESv2.so", "glUnmapBuffer", HVC_GL_UNMAP_BUFFER,
+        [](guest_t*, const uint64_t[8]) -> uint64_t { return GL_TRUE; });
+
     // Shaders & programs
     add("libGLESv2.so", "glCreateShader",  HVC_GL_CREATE_SHADER,
         [](guest_t*, const uint64_t a[8]) -> uint64_t { return (uint64_t)glCreateShader((GLenum)a[0]); });
@@ -3983,6 +5155,11 @@ void AndroidRuntime::register_libgles_stubs()
         [](guest_t*, const uint64_t a[8]) -> uint64_t { glDeleteProgram((GLuint)a[0]); return 0; });
     add("libGLESv2.so", "glAttachShader",  HVC_GL_ATTACH_SHADER,
         [](guest_t*, const uint64_t a[8]) -> uint64_t { glAttachShader((GLuint)a[0],(GLuint)a[1]); return 0; });
+    add("libGLESv2.so", "glDetachShader", HVC_GL_DETACH_SHADER,
+        [](guest_t*, const uint64_t a[8]) -> uint64_t {
+            glDetachShader((GLuint)a[0], (GLuint)a[1]);
+            return 0;
+        });
     add("libGLESv2.so", "glLinkProgram",   HVC_GL_LINK_PROGRAM,
         [](guest_t*, const uint64_t a[8]) -> uint64_t { glLinkProgram((GLuint)a[0]); return 0; });
     add("libGLESv2.so", "glUseProgram",    HVC_GL_USE_PROGRAM,
@@ -4053,12 +5230,62 @@ void AndroidRuntime::register_libgles_stubs()
         });
     add("libGLESv2.so", "glEnableVertexAttribArray", HVC_GL_ENABLE_VERT_ATTRIB,
         [](guest_t*, const uint64_t a[8]) -> uint64_t { glEnableVertexAttribArray((GLuint)a[0]); return 0; });
+    add("libGLESv2.so", "glDisableVertexAttribArray", HVC_GL_DISABLE_VERT_ATTRIB,
+        [](guest_t*, const uint64_t a[8]) -> uint64_t {
+            glDisableVertexAttribArray((GLuint)a[0]);
+            return 0;
+        });
+
+    add("libGLESv2.so", "glGenVertexArrays", HVC_GL_GEN_VERTEX_ARRAYS,
+        [](guest_t* g, const uint64_t a[8]) -> uint64_t {
+            GLsizei count = static_cast<GLsizei>(std::min<uint64_t>(a[0], 4096));
+            std::vector<GLuint> ids(static_cast<size_t>(count));
+            glGenVertexArrays(count, ids.data());
+            for (GLsizei i = 0; i < count; ++i)
+                guest_write_u32(g, a[1] + i * 4, ids[static_cast<size_t>(i)]);
+            return 0;
+        });
+    add("libGLESv2.so", "glBindVertexArray", HVC_GL_BIND_VERTEX_ARRAY,
+        [](guest_t*, const uint64_t a[8]) -> uint64_t {
+            glBindVertexArray((GLuint)a[0]);
+            return 0;
+        });
+    add("libGLESv2.so", "glDeleteVertexArrays", HVC_GL_DELETE_VERTEX_ARRAYS,
+        [](guest_t* g, const uint64_t a[8]) -> uint64_t {
+            GLsizei count = static_cast<GLsizei>(std::min<uint64_t>(a[0], 4096));
+            std::vector<GLuint> ids(static_cast<size_t>(count));
+            for (GLsizei i = 0; i < count; ++i)
+                ids[static_cast<size_t>(i)] = guest_read_u32(g, a[1] + i * 4);
+            glDeleteVertexArrays(count, ids.data());
+            return 0;
+        });
 
     add("libGLESv2.so", "glVertexAttribPointer", HVC_GL_VERT_ATTRIB_PTR,
         [](guest_t*, const uint64_t a[8]) -> uint64_t {
             glVertexAttribPointer((GLuint)a[0],(GLint)a[1],(GLenum)a[2],
                                   (GLboolean)a[3],(GLsizei)a[4],
                                   reinterpret_cast<const void*>((uintptr_t)a[5]));
+            return 0;
+        });
+    add("libGLESv2.so", "glVertexAttribIPointer", HVC_GL_VERTEX_ATTRIB_IPOINTER,
+        [](guest_t*, const uint64_t a[8]) -> uint64_t {
+            glVertexAttribIPointer((GLuint)a[0], (GLint)a[1], (GLenum)a[2],
+                                   (GLsizei)a[3],
+                                   reinterpret_cast<const void*>((uintptr_t)a[4]));
+            return 0;
+        });
+    add("libGLESv2.so", "glVertexAttrib4f", HVC_GL_VERTEX_ATTRIB4F,
+        [](guest_t*, const uint64_t a[8]) -> uint64_t {
+            float x = 0, y = 0, z = 0, w = 0;
+            memcpy(&x, &a[1], 4); memcpy(&y, &a[2], 4);
+            memcpy(&z, &a[3], 4); memcpy(&w, &a[4], 4);
+            glVertexAttrib4f((GLuint)a[0], x, y, z, w);
+            return 0;
+        });
+    add("libGLESv2.so", "glVertexAttribI4ui", HVC_GL_VERTEX_ATTRIB_I4UI,
+        [](guest_t*, const uint64_t a[8]) -> uint64_t {
+            glVertexAttribI4ui((GLuint)a[0], (GLuint)a[1], (GLuint)a[2],
+                               (GLuint)a[3], (GLuint)a[4]);
             return 0;
         });
 
@@ -4071,6 +5298,18 @@ void AndroidRuntime::register_libgles_stubs()
         [](guest_t*, const uint64_t a[8]) -> uint64_t {
             glDrawElements((GLenum)a[0],(GLsizei)a[1],(GLenum)a[2],
                            reinterpret_cast<const void*>((uintptr_t)a[3]));
+            return 0;
+        });
+    add("libGLESv2.so", "glDrawRangeElements", HVC_GL_DRAW_RANGE_ELEMENTS,
+        [](guest_t*, const uint64_t a[8]) -> uint64_t {
+            glDrawRangeElements((GLenum)a[0], (GLuint)a[1], (GLuint)a[2],
+                                (GLsizei)a[3], (GLenum)a[4],
+                                reinterpret_cast<const void*>((uintptr_t)a[5]));
+            return 0;
+        });
+    add("libGLESv2.so", "glBlitFramebuffer", HVC_GL_BLIT_FRAMEBUFFER,
+        [](guest_t*, const uint64_t[8]) -> uint64_t {
+            // This has ten scalar arguments; keep it a no-op under the current shim.
             return 0;
         });
 
@@ -4087,6 +5326,50 @@ void AndroidRuntime::register_libgles_stubs()
             memcpy(&x,&a[1],4); memcpy(&y,&a[2],4);
             memcpy(&z,&a[3],4); memcpy(&w,&a[4],4);
             glUniform4f((GLint)a[0],x,y,z,w); return 0;
+        });
+    add("libGLESv2.so", "glUniformBlockBinding", HVC_GL_UNIFORM_BLOCK_BINDING,
+        [](guest_t*, const uint64_t a[8]) -> uint64_t {
+            glUniformBlockBinding((GLuint)a[0], (GLuint)a[1], (GLuint)a[2]);
+            return 0;
+        });
+    add("libGLESv2.so", "glGetUniformBlockIndex", HVC_GL_GET_UNIFORM_BLOCK_INDEX,
+        [](guest_t* g, const uint64_t a[8]) -> uint64_t {
+            auto name = guest_read_string(g, a[1]);
+            GLuint idx = glGetUniformBlockIndex((GLuint)a[0], name.c_str());
+            return idx == GL_INVALID_INDEX ? static_cast<uint64_t>(GL_INVALID_INDEX) : idx;
+        });
+    add("libGLESv2.so", "glSamplerParameterf", HVC_GL_SAMPLER_PARAMETERF,
+        [](guest_t*, const uint64_t a[8]) -> uint64_t {
+            glSamplerParameterf((GLuint)a[0], (GLenum)a[1], 0.0f);
+            return 0;
+        });
+    add("libGLESv2.so", "glSamplerParameteri", HVC_GL_SAMPLER_PARAMETERI,
+        [](guest_t*, const uint64_t a[8]) -> uint64_t {
+            glSamplerParameteri((GLuint)a[0], (GLenum)a[1], (GLint)a[2]);
+            return 0;
+        });
+    add("libGLESv2.so", "glBindSampler", HVC_GL_BIND_SAMPLER,
+        [](guest_t*, const uint64_t a[8]) -> uint64_t {
+            glBindSampler((GLuint)a[0], (GLuint)a[1]);
+            return 0;
+        });
+    add("libGLESv2.so", "glGenSamplers", HVC_GL_GEN_SAMPLERS,
+        [](guest_t* g, const uint64_t a[8]) -> uint64_t {
+            GLsizei count = static_cast<GLsizei>(std::min<uint64_t>(a[0], 4096));
+            std::vector<GLuint> ids(static_cast<size_t>(count));
+            glGenSamplers(count, ids.data());
+            for (GLsizei i = 0; i < count; ++i)
+                guest_write_u32(g, a[1] + i * 4, ids[static_cast<size_t>(i)]);
+            return 0;
+        });
+    add("libGLESv2.so", "glDeleteSamplers", HVC_GL_DELETE_SAMPLERS,
+        [](guest_t* g, const uint64_t a[8]) -> uint64_t {
+            GLsizei count = static_cast<GLsizei>(std::min<uint64_t>(a[0], 4096));
+            std::vector<GLuint> ids(static_cast<size_t>(count));
+            for (GLsizei i = 0; i < count; ++i)
+                ids[static_cast<size_t>(i)] = guest_read_u32(g, a[1] + i * 4);
+            glDeleteSamplers(count, ids.data());
+            return 0;
         });
     add("libGLESv2.so", "glUniformMatrix4fv", HVC_GL_UNIFORM_MATRIX4FV,
         [](guest_t* g, const uint64_t a[8]) -> uint64_t {
@@ -4105,10 +5388,148 @@ void AndroidRuntime::register_libgles_stubs()
             if (a[1]) guest_write_u32(g,a[1],(uint32_t)v);
             return 0;
         });
+    add("libGLESv2.so", "glGetFloatv", HVC_GL_GET_FLOATV,
+        [](guest_t* g, const uint64_t a[8]) -> uint64_t {
+            GLfloat v = 0.0f;
+            if (a[1])
+                guest_write(g, a[1], &v, sizeof(v));
+            return 0;
+        });
     add("libGLESv2.so", "glGetString", HVC_GL_GET_STRING,
         [](guest_t*, const uint64_t a[8]) -> uint64_t {
             const GLubyte* s = glGetString((GLenum)a[0]);
             return s ? (uint64_t)(uintptr_t)s : 0;
+        });
+    add("libGLESv2.so", "glIsEnabled", HVC_GL_IS_ENABLED,
+        [](guest_t*, const uint64_t a[8]) -> uint64_t {
+            return glIsEnabled((GLenum)a[0]) ? GL_TRUE : GL_FALSE;
+        });
+    add("libGLESv2.so", "glGetStringi", HVC_GL_GET_STRINGI,
+        [this](guest_t* g, const uint64_t a[8]) -> uint64_t {
+            const GLubyte* raw = glGetStringi((GLenum)a[0], (GLuint)a[1]);
+            if (!raw)
+                return 0;
+            std::string text = reinterpret_cast<const char*>(raw);
+            uint64_t sz = (text.size() + 1 + 15) & ~15ULL;
+            if (heap_bump_ + sz > heap_base_ + HEAP_SIZE)
+                return 0;
+            uint64_t ptr = heap_bump_;
+            heap_bump_ += sz;
+            guest_write(g, ptr, text.c_str(), text.size() + 1);
+            return ptr;
+        });
+    add("libGLESv2.so", "glGetVertexAttribiv", HVC_GL_GET_VERTEX_ATTRIB_IV,
+        [](guest_t* g, const uint64_t a[8]) -> uint64_t {
+            GLint value = 0;
+            glGetVertexAttribiv((GLuint)a[0], (GLenum)a[1], &value);
+            if (a[2])
+                guest_write_u32(g, a[2], static_cast<uint32_t>(value));
+            return 0;
+        });
+    add("libGLESv2.so", "glClientWaitSync", HVC_GL_CLIENT_WAIT_SYNC,
+        [](guest_t*, const uint64_t[8]) -> uint64_t {
+            return GL_ALREADY_SIGNALED;
+        });
+    add("libGLESv2.so", "glFenceSync", HVC_GL_FENCE_SYNC,
+        [](guest_t*, const uint64_t[8]) -> uint64_t {
+            return 1;
+        });
+    add("libGLESv2.so", "glDeleteSync", HVC_GL_DELETE_SYNC,
+        [](guest_t*, const uint64_t[8]) -> uint64_t { return 0; });
+    add("libGLESv2.so", "glWaitSync", HVC_GL_WAIT_SYNC,
+        [](guest_t*, const uint64_t[8]) -> uint64_t { return 0; });
+    add("libGLESv2.so", "glDrawBuffers", HVC_GL_DRAW_BUFFERS,
+        [](guest_t* g, const uint64_t a[8]) -> uint64_t {
+            GLsizei count = static_cast<GLsizei>(std::min<uint64_t>(a[0], 64));
+            std::vector<GLenum> bufs(static_cast<size_t>(count));
+            for (GLsizei i = 0; i < count; ++i)
+                bufs[static_cast<size_t>(i)] =
+                    static_cast<GLenum>(guest_read_u32(g, a[1] + i * 4));
+            glDrawBuffers(count, bufs.data());
+            return 0;
+        });
+    add("libGLESv2.so", "glReadPixels", HVC_GL_READ_PIXELS,
+        [](guest_t* g, const uint64_t a[8]) -> uint64_t {
+            if (!a[6])
+                return 0;
+            uint64_t width = a[2];
+            uint64_t height = a[3];
+            uint64_t bytes = std::min<uint64_t>(width * height * 4, 1024 * 1024);
+            std::vector<uint8_t> zero(static_cast<size_t>(bytes), 0);
+            if (bytes)
+                guest_write(g, a[6], zero.data(), bytes);
+            return 0;
+        });
+    add("libGLESv2.so", "glClearBufferfv", HVC_GL_CLEAR_BUFFER_FV,
+        [](guest_t* g, const uint64_t a[8]) -> uint64_t {
+            GLfloat value[4] = {0, 0, 0, 0};
+            if (a[2])
+                guest_read(g, a[2], value, sizeof(value));
+            glClearBufferfv((GLenum)a[0], (GLint)a[1], value);
+            return 0;
+        });
+    add("libGLESv2.so", "glClearBufferfi", HVC_GL_CLEAR_BUFFER_FI,
+        [](guest_t*, const uint64_t a[8]) -> uint64_t {
+            glClearBufferfi((GLenum)a[0], (GLint)a[1], 0.0f, (GLint)a[2]);
+            return 0;
+        });
+    add("libGLESv2.so", "glClearBufferiv", HVC_GL_CLEAR_BUFFER_IV,
+        [](guest_t* g, const uint64_t a[8]) -> uint64_t {
+            GLint value[4] = {0, 0, 0, 0};
+            if (a[2])
+                guest_read(g, a[2], value, sizeof(value));
+            glClearBufferiv((GLenum)a[0], (GLint)a[1], value);
+            return 0;
+        });
+    add("libGLESv2.so", "glGenQueries", HVC_GL_GEN_QUERIES,
+        [](guest_t* g, const uint64_t a[8]) -> uint64_t {
+            GLsizei count = static_cast<GLsizei>(std::min<uint64_t>(a[0], 4096));
+            std::vector<GLuint> ids(static_cast<size_t>(count));
+            glGenQueries(count, ids.data());
+            for (GLsizei i = 0; i < count; ++i)
+                guest_write_u32(g, a[1] + i * 4, ids[static_cast<size_t>(i)]);
+            return 0;
+        });
+    add("libGLESv2.so", "glBeginQuery", HVC_GL_BEGIN_QUERY,
+        [](guest_t*, const uint64_t a[8]) -> uint64_t {
+            glBeginQuery((GLenum)a[0], (GLuint)a[1]);
+            return 0;
+        });
+    add("libGLESv2.so", "glDeleteQueries", HVC_GL_DELETE_QUERIES,
+        [](guest_t* g, const uint64_t a[8]) -> uint64_t {
+            GLsizei count = static_cast<GLsizei>(std::min<uint64_t>(a[0], 4096));
+            std::vector<GLuint> ids(static_cast<size_t>(count));
+            for (GLsizei i = 0; i < count; ++i)
+                ids[static_cast<size_t>(i)] = guest_read_u32(g, a[1] + i * 4);
+            glDeleteQueries(count, ids.data());
+            return 0;
+        });
+    add("libGLESv2.so", "glGetQueryObjectuiv", HVC_GL_GET_QUERY_OBJECT_UIV,
+        [](guest_t* g, const uint64_t a[8]) -> uint64_t {
+            if (a[2])
+                guest_write_u32(g, a[2], 0);
+            return 0;
+        });
+    add("libGLESv2.so", "glHint", HVC_GL_HINT,
+        [](guest_t*, const uint64_t a[8]) -> uint64_t {
+            glHint((GLenum)a[0], (GLenum)a[1]);
+            return 0;
+        });
+    add("libGLESv2.so", "glInvalidateFramebuffer",
+        HVC_GL_INVALIDATE_FRAMEBUFFER,
+        [](guest_t* g, const uint64_t a[8]) -> uint64_t {
+            GLsizei count = static_cast<GLsizei>(std::min<uint64_t>(a[1], 64));
+            std::vector<GLenum> attachments(static_cast<size_t>(count));
+            for (GLsizei i = 0; i < count; ++i)
+                attachments[static_cast<size_t>(i)] =
+                    static_cast<GLenum>(guest_read_u32(g, a[2] + i * 4));
+            glInvalidateFramebuffer((GLenum)a[0], count, attachments.data());
+            return 0;
+        });
+    add("libGLESv2.so", "glEndQuery", HVC_GL_END_QUERY,
+        [](guest_t*, const uint64_t a[8]) -> uint64_t {
+            glEndQuery((GLenum)a[0]);
+            return 0;
         });
 
     // Framebuffers & renderbuffers
@@ -4118,11 +5539,27 @@ void AndroidRuntime::register_libgles_stubs()
             for (GLsizei i=0;i<(GLsizei)a[0];++i) guest_write_u32(g,a[1]+i*4,ids[i]);
             return 0;
         });
+    add("libGLESv2.so", "glDeleteFramebuffers", HVC_GL_DELETE_FRAMEBUFFERS2,
+        [](guest_t* g, const uint64_t a[8]) -> uint64_t {
+            GLsizei count = static_cast<GLsizei>(std::min<uint64_t>(a[0], 4096));
+            std::vector<GLuint> ids(static_cast<size_t>(count));
+            for (GLsizei i = 0; i < count; ++i)
+                ids[static_cast<size_t>(i)] = guest_read_u32(g, a[1] + i * 4);
+            glDeleteFramebuffers(count, ids.data());
+            return 0;
+        });
     add("libGLESv2.so", "glBindFramebuffer",  HVC_GL_BIND_FRAMEBUFFER,
         [](guest_t*, const uint64_t a[8]) -> uint64_t { glBindFramebuffer((GLenum)a[0],(GLuint)a[1]); return 0; });
     add("libGLESv2.so", "glFramebufferTexture2D", HVC_GL_FRAMEBUFFER_TEXTURE2D,
         [](guest_t*, const uint64_t a[8]) -> uint64_t {
             glFramebufferTexture2D((GLenum)a[0],(GLenum)a[1],(GLenum)a[2],(GLuint)a[3],(GLint)a[4]);
+            return 0;
+        });
+    add("libGLESv2.so", "glFramebufferTextureLayer",
+        HVC_GL_FRAMEBUFFER_TEXTURE_LAYER,
+        [](guest_t*, const uint64_t a[8]) -> uint64_t {
+            glFramebufferTextureLayer((GLenum)a[0], (GLenum)a[1],
+                                      (GLuint)a[2], (GLint)a[3], (GLint)a[4]);
             return 0;
         });
     add("libGLESv2.so", "glGenRenderbuffers",  HVC_GL_GEN_RENDERBUFFERS,
@@ -4131,11 +5568,29 @@ void AndroidRuntime::register_libgles_stubs()
             for (GLsizei i=0;i<(GLsizei)a[0];++i) guest_write_u32(g,a[1]+i*4,ids[i]);
             return 0;
         });
+    add("libGLESv2.so", "glDeleteRenderbuffers",
+        HVC_GL_DELETE_RENDERBUFFERS2,
+        [](guest_t* g, const uint64_t a[8]) -> uint64_t {
+            GLsizei count = static_cast<GLsizei>(std::min<uint64_t>(a[0], 4096));
+            std::vector<GLuint> ids(static_cast<size_t>(count));
+            for (GLsizei i = 0; i < count; ++i)
+                ids[static_cast<size_t>(i)] = guest_read_u32(g, a[1] + i * 4);
+            glDeleteRenderbuffers(count, ids.data());
+            return 0;
+        });
     add("libGLESv2.so", "glBindRenderbuffer",  HVC_GL_BIND_RENDERBUFFER,
         [](guest_t*, const uint64_t a[8]) -> uint64_t { glBindRenderbuffer((GLenum)a[0],(GLuint)a[1]); return 0; });
     add("libGLESv2.so", "glRenderbufferStorage", HVC_GL_RENDERBUFFER_STORAGE,
         [](guest_t*, const uint64_t a[8]) -> uint64_t {
             glRenderbufferStorage((GLenum)a[0],(GLenum)a[1],(GLsizei)a[2],(GLsizei)a[3]);
+            return 0;
+        });
+    add("libGLESv2.so", "glRenderbufferStorageMultisample",
+        HVC_GL_RENDERBUFFER_STORAGE_MS,
+        [](guest_t*, const uint64_t a[8]) -> uint64_t {
+            glRenderbufferStorageMultisample((GLenum)a[0], (GLsizei)a[1],
+                                             (GLenum)a[2], (GLsizei)a[3],
+                                             (GLsizei)a[4]);
             return 0;
         });
     add("libGLESv2.so", "glFramebufferRenderbuffer", HVC_GL_FRAMEBUFFER_RENDERBUF,

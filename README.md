@@ -72,12 +72,34 @@ export ANDROID_NDK_HOME=/opt/homebrew/share/android-ndk
 ## 🏗 Android Progress
 ![Muplar Android Roadmap](./muplar_roadmap_to_android_app.svg)
 
-Detailed slices:
+Visual summaries:
 
-- [NativeActivity runtime roadmap](./docs/roadmap/android_phase5_runtime.svg)
-- [Binder and AIDL roadmap](./docs/roadmap/android_phase5_binder_aidl.svg)
-- [APK native dependency roadmap](./docs/roadmap/android_phase5_apk_dependency.svg)
+- [Android runtime summary](./docs/roadmap/android_phase5_runtime.svg)
+- [Binder and AIDL summary](./docs/roadmap/android_phase5_binder_aidl.svg)
+- [APK dependency summary](./docs/roadmap/android_phase5_apk_dependency.svg)
+
+Stable checklists:
+
+- [Runtime](./docs/roadmap/android/runtime.md)
+- [Binder and AIDL](./docs/roadmap/android/binder-aidl.md)
+- [APK dependencies](./docs/roadmap/android/apk-dependencies.md)
+- [Compatibility scanning](./docs/roadmap/android/compatibility-scanning.md)
+- [Java and ART surface](./docs/roadmap/android/java-art-surface.md)
 
 APK compatibility checks can use `mup --strict-direct-imports --sysroot build/sysroot app.apk`
 to fail before launch when a direct native import is still unsupported.  Omit the flag for
 exploratory runs that install trap stubs and report only if the guest actually calls one.
+
+For batch APK triage, use:
+
+```bash
+tools/run-apk-compat-scan.sh path/to/app.apk
+```
+
+The scan runs strict native import checks, writes logs under `build/apk-compat-scan/`,
+summarizes missing APK-local libraries plus unresolved direct imports, and writes a
+Markdown backlog report to `build/apk-compat-scan/report.md`.  Use `--report PATH`
+to choose another report path.
+
+The NDK AIDL fixture is expected to pass this strict scan; it covers the current
+libc++/stdio/pthread diagnostic stub surface used by generated NDK code.

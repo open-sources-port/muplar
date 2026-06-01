@@ -59,6 +59,11 @@ namespace muplar::runtime::elf {
         // Optional phase-5 NativeActivity bootstrap entry.
         bool native_activity = false;
 
+        // Force Android/JNI .so launch semantics for APK-selected native libs.
+        // Some Android shared objects have a non-zero ELF entry but are still
+        // loaded by ART as libraries, not executed as PIE binaries.
+        bool force_android_so = false;
+
         // Optional host-visible window for NativeActivity / GLES smoke runs.
         bool host_window = false;
 

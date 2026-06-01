@@ -14,6 +14,21 @@ namespace muplar::runtime::jni {
 // ── JNINativeMethod layout in AArch64 guest memory ──────────────────────────
 // sizeof(GuestJNINativeMethod) = 24 (3 × 8-byte pointers, no padding)
 static constexpr uint64_t JNI_STUB_SIZE = 12;
+static constexpr uint32_t JNI_GetByteArrayElements = 0x100B;
+static constexpr uint32_t JNI_ReleaseByteArrayElements = 0x100C;
+static constexpr uint32_t JNI_GetIntArrayElements = 0x1026;
+static constexpr uint32_t JNI_GetLongArrayElements = 0x1027;
+static constexpr uint32_t JNI_GetFloatArrayElements = 0x1028;
+static constexpr uint32_t JNI_ReleaseIntArrayElements = 0x1029;
+static constexpr uint32_t JNI_ReleaseLongArrayElements = 0x102A;
+static constexpr uint32_t JNI_ReleaseFloatArrayElements = 0x102B;
+static constexpr uint32_t JNI_GetIntArrayRegion = 0x102C;
+static constexpr uint32_t JNI_GetLongArrayRegion = 0x102D;
+static constexpr uint32_t JNI_GetFloatArrayRegion = 0x102E;
+static constexpr uint32_t JNI_SetIntArrayRegion = 0x102F;
+static constexpr uint32_t JNI_SetLongArrayRegion = 0x1030;
+static constexpr uint32_t JNI_SetFloatArrayRegion = 0x1031;
+static constexpr uint32_t JNI_ABORT = 2;
 
 static void encode_hvc_stub(uint8_t* out, uint32_t call_nr)
 {
@@ -34,6 +49,7 @@ JniBridge::JniBridge(guest_t* guest,
     , table_gpa_(jni_table_gpa)
     , stub_base_gpa_(jni_stub_base_gpa)
     , string_chars_base_gpa_(jni_stub_base_gpa + 0x800)
+    , array_elements_base_gpa_(jni_stub_base_gpa + 0x00D000)
 {}
 
 // ────────────────────────────────────────────────────────────────────────────
@@ -123,6 +139,67 @@ uint64_t JniBridge::materialize_string_chars(uint64_t string_handle)
     return gpa;
 }
 
+static uint64_t write_scratch_bytes(guest_t* guest,
+                                    uint64_t base_gpa,
+                                    uint64_t* bump,
+                                    const void* data,
+                                    size_t size)
+{
+    constexpr uint64_t kArrayScratchSize = 0x10000;
+    uint64_t bytes = static_cast<uint64_t>(std::max<size_t>(size, 1));
+    bytes = (bytes + 15) & ~15ULL;
+    if (bytes > kArrayScratchSize)
+        return 0;
+    if (*bump + bytes > kArrayScratchSize)
+        *bump = 0;
+
+    uint64_t gpa = base_gpa + *bump;
+    if (size > 0)
+        guest_write(guest, gpa, data, size);
+    *bump += bytes;
+    return gpa;
+}
+
+uint64_t JniBridge::materialize_byte_array(uint64_t array_handle)
+{
+    const auto* value = env_->get_byte_array(array_handle);
+    if (!value)
+        return 0;
+    return write_scratch_bytes(guest_, array_elements_base_gpa_,
+                               &array_elements_bump_,
+                               value->data(), value->size());
+}
+
+uint64_t JniBridge::materialize_int_array(uint64_t array_handle)
+{
+    const auto* value = env_->get_int_array(array_handle);
+    if (!value)
+        return 0;
+    return write_scratch_bytes(guest_, array_elements_base_gpa_,
+                               &array_elements_bump_,
+                               value->data(), value->size() * sizeof(int32_t));
+}
+
+uint64_t JniBridge::materialize_long_array(uint64_t array_handle)
+{
+    const auto* value = env_->get_long_array(array_handle);
+    if (!value)
+        return 0;
+    return write_scratch_bytes(guest_, array_elements_base_gpa_,
+                               &array_elements_bump_,
+                               value->data(), value->size() * sizeof(int64_t));
+}
+
+uint64_t JniBridge::materialize_float_array(uint64_t array_handle)
+{
+    const auto* value = env_->get_float_array(array_handle);
+    if (!value)
+        return 0;
+    return write_scratch_bytes(guest_, array_elements_base_gpa_,
+                               &array_elements_bump_,
+                               value->data(), value->size() * sizeof(float));
+}
+
 // ────────────────────────────────────────────────────────────────────────────
 // register_natives_from_guest — walk a guest JNINativeMethod[] array.
 //
@@ -176,6 +253,10 @@ uint64_t JniBridge::handle_hvc(uint32_t call_nr, uint64_t regs[8])
         intern_char_arg(regs[2]);
         intern_char_arg(regs[3]);
         break;
+    case 0x1012: // GetFieldID(env, class, name*, sig*)
+        intern_char_arg(regs[2]);
+        intern_char_arg(regs[3]);
+        break;
     case 0x1006: // NewStringUTF(env, utf*)
         intern_char_arg(regs[1]);
         break;
@@ -192,6 +273,24 @@ uint64_t JniBridge::handle_hvc(uint32_t call_nr, uint64_t regs[8])
             guest_write(guest_, regs[2], &is_copy, sizeof(is_copy));
         }
         ret = materialize_string_chars(ret);
+    }
+
+    if (call_nr == JNI_GetByteArrayElements ||
+        call_nr == JNI_GetIntArrayElements ||
+        call_nr == JNI_GetLongArrayElements ||
+        call_nr == JNI_GetFloatArrayElements) {
+        if (regs[2]) {
+            uint8_t is_copy = 1;
+            guest_write(guest_, regs[2], &is_copy, sizeof(is_copy));
+        }
+        if (call_nr == JNI_GetByteArrayElements)
+            ret = materialize_byte_array(ret);
+        else if (call_nr == JNI_GetIntArrayElements)
+            ret = materialize_int_array(ret);
+        else if (call_nr == JNI_GetLongArrayElements)
+            ret = materialize_long_array(ret);
+        else
+            ret = materialize_float_array(ret);
     }
 
     // ── Post-dispatch: RegisterNatives needs guest memory walk ────────────
@@ -216,6 +315,107 @@ uint64_t JniBridge::handle_hvc(uint32_t call_nr, uint64_t regs[8])
                                              static_cast<size_t>(start),
                                              tmp.data(),
                                              static_cast<size_t>(len));
+        }
+    }
+
+    if (call_nr == JNI_ReleaseByteArrayElements && regs[2] &&
+        regs[3] != JNI_ABORT) {
+        uint64_t handle = regs[1];
+        const auto* current = env_->get_byte_array(handle);
+        if (current) {
+            std::vector<uint8_t> tmp(current->size());
+            if (!tmp.empty() &&
+                guest_read(guest_, regs[2], tmp.data(), tmp.size()) == 0) {
+                env_->set_byte_array_region(handle, 0, tmp.data(), tmp.size());
+            }
+        }
+    }
+
+    if (call_nr == JNI_ReleaseIntArrayElements && regs[2] &&
+        regs[3] != JNI_ABORT) {
+        uint64_t handle = regs[1];
+        const auto* current = env_->get_int_array(handle);
+        if (current) {
+            std::vector<int32_t> tmp(current->size());
+            size_t bytes = tmp.size() * sizeof(int32_t);
+            if (bytes && guest_read(guest_, regs[2], tmp.data(), bytes) == 0)
+                env_->set_int_array_region(handle, 0, tmp.data(), tmp.size());
+        }
+    }
+
+    if (call_nr == JNI_ReleaseLongArrayElements && regs[2] &&
+        regs[3] != JNI_ABORT) {
+        uint64_t handle = regs[1];
+        const auto* current = env_->get_long_array(handle);
+        if (current) {
+            std::vector<int64_t> tmp(current->size());
+            size_t bytes = tmp.size() * sizeof(int64_t);
+            if (bytes && guest_read(guest_, regs[2], tmp.data(), bytes) == 0)
+                env_->set_long_array_region(handle, 0, tmp.data(), tmp.size());
+        }
+    }
+
+    if (call_nr == JNI_ReleaseFloatArrayElements && regs[2] &&
+        regs[3] != JNI_ABORT) {
+        uint64_t handle = regs[1];
+        const auto* current = env_->get_float_array(handle);
+        if (current) {
+            std::vector<float> tmp(current->size());
+            size_t bytes = tmp.size() * sizeof(float);
+            if (bytes && guest_read(guest_, regs[2], tmp.data(), bytes) == 0)
+                env_->set_float_array_region(handle, 0, tmp.data(), tmp.size());
+        }
+    }
+
+    if (ret == 0 && regs[4] &&
+        (call_nr == JNI_GetIntArrayRegion ||
+         call_nr == JNI_GetLongArrayRegion ||
+         call_nr == JNI_GetFloatArrayRegion)) {
+        uint64_t handle = regs[1];
+        size_t start = static_cast<size_t>(regs[2]);
+        size_t len = static_cast<size_t>(regs[3]);
+
+        if (call_nr == JNI_GetIntArrayRegion) {
+            const auto* current = env_->get_int_array(handle);
+            if (current && start + len <= current->size())
+                guest_write(guest_, regs[4], current->data() + start,
+                            len * sizeof(int32_t));
+        } else if (call_nr == JNI_GetLongArrayRegion) {
+            const auto* current = env_->get_long_array(handle);
+            if (current && start + len <= current->size())
+                guest_write(guest_, regs[4], current->data() + start,
+                            len * sizeof(int64_t));
+        } else {
+            const auto* current = env_->get_float_array(handle);
+            if (current && start + len <= current->size())
+                guest_write(guest_, regs[4], current->data() + start,
+                            len * sizeof(float));
+        }
+    }
+
+    if (ret == 0 && regs[4] &&
+        (call_nr == JNI_SetIntArrayRegion ||
+         call_nr == JNI_SetLongArrayRegion ||
+         call_nr == JNI_SetFloatArrayRegion)) {
+        uint64_t handle = regs[1];
+        size_t start = static_cast<size_t>(regs[2]);
+        size_t len = static_cast<size_t>(regs[3]);
+
+        if (call_nr == JNI_SetIntArrayRegion) {
+            std::vector<int32_t> tmp(len);
+            size_t bytes = len * sizeof(int32_t);
+            if (bytes && guest_read(guest_, regs[4], tmp.data(), bytes) == 0)
+                env_->set_int_array_region(handle, start, tmp.data(), len);
+        } else if (call_nr == JNI_SetLongArrayRegion) {
+            std::vector<int64_t> tmp(len);
+            size_t bytes = len * sizeof(int64_t);
+            if (bytes && guest_read(guest_, regs[4], tmp.data(), bytes) == 0)
+                env_->set_long_array_region(handle, start, tmp.data(), len);
+        } else {
+            std::vector<float> tmp(len);
+            size_t bytes = len * sizeof(float);
+            if (bytes && guest_read(guest_, regs[4], tmp.data(), bytes) == 0)
+                env_->set_float_array_region(handle, start, tmp.data(), len);
         }
     }
 

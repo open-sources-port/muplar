@@ -1,19 +1,19 @@
-<svg width="100%" viewBox="0 0 680 720" role="img" xmlns="http://www.w3.org/2000/svg">
+<svg width="100%" viewBox="0 0 680 760" role="img" xmlns="http://www.w3.org/2000/svg">
 <title>Muplar Android roadmap overview</title>
-<desc>A compact overview of Android execution progress with links to detailed roadmap files.</desc>
+<desc>A compact overview of Android execution progress using stable work areas instead of rolling numbered increments.</desc>
 
 <style>
 text{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}
 .done{fill:#DCFCE7;stroke:#16A34A;stroke-width:1}
 .done-title{fill:#166534;font-size:14px;font-weight:600}
 .done-subtitle{fill:#15803D;font-size:12px}
-.current{fill:#DBEAFE;stroke:#2563EB;stroke-width:1}
-.current-title{fill:#1D4ED8;font-size:14px;font-weight:600}
-.current-subtitle{fill:#2563EB;font-size:12px}
-.future{fill:#F9FAFB;stroke:#9CA3AF;stroke-width:1}
-.future-title{fill:#4B5563;font-size:14px;font-weight:600}
-.future-subtitle{fill:#6B7280;font-size:12px}
-.phase-label{font-size:12px;font-weight:600}
+.next{fill:#DBEAFE;stroke:#2563EB;stroke-width:1}
+.next-title{fill:#1D4ED8;font-size:14px;font-weight:600}
+.next-subtitle{fill:#2563EB;font-size:12px}
+.later{fill:#F9FAFB;stroke:#9CA3AF;stroke-width:1}
+.later-title{fill:#4B5563;font-size:14px;font-weight:600}
+.later-subtitle{fill:#6B7280;font-size:12px}
+.area-label{font-size:12px;font-weight:600}
 .arrow{stroke:#6B7280;stroke-width:1.5;fill:none}
 </style>
 
@@ -28,17 +28,17 @@ text{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}
 <text class="done-title" x="60" y="50">Core guest execution</text>
 <text class="done-subtitle" x="60" y="68">Static ELF, HVC loop, syscalls, JNI_OnLoad, RegisterNatives</text>
 <text class="done-subtitle" x="60" y="84">Dynamic linker and Android runtime shim foundations</text>
-<text class="done-title phase-label" x="560" y="58" text-anchor="middle">Phases 1-4</text>
+<text class="done-title area-label" x="560" y="58" text-anchor="middle">Done</text>
 </g>
 
 <line class="arrow" x1="340" y1="96" x2="340" y2="124" marker-end="url(#arrow)"/>
 
 <g>
 <rect class="done" x="40" y="128" width="600" height="84" rx="8"/>
-<text class="done-title" x="60" y="154">NativeActivity runtime</text>
-<text class="done-subtitle" x="60" y="172">Lifecycle, ANativeWindow, EGL/GLES, input queue, app loop, assets</text>
-<text class="done-subtitle" x="60" y="190">APK launch envelope, package metadata, host-driven callbacks</text>
-<text class="done-title phase-label" x="560" y="164" text-anchor="middle">5.1-5.13</text>
+<text class="done-title" x="60" y="154">Android runtime surface</text>
+<text class="done-subtitle" x="60" y="172">NativeActivity lifecycle, host window, input, app loop, assets, context</text>
+<text class="done-subtitle" x="60" y="190">APK launch envelope and package metadata</text>
+<text class="done-title area-label" x="560" y="164" text-anchor="middle">Done</text>
 </g>
 
 <line class="arrow" x1="340" y1="212" x2="340" y2="240" marker-end="url(#arrow)"/>
@@ -48,34 +48,42 @@ text{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}
 <text class="done-title" x="60" y="270">Binder and AIDL coverage</text>
 <text class="done-subtitle" x="60" y="288">Service manager, local/remote Binder objects, Parcel payloads</text>
 <text class="done-subtitle" x="60" y="306">Generated AIDL, lifecycle hardening, NDK C++ runtime dependencies</text>
-<text class="done-title phase-label" x="560" y="280" text-anchor="middle">5.14-5.26</text>
+<text class="done-title area-label" x="560" y="280" text-anchor="middle">Done</text>
 </g>
 
 <line class="arrow" x1="340" y1="328" x2="340" y2="356" marker-end="url(#arrow)"/>
 
 <g>
 <rect class="done" x="40" y="360" width="600" height="84" rx="8"/>
-<text class="done-title" x="60" y="386">Real APK native dependency closure</text>
-<text class="done-subtitle" x="60" y="404">Load transitive DT_NEEDED libraries from extracted APK lib/arm64-v8a</text>
-<text class="done-subtitle" x="60" y="422">Report missing libraries, unresolved imports, and strict-mode failures clearly</text>
-<text class="done-title phase-label" x="560" y="396" text-anchor="middle">5.27 Done</text>
+<text class="done-title" x="60" y="386">APK native dependency closure</text>
+<text class="done-subtitle" x="60" y="404">Transitive APK-local libs, direct relocations, strict import mode</text>
+<text class="done-subtitle" x="60" y="422">Generated NDK APK passes strict native import scan</text>
+<text class="done-title area-label" x="560" y="396" text-anchor="middle">Done</text>
 </g>
 
 <line class="arrow" x1="340" y1="444" x2="340" y2="472" marker-end="url(#arrow)"/>
 
 <g>
-<rect class="future" x="40" y="476" width="600" height="84" rx="8"/>
-<text class="future-title" x="60" y="502">Next Android execution frontier</text>
-<text class="future-subtitle" x="60" y="520">Try less-controlled APKs, widen libc/libandroid coverage from real failures</text>
-<text class="future-subtitle" x="60" y="538">Then move toward Java/ART surface and broader app compatibility</text>
-<text class="future-title phase-label" x="560" y="512" text-anchor="middle">Future</text>
+<rect class="done" x="40" y="476" width="600" height="84" rx="8"/>
+<text class="done-title" x="60" y="502">Compatibility scanning</text>
+<text class="done-subtitle" x="60" y="520">Batch strict-mode APK scans with per-APK logs and Markdown backlog reports</text>
+<text class="done-subtitle" x="60" y="538">Known fixtures distinguish clean, incomplete, and intentionally unsupported imports</text>
+<text class="done-title area-label" x="560" y="512" text-anchor="middle">Done</text>
+</g>
+
+<line class="arrow" x1="340" y1="560" x2="340" y2="588" marker-end="url(#arrow)"/>
+
+<g>
+<rect class="next" x="40" y="592" width="600" height="84" rx="8"/>
+<text class="next-title" x="60" y="618">Current focus</text>
+<text class="next-subtitle" x="60" y="636">Run less-controlled native APKs and promote repeated missing imports into stubs</text>
+<text class="next-subtitle" x="60" y="654">Keep failures early, explainable, and covered by focused fixtures</text>
+<text class="next-title area-label" x="560" y="628" text-anchor="middle">Next</text>
 </g>
 
 <g>
-<rect class="future" x="40" y="600" width="600" height="72" rx="8"/>
-<text class="future-title" x="60" y="626">Detailed roadmap files</text>
-<text class="future-subtitle" x="60" y="644">docs/roadmap/android_phase5_runtime.svg</text>
-<text class="future-subtitle" x="60" y="660">docs/roadmap/android_phase5_binder_aidl.svg</text>
-<text class="future-subtitle" x="360" y="660">docs/roadmap/android_phase5_apk_dependency.svg</text>
+<rect class="later" x="40" y="704" width="600" height="40" rx="8"/>
+<text class="later-title" x="60" y="728">Checklists live in docs/roadmap/android/*.md</text>
+<text class="later-title area-label" x="560" y="728" text-anchor="middle">Stable Areas</text>
 </g>
 </svg>

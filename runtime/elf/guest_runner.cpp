@@ -145,6 +145,73 @@ static bool jni_argument_signature(const std::string& signature,
     return true;
 }
 
+static bool parse_jni_parameter_types(const std::string& signature,
+                                      std::vector<std::string>* types_out)
+{
+    std::string args;
+    if (!jni_argument_signature(signature, &args))
+        return false;
+
+    std::vector<std::string> types;
+    for (size_t i = 0; i < args.size();) {
+        size_t start = i;
+        while (i < args.size() && args[i] == '[')
+            ++i;
+
+        if (i >= args.size())
+            return false;
+
+        if (args[i] == 'L') {
+            size_t end = args.find(';', i);
+            if (end == std::string::npos)
+                return false;
+            i = end + 1;
+        } else {
+            char c = args[i++];
+            if (std::string("ZBCSIJFD").find(c) == std::string::npos)
+                return false;
+        }
+        types.push_back(args.substr(start, i - start));
+    }
+
+    if (types_out)
+        *types_out = std::move(types);
+    return true;
+}
+
+static bool jni_type_is_object_like(const std::string& type)
+{
+    return !type.empty() && (type[0] == 'L' || type[0] == '[');
+}
+
+static std::string jni_class_from_type(const std::string& type)
+{
+    if (type.size() >= 2 && type.front() == 'L' && type.back() == ';')
+        return type.substr(1, type.size() - 2);
+    return type;
+}
+
+static bool jni_type_is_direct_buffer(const std::string& type)
+{
+    return type == "Ljava/nio/Buffer;" ||
+           type == "Ljava/nio/ByteBuffer;" ||
+           type == "Ljava/nio/DirectByteBuffer;";
+}
+
+static uint64_t alloc_guest_scratch(guest_t* g,
+                                    uint64_t* bump,
+                                    size_t size,
+                                    uint8_t fill)
+{
+    uint64_t ptr = (*bump + 15) & ~15ULL;
+    *bump = ptr + ((static_cast<uint64_t>(size) + 15) & ~15ULL);
+
+    std::vector<uint8_t> bytes(size, fill);
+    if (!bytes.empty())
+        guest_write(g, ptr, bytes.data(), bytes.size());
+    return ptr;
+}
+
 static std::string jni_export_base(const std::string& class_name,
                                    const std::string& method_name)
 {
@@ -817,7 +884,8 @@ static bool apply_direct_so_rela(FILE* f,
                         break;
                     }
                     uint64_t trap = art.unsupported_import_stub(obj.soname, name);
-                    if (*unresolved < 8) {
+                    constexpr uint32_t kUnresolvedImportLogLimit = 64;
+                    if (*unresolved < kUnresolvedImportLogLimit) {
                         std::fprintf(stderr,
                             "[Muplar] unresolved direct .so import: %s needs %s "
                             "(reloc=%u slot=0x%llx%s)\n",
@@ -826,7 +894,7 @@ static bool apply_direct_so_rela(FILE* f,
                             type,
                             (unsigned long long)slot_gpa,
                             trap ? " trap=installed" : "");
-                    } else if (*unresolved == 8) {
+                    } else if (*unresolved == kUnresolvedImportLogLimit) {
                         std::fprintf(stderr,
                             "[Muplar] unresolved direct .so import: %s has more "
                             "unresolved imports; suppressing further detail\n",
@@ -1022,6 +1090,61 @@ static bool patch_lse_atomics_flag(guest_t* g, const std::string& path, uint64_t
     return false;
 }
 
+static size_t patch_unaligned_zero_vector_stack_stores(guest_t* g,
+                                                       const DirectSoObject& obj)
+{
+    FILE* f = std::fopen(obj.path.c_str(), "rb");
+    if (!f) return 0;
+
+    static constexpr uint32_t kSturQ0Sp5c = 0x3C85C3E0u;
+    static constexpr uint32_t kStpQ0Sp40  = 0xAD0203E0u;
+    static constexpr uint32_t kStpQ0Sp20  = 0xAD0103E0u;
+    static constexpr uint32_t kStrQ0Sp10  = 0x3D8007E0u;
+    static constexpr uint32_t kStpXzrSp60 = 0xA9067FFFu;
+
+    auto read_u32 = [](const std::vector<uint8_t>& buf, size_t off) -> uint32_t {
+        uint32_t v = 0;
+        std::memcpy(&v, buf.data() + off, sizeof(v));
+        return v;
+    };
+
+    size_t patched = 0;
+    for (const Elf64_Phdr& ph : obj.phdrs) {
+        if (ph.p_type != PT_LOAD || !(ph.p_flags & PF_X) || ph.p_filesz < 16)
+            continue;
+
+        std::vector<uint8_t> text(static_cast<size_t>(ph.p_filesz));
+        if (!read_at(f, ph.p_offset, text.data(), text.size()))
+            continue;
+
+        for (size_t off = 0; off + 16 <= text.size(); off += 4) {
+            if (read_u32(text, off) != kSturQ0Sp5c ||
+                read_u32(text, off + 4) != kStpQ0Sp40 ||
+                read_u32(text, off + 8) != kStpQ0Sp20 ||
+                read_u32(text, off + 12) != kStrQ0Sp10) {
+                continue;
+            }
+
+            uint64_t gpa = obj.load_base + ph.p_vaddr + off;
+            if (gpa + sizeof(kStpXzrSp60) > g->guest_size)
+                continue;
+            auto* host = static_cast<uint8_t*>(g->host_base) + gpa;
+            std::memcpy(host, &kStpXzrSp60, sizeof(kStpXzrSp60));
+            sys_icache_invalidate(host, sizeof(kStpXzrSp60));
+            ++patched;
+        }
+    }
+
+    std::fclose(f);
+    if (patched) {
+        std::printf(
+            "[Muplar] patched %zu unaligned zero-vector stack store(s) in %s\n",
+            patched,
+            obj.soname.empty() ? obj.path.c_str() : obj.soname.c_str());
+    }
+    return patched;
+}
+
 int GuestRunner::run(const GuestRunnerConfig& cfg)
 {
     log_init();
@@ -1061,10 +1184,12 @@ int GuestRunner::run(const GuestRunnerConfig& cfg)
     }
 
     // ── muplar subsystems ─────────────────────────────────────────────────────
+    // Keep the HVC stub arenas separated from JNI/VM data.  AndroidRuntime
+    // has grown beyond one 4 KiB page as real APK coverage expands.
     uint64_t jni_stubs_gpa     = g.shim_data_base + 0x000000;
     uint64_t android_stubs_gpa = g.shim_data_base + 0x001000;
-    uint64_t jni_table_gpa     = g.shim_data_base + 0x002000;
-    uint64_t java_vm_gpa       = g.shim_data_base + 0x003000;
+    uint64_t jni_table_gpa     = g.shim_data_base + 0x006000;
+    uint64_t java_vm_gpa       = g.shim_data_base + 0x007000;
 
     jni::JniEnv    jni_env;
     std::string package_name = cfg.package_name.empty()
@@ -1139,7 +1264,7 @@ int GuestRunner::run(const GuestRunnerConfig& cfg)
     }
 
     // ── Detect if the input is a shared library (ET_DYN with no _start) ──────
-    bool is_shared_lib = false;
+    bool is_shared_lib = cfg.force_android_so;
     {
         FILE* ef = std::fopen(cfg.elf_path.c_str(), "rb");
         if (ef) {
@@ -1147,7 +1272,10 @@ int GuestRunner::run(const GuestRunnerConfig& cfg)
             std::fread(&ehdr, sizeof(ehdr), 1, ef);
             // ET_DYN with entry=0 means .so (no _start); ET_DYN with entry≠0
             // is a PIE executable.  libjnitest.so has e_entry=0.
-            if (ehdr.e_type == ET_DYN && ehdr.e_entry == 0)
+            // APK-selected libs are Android shared objects even when the ELF
+            // header carries a non-zero entry.
+            if (ehdr.e_type == ET_DYN &&
+                (cfg.force_android_so || ehdr.e_entry == 0))
                 is_shared_lib = true;
             std::fclose(ef);
         }
@@ -1207,6 +1335,7 @@ int GuestRunner::run(const GuestRunnerConfig& cfg)
                 // in place, but this is the one that matters for directly loaded
                 // APK .so files and their dependencies.
                 for (const DirectSoObject& obj : direct_objects) {
+                    patch_unaligned_zero_vector_stack_stores(&g, obj);
                     patch_lse_atomics_flag(&g, obj.path, obj.load_base);
                 }
             }
@@ -1567,23 +1696,120 @@ int GuestRunner::run(const GuestRunnerConfig& cfg)
                         jni_ret == jni::JNI_VERSION_1_6 ? "JNI_VERSION_1_6 ✓" :
                         jni_ret < 0 ? "error" : "unknown version");
             exit_code = (jni_ret == jni::JNI_VERSION_1_6) ? 0 : 1;
-        } else if (!cfg.native_activity) {
+        } else if (!cfg.native_activity && !cfg.jni_call.enabled) {
             std::fprintf(stderr, "[Muplar] no JNI_OnLoad found in %s\n",
                          cfg.elf_path.c_str());
             exit_code = 1;
+        } else if (cfg.jni_call.enabled) {
+            std::printf("[Muplar] no JNI_OnLoad; continuing with explicit JNI call\n");
         } else {
             std::printf("[Muplar] no JNI_OnLoad; continuing with NativeActivity entry\n");
         }
 
         if (exit_code == 0) {
-            if (cfg.native_activity) {
-                uint64_t on_create = jni_onload.find_symbol(
-                    g.elf_load_min, cfg.elf_path, "ANativeActivity_onCreate");
-                if (!on_create) {
+            if (cfg.jni_call.enabled) {
+                std::vector<std::string> param_types;
+                if (!parse_jni_parameter_types(cfg.jni_call.signature,
+                                               &param_types)) {
+                    std::fprintf(stderr,
+                        "[Muplar] invalid JNI signature: %s\n",
+                        cfg.jni_call.signature.c_str());
+                    exit_code = 1;
+                } else if (param_types.size() > 6 ||
+                           cfg.jni_call.int_args.size() > 6) {
+                    std::fprintf(stderr,
+                        "[Muplar] --jni-call supports up to 6 Java args for now\n");
+                    exit_code = 1;
+                } else if (cfg.jni_call.int_args.size() > param_types.size()) {
+                    std::fprintf(stderr,
+                        "[Muplar] --jni-call got more --jni-int values than signature args\n");
                     exit_code = 1;
                 } else {
+                    std::string class_name;
+                    uint64_t fn = resolve_jni_call_target(
+                        jni_env, jni_onload, g.elf_load_min, cfg.elf_path,
+                        cfg.jni_call, &class_name);
+                    if (!fn) {
+                        exit_code = 1;
+                    } else {
+                        uint64_t synthetic_arg_bump = g.shim_data_base + 0x00C000;
+                        std::vector<int64_t> native_args;
+                        native_args.reserve(param_types.size());
+
+                        for (size_t i = 0; i < param_types.size(); ++i) {
+                            if (i < cfg.jni_call.int_args.size()) {
+                                native_args.push_back(cfg.jni_call.int_args[i]);
+                                continue;
+                            }
+
+                            const std::string& type = param_types[i];
+                            uint64_t value = 0;
+                            if (type == "Ljava/lang/String;") {
+                                value = jni_env.make_string("muplar");
+                            } else if (type == "[B") {
+                                value = jni_env.make_byte_array(4);
+                            } else if (type == "[I") {
+                                value = jni_env.make_int_array(4);
+                            } else if (type == "[J") {
+                                value = jni_env.make_long_array(4);
+                            } else if (type == "[F") {
+                                value = jni_env.make_float_array(4);
+                            } else if (!type.empty() && type[0] == '[') {
+                                std::string element_desc = type.substr(1);
+                                uint64_t initial = 0;
+                                if (element_desc == "Ljava/lang/String;")
+                                    initial = jni_env.make_string("muplar");
+                                else if (element_desc == "[B")
+                                    initial = jni_env.make_byte_array(4);
+                                else if (element_desc == "[I")
+                                    initial = jni_env.make_int_array(4);
+                                else if (element_desc == "[J")
+                                    initial = jni_env.make_long_array(4);
+                                else if (element_desc == "[F")
+                                    initial = jni_env.make_float_array(4);
+                                value = jni_env.make_object_array(
+                                    jni_class_from_type(element_desc),
+                                    4,
+                                    initial);
+                            } else if (jni_type_is_direct_buffer(type)) {
+                                constexpr size_t BUFFER_BYTES = 256;
+                                uint64_t data = alloc_guest_scratch(
+                                    &g, &synthetic_arg_bump, BUFFER_BYTES, 0);
+                                value = jni_env.make_direct_buffer(
+                                    data, BUFFER_BYTES);
+                            } else if (jni_type_is_object_like(type)) {
+                                value = jni_env.register_object(
+                                    jni_class_from_type(type));
+                            }
+                            native_args.push_back(static_cast<int64_t>(value));
+                        }
+
+                        int64_t native_ret = jni_onload.call_native(
+                            fn, 0, native_args, vcpu, vexit,
+                            run_current_vcpu);
+                        std::printf("[Muplar] %s.%s%s returned %lld\n",
+                                    class_name.c_str(),
+                                    cfg.jni_call.method_name.c_str(),
+                                    cfg.jni_call.signature.c_str(),
+                                    (long long)native_ret);
+                    }
+                }
+            } else if (cfg.native_activity) {
+                uint64_t on_create = jni_onload.find_symbol(
+                    g.elf_load_min, cfg.elf_path, "ANativeActivity_onCreate",
+                    true);
+                if (!on_create) {
+                    if (jni_onload_gpa) {
+                        std::printf("[Muplar] no NativeActivity entry; JNI_OnLoad-only APK path complete\n");
+                    } else {
+                        std::fprintf(stderr,
+                            "[Muplar] no NativeActivity entry found in %s\n",
+                            cfg.elf_path.c_str());
+                        exit_code = 1;
+                    }
+                } else {
                     uint64_t activity = prepare_native_activity(
-                        &g, jni_onload, g.shim_data_base + 0x004000,
+                        &g, jni_onload, g.shim_data_base + 0x008000,
                         art.asset_manager_handle(), activity_object,
                         package_name);
 
@@ -1668,29 +1894,6 @@ int GuestRunner::run(const GuestRunnerConfig& cfg)
                                          drain_frames_inline, true);
                     call_guest_and_drain(on_destroy, { activity },
                                          drain_frames_inline, true);
-                }
-            } else if (cfg.jni_call.enabled) {
-                if (cfg.jni_call.int_args.size() > 6) {
-                    std::fprintf(stderr,
-                        "[Muplar] --jni-call supports up to 6 integer args for now\n");
-                    exit_code = 1;
-                } else {
-                    std::string class_name;
-                    uint64_t fn = resolve_jni_call_target(
-                        jni_env, jni_onload, g.elf_load_min, cfg.elf_path,
-                        cfg.jni_call, &class_name);
-                    if (!fn) {
-                        exit_code = 1;
-                    } else {
-                        int64_t native_ret = jni_onload.call_native(
-                            fn, 0, cfg.jni_call.int_args, vcpu, vexit,
-                            run_current_vcpu);
-                        std::printf("[Muplar] %s.%s%s returned %lld\n",
-                                    class_name.c_str(),
-                                    cfg.jni_call.method_name.c_str(),
-                                    cfg.jni_call.signature.c_str(),
-                                    (long long)native_ret);
-                    }
                 }
             } else {
                 uint64_t cls = jni_env.find_class("com/example/Muplar");

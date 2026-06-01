@@ -1,6 +1,7 @@
 // runtime/jni/jni_env.h
 #pragma once
 
+#include <cstddef>
 #include <cstdint>
 #include <string>
 #include <unordered_map>
@@ -16,9 +17,11 @@ using jmethodID = uint64_t;
 using jfieldID  = uint64_t;
 using jstring   = uint64_t;
 using jarray    = uint64_t;
+using jobjectArray = uint64_t;
 using jbyteArray = uint64_t;
 using jintArray  = uint64_t;
 using jlongArray = uint64_t;
+using jfloatArray = uint64_t;
 using jvalue    = uint64_t;
 
 static constexpr jobject JNI_NULL = 0;
@@ -75,6 +78,11 @@ struct JClass {
 //   0x100F  DeleteLocalRef
 //   0x1010  GetObjectClass
 //   0x1011  CallObjectMethod
+//   0x1012  GetFieldID
+//   0x101C  NewDirectByteBuffer
+//   0x101D  GetDirectBufferAddress
+//   0x101E  GetDirectBufferCapacity
+//   0x101F  GetArrayLength
 // ────────────────────────────────────────────────────────────────────────────
 class JniEnv {
 public:
@@ -100,6 +108,15 @@ public:
     void   register_class(const std::string& descriptor);
     jclass find_class(const std::string& descriptor);
     jobject register_object(const std::string& class_descriptor);
+    jstring make_string(const std::string& value);
+    jbyteArray make_byte_array(size_t length);
+    jintArray make_int_array(size_t length);
+    jlongArray make_long_array(size_t length);
+    jfloatArray make_float_array(size_t length);
+    jobjectArray make_object_array(const std::string& element_descriptor,
+                                   size_t length,
+                                   jobject initial = JNI_NULL);
+    jobject make_direct_buffer(uint64_t guest_address, uint64_t capacity);
     void set_app_context(std::string package_name,
                          std::string package_code_path);
 
@@ -123,9 +140,26 @@ public:
                                 size_t start,
                                 const uint8_t* src,
                                 size_t len);
+    void set_int_array_region(uint64_t handle,
+                              size_t start,
+                              const int32_t* src,
+                              size_t len);
+    void set_long_array_region(uint64_t handle,
+                               size_t start,
+                               const int64_t* src,
+                               size_t len);
+    void set_float_array_region(uint64_t handle,
+                                size_t start,
+                                const float* src,
+                                size_t len);
 
     // Read back a byte array buffer (e.g. to pass to host code)
     const std::vector<uint8_t>* get_byte_array(uint64_t handle) const;
+    const std::vector<int32_t>* get_int_array(uint64_t handle) const;
+    const std::vector<int64_t>* get_long_array(uint64_t handle) const;
+    const std::vector<float>* get_float_array(uint64_t handle) const;
+    const std::vector<jobject>* get_object_array(uint64_t handle) const;
+    size_t array_length(uint64_t handle) const;
 
     // Returns (slot_index, stub_gpa) pairs for JniBridge::install()
     std::vector<std::pair<int,uint64_t>> install_entries(uint64_t stub_base_gpa) const;
@@ -141,15 +175,47 @@ private:
     uint64_t jni_NewStringUTF(const uint64_t* a);
     uint64_t jni_GetStringUTFChars(const uint64_t* a);
     uint64_t jni_ReleaseStringUTFChars(const uint64_t* a);
+    uint64_t jni_GetArrayLength(const uint64_t* a);
+    uint64_t jni_NewObjectArray(const uint64_t* a);
+    uint64_t jni_GetObjectArrayElement(const uint64_t* a);
+    uint64_t jni_SetObjectArrayElement(const uint64_t* a);
     uint64_t jni_NewByteArray(const uint64_t* a);
+    uint64_t jni_NewIntArray(const uint64_t* a);
+    uint64_t jni_NewLongArray(const uint64_t* a);
+    uint64_t jni_NewFloatArray(const uint64_t* a);
     uint64_t jni_SetByteArrayRegion(const uint64_t* a);
     uint64_t jni_GetByteArrayElements(const uint64_t* a);
     uint64_t jni_ReleaseByteArrayElements(const uint64_t* a);
+    uint64_t jni_GetIntArrayElements(const uint64_t* a);
+    uint64_t jni_GetLongArrayElements(const uint64_t* a);
+    uint64_t jni_GetFloatArrayElements(const uint64_t* a);
+    uint64_t jni_ReleaseIntArrayElements(const uint64_t* a);
+    uint64_t jni_ReleaseLongArrayElements(const uint64_t* a);
+    uint64_t jni_ReleaseFloatArrayElements(const uint64_t* a);
+    uint64_t jni_GetIntArrayRegion(const uint64_t* a);
+    uint64_t jni_GetLongArrayRegion(const uint64_t* a);
+    uint64_t jni_GetFloatArrayRegion(const uint64_t* a);
+    uint64_t jni_SetIntArrayRegion(const uint64_t* a);
+    uint64_t jni_SetLongArrayRegion(const uint64_t* a);
+    uint64_t jni_SetFloatArrayRegion(const uint64_t* a);
     uint64_t jni_ExceptionCheck(const uint64_t* a);
     uint64_t jni_ExceptionClear(const uint64_t* a);
     uint64_t jni_DeleteLocalRef(const uint64_t* a);
+    uint64_t jni_ExceptionOccurred(const uint64_t* a);
+    uint64_t jni_ExceptionDescribe(const uint64_t* a);
+    uint64_t jni_PushLocalFrame(const uint64_t* a);
+    uint64_t jni_PopLocalFrame(const uint64_t* a);
+    uint64_t jni_NewGlobalRef(const uint64_t* a);
+    uint64_t jni_DeleteGlobalRef(const uint64_t* a);
+    uint64_t jni_IsSameObject(const uint64_t* a);
+    uint64_t jni_NewLocalRef(const uint64_t* a);
+    uint64_t jni_EnsureLocalCapacity(const uint64_t* a);
+    uint64_t jni_NewDirectByteBuffer(const uint64_t* a);
+    uint64_t jni_GetDirectBufferAddress(const uint64_t* a);
+    uint64_t jni_GetDirectBufferCapacity(const uint64_t* a);
     uint64_t jni_GetObjectClass(const uint64_t* a);
     uint64_t jni_CallObjectMethod(const uint64_t* a);
+    uint64_t jni_GetFieldID(const uint64_t* a);
 
     // ── Object / handle tables ────────────────────────────────────────────
     // Classes indexed by a host-assigned handle (= jclass value seen by guest)
@@ -160,8 +226,16 @@ private:
     struct MethodEntry { uint64_t class_handle; std::string name; std::string sig; };
     std::unordered_map<uint64_t, MethodEntry> methods_;
 
+    // Fields indexed by a host-assigned handle (= jfieldID seen by guest)
+    struct FieldEntry { uint64_t class_handle; std::string name; std::string sig; };
+    std::unordered_map<uint64_t, FieldEntry> fields_;
+
     // Objects indexed by a host-assigned handle (= jobject seen by guest)
-    struct ObjectEntry { uint64_t class_handle; };
+    struct ObjectEntry {
+        uint64_t class_handle;
+        uint64_t direct_buffer_address = 0;
+        uint64_t direct_buffer_capacity = 0;
+    };
     std::unordered_map<uint64_t, ObjectEntry> objects_;
 
     // Strings: jstring handle → UTF-8 content
@@ -169,6 +243,10 @@ private:
 
     // Byte arrays: jbyteArray handle → byte buffer
     std::unordered_map<uint64_t, std::vector<uint8_t>> byte_arrays_;
+    std::unordered_map<uint64_t, std::vector<int32_t>> int_arrays_;
+    std::unordered_map<uint64_t, std::vector<int64_t>> long_arrays_;
+    std::unordered_map<uint64_t, std::vector<float>> float_arrays_;
+    std::unordered_map<uint64_t, std::vector<jobject>> object_arrays_;
 
     bool pending_exception_ = false;
 
@@ -178,7 +256,6 @@ private:
     // Monotonically increasing handle allocator
     uint64_t next_handle_ = 0x7000'0001ULL;
     uint64_t alloc_handle() { return next_handle_++; }
-    uint64_t make_string(const std::string& value);
 
     std::string package_name_ = "muplar";
     std::string package_code_path_;
