@@ -4,6 +4,7 @@
 set(MUPLAR_ANDROID_SOURCES
     android_aarch64_runtime.cpp
     android_runtime.cpp
+    art_bootstrap.cpp
 )
 
 if(APPLE)

@@ -171,6 +171,14 @@ bool ends_with(const std::string& value, const std::string& suffix)
            value.compare(value.size() - suffix.size(), suffix.size(), suffix) == 0;
 }
 
+bool is_root_dex(const std::string& path)
+{
+    if (path.find('/') != std::string::npos)
+        return false;
+    return path == "classes.dex" ||
+           (starts_with(path, "classes") && ends_with(path, ".dex"));
+}
+
 bool safe_zip_path(const std::string& path)
 {
     if (path.empty() || path.front() == '/' ||
@@ -513,7 +521,89 @@ std::string join_libs(const std::vector<std::string>& libs)
     return out;
 }
 
+ApkRuntimeKind runtime_kind_for(const std::vector<std::string>& arm64_libs,
+                                const std::vector<std::string>& dex_files)
+{
+    if (!arm64_libs.empty() && !dex_files.empty())
+        return ApkRuntimeKind::Mixed;
+    if (!arm64_libs.empty())
+        return ApkRuntimeKind::NativeOnly;
+    if (!dex_files.empty())
+        return ApkRuntimeKind::JavaOnly;
+    return ApkRuntimeKind::Empty;
+}
+
+ApkClassification classify_entries(const std::filesystem::path& apk_path,
+                                   const std::vector<uint8_t>& apk,
+                                   const std::vector<ZipEntry>& entries)
+{
+    ApkClassification classification;
+    classification.apk_path = apk_path;
+
+    const ZipEntry* manifest_entry = nullptr;
+    for (const ZipEntry& entry : entries) {
+        if (entry.name == "AndroidManifest.xml") {
+            manifest_entry = &entry;
+            classification.has_manifest = true;
+        } else if (starts_with(entry.name, "lib/arm64-v8a/") &&
+                   ends_with(entry.name, ".so")) {
+            classification.arm64_libs.push_back(entry.name);
+        } else if (is_root_dex(entry.name)) {
+            classification.dex_files.push_back(entry.name);
+        } else if (starts_with(entry.name, "assets/") &&
+                   !ends_with(entry.name, "/") &&
+                   safe_zip_path(entry.name)) {
+            classification.asset_entries.push_back(entry.name);
+        }
+    }
+
+    std::vector<std::string> available_bases;
+    for (const std::string& lib : classification.arm64_libs)
+        available_bases.push_back(lib_base_name(lib));
+
+    if (manifest_entry) {
+        std::vector<uint8_t> manifest = extract_entry_data(apk, *manifest_entry);
+        ManifestInfo manifest_info = infer_manifest_info(manifest, available_bases);
+        classification.manifest_lib = manifest_info.lib_name;
+        classification.manifest_package = manifest_info.package_name;
+    }
+
+    std::sort(classification.arm64_libs.begin(),
+              classification.arm64_libs.end());
+    std::sort(classification.dex_files.begin(), classification.dex_files.end());
+    std::sort(classification.asset_entries.begin(),
+              classification.asset_entries.end());
+    classification.runtime_kind =
+        runtime_kind_for(classification.arm64_libs, classification.dex_files);
+    return classification;
+}
+
 } // namespace
+
+std::string to_string(ApkRuntimeKind kind)
+{
+    switch (kind) {
+    case ApkRuntimeKind::Empty:
+        return "empty";
+    case ApkRuntimeKind::NativeOnly:
+        return "native-only";
+    case ApkRuntimeKind::JavaOnly:
+        return "java-only";
+    case ApkRuntimeKind::Mixed:
+        return "mixed";
+    }
+    return "empty";
+}
+
+ApkClassification classify_apk(const std::filesystem::path& apk_path)
+{
+    if (apk_path.empty())
+        throw std::runtime_error("APK path is empty");
+
+    std::vector<uint8_t> apk = read_file(apk_path);
+    std::vector<ZipEntry> entries = read_zip_entries(apk);
+    return classify_entries(apk_path, apk, entries);
+}
 
 ApkLaunchResult prepare_apk_launch(const ApkLaunchConfig& config)
 {
@@ -523,13 +613,13 @@ ApkLaunchResult prepare_apk_launch(const ApkLaunchConfig& config)
     std::vector<uint8_t> apk = read_file(config.apk_path);
     std::vector<ZipEntry> entries = read_zip_entries(apk);
 
+    ApkClassification classification =
+        classify_entries(config.apk_path, apk, entries);
+
     std::vector<ZipEntry> arm64_libs;
     std::vector<ZipEntry> asset_entries;
-    const ZipEntry* manifest_entry = nullptr;
     for (const ZipEntry& entry : entries) {
-        if (entry.name == "AndroidManifest.xml") {
-            manifest_entry = &entry;
-        } else if (starts_with(entry.name, "lib/arm64-v8a/") &&
+        if (starts_with(entry.name, "lib/arm64-v8a/") &&
                    ends_with(entry.name, ".so")) {
             arm64_libs.push_back(entry);
         } else if (starts_with(entry.name, "assets/") &&
@@ -539,6 +629,13 @@ ApkLaunchResult prepare_apk_launch(const ApkLaunchConfig& config)
         }
     }
 
+    if (arm64_libs.empty() &&
+        classification.runtime_kind == ApkRuntimeKind::JavaOnly) {
+        throw std::runtime_error(
+            "APK runtime kind is java-only; Java/ART APK launch is not "
+            "implemented yet");
+    }
+
     if (arm64_libs.empty())
         throw std::runtime_error("APK has no lib/arm64-v8a/*.so entries");
 
@@ -546,14 +643,9 @@ ApkLaunchResult prepare_apk_launch(const ApkLaunchConfig& config)
     for (const ZipEntry& lib : arm64_libs)
         available_bases.push_back(lib_base_name(lib.name));
 
-    std::optional<std::string> manifest_lib;
-    std::optional<std::string> manifest_package;
-    if (manifest_entry) {
-        std::vector<uint8_t> manifest = extract_entry_data(apk, *manifest_entry);
-        ManifestInfo manifest_info = infer_manifest_info(manifest, available_bases);
-        manifest_lib = manifest_info.lib_name;
-        manifest_package = manifest_info.package_name;
-    }
+    std::optional<std::string> manifest_lib = classification.manifest_lib;
+    std::optional<std::string> manifest_package =
+        classification.manifest_package;
 
     const ZipEntry* selected = nullptr;
     if (config.lib_name) {

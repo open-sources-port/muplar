@@ -220,7 +220,8 @@ CAPS_TMP="$LOG_DIR/.compat-capped-$$.tsv"
 LIBSEL_TMP="$LOG_DIR/.compat-lib-selection-$$.tsv"
 ENTRY_TMP="$LOG_DIR/.compat-entrypoint-$$.tsv"
 JNI_EXPORT_TMP="$LOG_DIR/.compat-jni-exports-$$.tsv"
-trap 'rm -f "$SUMMARY_TMP" "$MISSING_TMP" "$UNRESOLVED_TMP" "$CAPS_TMP" "$LIBSEL_TMP" "$ENTRY_TMP" "$JNI_EXPORT_TMP"' EXIT
+JAVA_TMP="$LOG_DIR/.compat-java-runtime-$$.tsv"
+trap 'rm -f "$SUMMARY_TMP" "$MISSING_TMP" "$UNRESOLVED_TMP" "$CAPS_TMP" "$LIBSEL_TMP" "$ENTRY_TMP" "$JNI_EXPORT_TMP" "$JAVA_TMP"' EXIT
 
 : > "$SUMMARY_TMP"
 : > "$MISSING_TMP"
@@ -229,6 +230,7 @@ trap 'rm -f "$SUMMARY_TMP" "$MISSING_TMP" "$UNRESOLVED_TMP" "$CAPS_TMP" "$LIBSEL
 : > "$LIBSEL_TMP"
 : > "$ENTRY_TMP"
 : > "$JNI_EXPORT_TMP"
+: > "$JAVA_TMP"
 
 run_mup_with_hv_retry() {
     local log="$1"
@@ -288,6 +290,14 @@ for apk in "${APKS[@]}"; do
         sed -n 's/^.*no NativeActivity entry found in //p' "$log" |
         sort -u
     )"
+    java_runtime_required="$(
+        sed -n \
+            -e 's/^APK error: APK runtime kind is java-only; Java\/ART APK launch is not implemented yet.*/Java\/ART APK launch is not implemented yet/p' \
+            -e 's/^APK error: Java\/ART bootstrap incomplete: missing /Missing Java\/ART bootstrap inputs: /p' \
+            -e 's/^APK error: Java\/ART bootstrap plan is ready.*/app_process64 execution is not implemented yet/p' \
+            "$log" |
+        sort -u
+    )"
     missing="$(
         sed -n 's/^.*required direct \.so dependency not found locally: //p' "$log" |
         sort -u
@@ -305,6 +315,8 @@ for apk in "${APKS[@]}"; do
         scan_status="launch-ok"
     elif [ -n "$lib_selection_required" ]; then
         scan_status="apk-lib-required"
+    elif [ -n "$java_runtime_required" ]; then
+        scan_status="java-runtime-required"
     elif [ -n "$entrypoint_required" ]; then
         scan_status="entrypoint-required"
     elif grep -q "hv_vm_create failed" "$log"; then
@@ -331,6 +343,12 @@ for apk in "${APKS[@]}"; do
     if [ "$scan_status" = "host-hv-unavailable" ]; then
         echo "host HV unavailable:"
         echo "  hv_vm_create failed after $((HV_RETRIES + 1)) attempt(s); rerun later or increase --hv-retries"
+    fi
+
+    if [ -n "$java_runtime_required" ]; then
+        echo "java runtime required:"
+        echo "$java_runtime_required" | sed 's/^/  /'
+        printf "%s\t%s\n" "$java_runtime_required" "$apk" >> "$JAVA_TMP"
     fi
 
     if [ -n "$entrypoint_required" ]; then
@@ -439,7 +457,17 @@ done
     printf "\n## Stub Backlog\n\n"
     if [ -s "$MISSING_TMP" ] || [ -s "$UNRESOLVED_TMP" ] ||
        [ -s "$CAPS_TMP" ] || [ -s "$LIBSEL_TMP" ] ||
-       [ -s "$ENTRY_TMP" ] || [ -s "$JNI_EXPORT_TMP" ]; then
+       [ -s "$ENTRY_TMP" ] || [ -s "$JNI_EXPORT_TMP" ] ||
+       [ -s "$JAVA_TMP" ]; then
+        if [ -s "$JAVA_TMP" ]; then
+            printf "### Java/ART Runtime Required\n\n"
+            sort -u "$JAVA_TMP" |
+            while IFS=$'\t' read -r reason apk; do
+                printf -- '- `%s` contains DEX bytecode and needs the Java/ART APK launch path before it can run normally. `%s`.\n' "$apk" "$reason"
+            done
+            printf "\n"
+        fi
+
         if [ -s "$LIBSEL_TMP" ]; then
             printf "### APK Library Selection Required\n\n"
             sort -u "$LIBSEL_TMP" |
@@ -504,6 +532,7 @@ done
     fi
 
     printf "## Next Actions\n\n"
+    printf '%s\n' '- For `java-runtime-required`, import an ART-capable Android sysroot with `tools/import-android-art-sysroot.sh`, then verify it with `tools/check-android-art-sysroot.sh`.'
     printf '%s\n' "- Add focused runtime stubs for unresolved imports that appear in real APK startup paths."
     printf '%s\n' '- Add APK-local dependencies when a required `DT_NEEDED` library is missing from the package scan root.'
     printf '%s\n' "- Rerun this scan after each stub/dependency change to keep the backlog shrinking."

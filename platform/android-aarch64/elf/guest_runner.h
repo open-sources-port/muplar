@@ -40,8 +40,16 @@ namespace muplar::runtime::elf {
         // Path to the AArch64 Linux ELF binary.
         std::string elf_path;
 
+        // Guest-visible path for elf_path. When empty, elf_path is also used
+        // as the guest path.
+        std::string guest_elf_path;
+
         // argv[0] is conventionally the binary name; add real args after.
         std::vector<std::string> argv;
+
+        // Optional KEY=value environment entries to overlay onto the host
+        // environment before building the guest stack.
+        std::vector<std::string> env;
 
         // Optional sysroot. When set, elfuse resolves absolute guest paths
         // (e.g. /lib/ld-musl-aarch64.so.1) under this sysroot first.

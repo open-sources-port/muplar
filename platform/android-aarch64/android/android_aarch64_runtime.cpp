@@ -9,6 +9,7 @@
 #include <string>
 
 #include "apk_envelope.h"
+#include "art_bootstrap.h"
 #include "elf_loader.h"
 #include "guest_runner.h"
 
@@ -100,6 +101,56 @@ void apply_apk_launch(const PlatformLaunchConfig& launch_cfg,
               << guest_cfg.elf_path << "\n";
 }
 
+int handle_java_apk_launch(const PlatformLaunchConfig& launch_cfg,
+                           const apk::ApkClassification& classification)
+{
+    if (launch_cfg.sysroot.empty()) {
+        std::cerr << "APK error: Java/ART bootstrap incomplete: missing "
+                  << "--sysroot is required for Java/ART bootstrap\n";
+        return 1;
+    }
+
+    std::filesystem::path staged_apk = stage_art_apk_for_sysroot(
+        launch_cfg.input_path, launch_cfg.sysroot);
+
+    ArtBootstrapConfig art_cfg;
+    art_cfg.apk_path = staged_apk;
+    art_cfg.sysroot = launch_cfg.sysroot;
+    art_cfg.apk_classification = classification;
+
+    ArtBootstrapPlan plan = build_art_bootstrap_plan(art_cfg);
+    print_art_bootstrap_plan(plan);
+
+    if (!plan.ready()) {
+        std::cerr << "APK error: Java/ART bootstrap incomplete: missing "
+                  << art_bootstrap_missing_summary(plan) << "\n";
+        return 1;
+    }
+
+    if (plan.argv.empty()) {
+        std::cerr << "APK error: Java/ART bootstrap incomplete: missing "
+                  << "app_process64 guest argv\n";
+        return 1;
+    }
+
+    elf::GuestRunnerConfig guest_cfg;
+    guest_cfg.elf_path = plan.app_process64.string();
+    guest_cfg.guest_elf_path = plan.app_process64_guest_path;
+    guest_cfg.argv = plan.argv;
+    guest_cfg.env = plan.env;
+    guest_cfg.sysroot = launch_cfg.sysroot;
+    guest_cfg.verbose = launch_cfg.verbose;
+    guest_cfg.timeout_sec = launch_cfg.timeout_sec;
+    guest_cfg.package_code_path = plan.guest_apk_path;
+    if (plan.package_name)
+        guest_cfg.package_name = *plan.package_name;
+
+    inspect_elf(guest_cfg.elf_path);
+    std::cerr << "[ART] executing app_process64 bootstrap path\n";
+    elf::GuestRunner runner;
+    return runner.run(guest_cfg);
+}
+
 } // namespace
 
 int AndroidAarch64Runtime::run(const PlatformLaunchConfig& config)
@@ -117,6 +168,17 @@ int AndroidAarch64Runtime::run(const PlatformLaunchConfig& config)
 
     if (config.apk_mode || lower_ext(config.input_path) == ".apk") {
         try {
+            apk::ApkClassification classification =
+                apk::classify_apk(config.input_path);
+            std::cerr << "[APK] runtime kind="
+                      << apk::to_string(classification.runtime_kind) << "\n";
+            if (!classification.dex_files.empty()) {
+                std::cerr << "[APK] dex files="
+                          << classification.dex_files.size() << "\n";
+            }
+            if (classification.runtime_kind == apk::ApkRuntimeKind::JavaOnly)
+                return handle_java_apk_launch(config, classification);
+
             apply_apk_launch(config, guest_cfg);
         } catch (const std::exception& e) {
             std::cerr << "APK error: " << e.what() << "\n";

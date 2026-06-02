@@ -112,11 +112,56 @@ static const char** to_cstrings(const std::vector<std::string>& v)
     return arr;
 }
 
+static const char** to_null_terminated_cstrings(const std::vector<std::string>& v)
+{
+    auto** arr =
+        static_cast<const char**>(std::calloc(v.size() + 1, sizeof(const char*)));
+    if (!arr) return nullptr;
+    for (size_t i = 0; i < v.size(); ++i) {
+        arr[i] = strdup(v[i].c_str());
+        if (!arr[i]) {
+            for (size_t j = 0; j < i; ++j) free(const_cast<char*>(arr[j]));
+            free(arr);
+            return nullptr;
+        }
+    }
+    arr[v.size()] = nullptr;
+    return arr;
+}
+
 static void free_cstrings(const char** arr, int n)
 {
     if (!arr) return;
     for (int i = 0; i < n; ++i) free(const_cast<char*>(arr[i]));
     free(arr);
+}
+
+static std::string env_key(const std::string& env)
+{
+    size_t eq = env.find('=');
+    return eq == std::string::npos ? env : env.substr(0, eq);
+}
+
+static std::vector<std::string> merge_environment(
+    const std::vector<std::string>& overrides)
+{
+    std::vector<std::string> merged;
+    std::vector<std::string> override_keys;
+    override_keys.reserve(overrides.size());
+    for (const std::string& entry : overrides)
+        override_keys.push_back(env_key(entry));
+
+    for (size_t i = 0; environ && environ[i]; ++i) {
+        std::string entry = environ[i];
+        std::string key = env_key(entry);
+        if (std::find(override_keys.begin(), override_keys.end(), key) ==
+            override_keys.end()) {
+            merged.push_back(std::move(entry));
+        }
+    }
+
+    merged.insert(merged.end(), overrides.begin(), overrides.end());
+    return merged;
 }
 
 static std::string normalize_jni_class_name(std::string name)
@@ -1172,21 +1217,37 @@ int GuestRunner::run(const GuestRunnerConfig& cfg)
     if (cfg.verbose) log_set_level(LOG_DEBUG);
 
     const char*  elf_path   = cfg.elf_path.c_str();
+    std::string  guest_elf_path_storage =
+        cfg.guest_elf_path.empty() ? cfg.elf_path : cfg.guest_elf_path;
+    const char*  guest_elf_path = guest_elf_path_storage.c_str();
     const char*  sysroot    = cfg.sysroot.empty() ? nullptr : cfg.sysroot.c_str();
     int          guest_argc = static_cast<int>(cfg.argv.size());
     const char** guest_argv = to_cstrings(cfg.argv);
     if (!guest_argv) throw std::runtime_error("GuestRunner: OOM allocating argv");
+    std::vector<std::string> guest_env_storage;
+    const char** guest_envp = nullptr;
+    if (!cfg.env.empty()) {
+        guest_env_storage = merge_environment(cfg.env);
+        guest_envp = to_null_terminated_cstrings(guest_env_storage);
+        if (!guest_envp) {
+            free_cstrings(guest_argv, guest_argc);
+            throw std::runtime_error("GuestRunner: OOM allocating envp");
+        }
+    }
 
     guest_t           g;
     bool              guest_initialized = false;
     guest_bootstrap_t boot;
 
     std::printf("[Muplar] guest_bootstrap_prepare...\n");
-    int rc = guest_bootstrap_prepare(&g, elf_path, false, elf_path, sysroot,
-                                      guest_argc, guest_argv, environ,
+    int rc = guest_bootstrap_prepare(&g, elf_path, false, guest_elf_path, sysroot,
+                                      guest_argc, guest_argv,
+                                      guest_envp ? const_cast<char**>(guest_envp)
+                                                 : environ,
                                       shim_bin, shim_bin_len,
                                       cfg.verbose, &guest_initialized, &boot);
     free_cstrings(guest_argv, guest_argc);
+    free_cstrings(guest_envp, static_cast<int>(guest_env_storage.size()));
 
     if (rc < 0) {
         if (guest_initialized) guest_destroy(&g);

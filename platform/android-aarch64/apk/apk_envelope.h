@@ -7,6 +7,13 @@
 
 namespace muplar::runtime::apk {
 
+enum class ApkRuntimeKind {
+    Empty,
+    NativeOnly,
+    JavaOnly,
+    Mixed,
+};
+
 struct ApkLaunchConfig {
     std::filesystem::path apk_path;
     std::optional<std::string> lib_name;
@@ -26,6 +33,19 @@ struct ApkLaunchResult {
     std::vector<std::string> extracted_assets;
 };
 
+struct ApkClassification {
+    std::filesystem::path apk_path;
+    ApkRuntimeKind runtime_kind = ApkRuntimeKind::Empty;
+    bool has_manifest = false;
+    std::optional<std::string> manifest_lib;
+    std::optional<std::string> manifest_package;
+    std::vector<std::string> arm64_libs;
+    std::vector<std::string> dex_files;
+    std::vector<std::string> asset_entries;
+};
+
+std::string to_string(ApkRuntimeKind kind);
+ApkClassification classify_apk(const std::filesystem::path& apk_path);
 ApkLaunchResult prepare_apk_launch(const ApkLaunchConfig& config);
 
 } // namespace muplar::runtime::apk

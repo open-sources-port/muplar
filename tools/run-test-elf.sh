@@ -82,6 +82,17 @@ fi
 echo "Building APK JNI-only test done."
 
 echo "========================================="
+echo "Building Java-only APK classification test..."
+export scriptToRun=$ROOT_DIR/tests/assets/apk/create-java-only-apk.sh
+sh ${scriptToRun}
+returnCode=$?
+if [ "$returnCode" -ne 0 ]; then
+    echo "Building Java-only APK classification test error."
+  exit 1
+fi
+echo "Building Java-only APK classification test done."
+
+echo "========================================="
 echo "Building APK unsupported import trap test..."
 export scriptToRun=$ROOT_DIR/tests/assets/apk/create-native-unsupported-import-apk.sh
 sh ${scriptToRun}
@@ -380,6 +391,67 @@ if ! grep -q "status: launch-ok" "$SCAN_LOG"; then
 fi
 if ! grep -q "No missing APK-local libraries or unresolved direct imports found." "$SCAN_REPORT"; then
     echo "Compatibility scan report did not show a clean JNI-only APK backlog."
+    exit 1
+fi
+
+ART_SYSROOT_LOG="$ROOT_DIR/build/android-art-sysroot-check.log"
+echo "========================\nRunning Android ART sysroot inventory check (expected incomplete)..."
+"$ROOT_DIR/tools/check-android-art-sysroot.sh" --sysroot "$ROOT_DIR/build/sysroot" > "$ART_SYSROOT_LOG" 2>&1
+artCheckCode=$?
+cat "$ART_SYSROOT_LOG"
+if [ "$artCheckCode" -eq 0 ]; then
+    echo "Generated test sysroot unexpectedly has a complete ART runtime."
+    exit 1
+fi
+if ! grep -q "status: art-sysroot-incomplete" "$ART_SYSROOT_LOG"; then
+    echo "ART sysroot check did not report the expected incomplete status."
+    exit 1
+fi
+if ! grep -q "app_process64" "$ART_SYSROOT_LOG"; then
+    echo "ART sysroot check did not report the missing ART executable."
+    exit 1
+fi
+
+"$ROOT_DIR/tools/run-apk-compat-scan.sh" --report "$SCAN_REPORT" "$SYSROOT_TMP/javaonlytest.apk" > "$SCAN_LOG" 2>&1
+scanCode=$?
+cat "$SCAN_LOG"
+if [ "$scanCode" -eq 0 ]; then
+    echo "Compatibility scan unexpectedly passed Java-only APK."
+    exit 1
+fi
+if ! grep -q "status: java-runtime-required" "$SCAN_LOG"; then
+    echo "Compatibility scan did not classify Java-only APK correctly."
+    exit 1
+fi
+if ! grep -q "Java/ART Runtime Required" "$SCAN_REPORT"; then
+    echo "Compatibility scan report did not include the Java/ART backlog."
+    exit 1
+fi
+if ! grep -q "app_process64" "$SCAN_REPORT"; then
+    echo "Compatibility scan report did not include missing ART executable."
+    exit 1
+fi
+
+EXTERNAL_JAVA_APK="$ROOT_DIR/build/javaonlytest-external.apk"
+cp "$SYSROOT_TMP/javaonlytest.apk" "$EXTERNAL_JAVA_APK"
+"$ROOT_DIR/tools/run-apk-compat-scan.sh" --report "$SCAN_REPORT" "$EXTERNAL_JAVA_APK" > "$SCAN_LOG" 2>&1
+scanCode=$?
+cat "$SCAN_LOG"
+if [ "$scanCode" -eq 0 ]; then
+    echo "Compatibility scan unexpectedly passed external Java-only APK."
+    exit 1
+fi
+if ! grep -q "status: java-runtime-required" "$SCAN_LOG"; then
+    echo "Compatibility scan did not classify external Java-only APK correctly."
+    exit 1
+fi
+externalJavaLog="$(sed -n 's/^log: //p' "$SCAN_LOG" | head -1)"
+if [ -z "$externalJavaLog" ] || ! grep -q "staged APK for guest path" "$externalJavaLog"; then
+    echo "External Java-only APK was not staged into the guest sysroot."
+    exit 1
+fi
+if ! grep -q "guest apk=/data/local/tmp/muplar/apks/" "$externalJavaLog"; then
+    echo "External Java-only APK did not get a guest-visible APK path."
     exit 1
 fi
 
