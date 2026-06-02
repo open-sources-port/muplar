@@ -6,13 +6,12 @@
 // cast the AArch64 entrypoint to a C function pointer and jumped to it
 // directly.  That crashed on the first Linux syscall.
 //
-// Now main() uses GuestRunner, which wraps the elfuse Hypervisor.framework
-// pipeline: ELF load → guest memory init → stack build → vCPU create →
-// syscall-translated run loop.
+// Now main() parses CLI flags into a platform launch config and delegates to a
+// runtime implementation. Android ARM64 currently wraps the elfuse
+// Hypervisor.framework pipeline; Linux and Wine runtimes can plug in beside it.
 
 #include <iostream>
 #include <algorithm>
-#include <cctype>
 #include <filesystem>
 #include <iomanip>
 #include <optional>
@@ -20,12 +19,9 @@
 #include <string>
 #include <vector>
 
-#include "apk_envelope.h"
+#include "android_aarch64_runtime.h"
+#include "platform_runtime.h"
 #include "prefix.h"
-#include "guest_runner.h"   // NEW: replaces ExecutionContext
-
-// Keep ElfLoader available for inspection/debug builds
-#include "elf_loader.h"
 
 static void print_usage(const char* prog)
 {
@@ -51,14 +47,6 @@ static void print_usage(const char* prog)
               << "       " << prog << " prefix clone SRC_NAME|PATH DST_NAME"
               << " [--root PATH] [--replace]\n"
               << "       " << prog << " prefix delete NAME|PATH --yes\n";
-}
-
-static std::string lower_ext(const std::string& path)
-{
-    std::string ext = std::filesystem::path(path).extension().string();
-    for (char& c : ext)
-        c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
-    return ext;
 }
 
 static std::string prefix_kind_string(
@@ -384,50 +372,48 @@ int main(int argc, char** argv)
     // -----------------------------------------------------------------------
     // Parse muplar-level flags (before the ELF path)
     // -----------------------------------------------------------------------
-    muplar::runtime::elf::GuestRunnerConfig cfg;
+    muplar::runtime::PlatformLaunchConfig launch_cfg;
     int arg_start = 1;
-    bool apk_mode = false;
-    std::optional<std::string> apk_lib_name;
     std::optional<std::string> prefix_spec;
     std::optional<muplar::runtime::prefix::PrefixLayout> active_prefix;
-    std::filesystem::path apk_extract_dir;
 
     while (arg_start < argc && argv[arg_start][0] == '-') {
         std::string flag = argv[arg_start];
 
         if (flag == "--verbose" || flag == "-v") {
-            cfg.verbose = true;
+            launch_cfg.verbose = true;
             ++arg_start;
         } else if (flag == "--apk") {
-            apk_mode = true;
+            launch_cfg.apk_mode = true;
             ++arg_start;
         } else if ((flag == "--apk-lib") && arg_start + 1 < argc) {
-            apk_mode = true;
-            apk_lib_name = argv[arg_start + 1];
+            launch_cfg.apk_mode = true;
+            launch_cfg.apk_lib_name = argv[arg_start + 1];
             arg_start += 2;
         } else if ((flag == "--apk-extract-dir") && arg_start + 1 < argc) {
-            apk_mode = true;
-            apk_extract_dir = argv[arg_start + 1];
+            launch_cfg.apk_mode = true;
+            launch_cfg.apk_extract_dir = argv[arg_start + 1];
             arg_start += 2;
         } else if ((flag == "--sysroot") && arg_start + 1 < argc) {
-            cfg.sysroot = argv[arg_start + 1];
+            launch_cfg.sysroot = argv[arg_start + 1];
             arg_start  += 2;
         } else if ((flag == "--prefix") && arg_start + 1 < argc) {
             prefix_spec = argv[arg_start + 1];
             arg_start += 2;
         } else if (flag == "--native-activity") {
-            cfg.native_activity = true;
+            launch_cfg.native_activity = true;
             ++arg_start;
         } else if (flag == "--strict-direct-imports") {
-            cfg.strict_direct_imports = true;
+            launch_cfg.strict_direct_imports = true;
             ++arg_start;
         } else if (flag == "--host-window") {
-            cfg.host_window = true;
+            launch_cfg.host_window = true;
             ++arg_start;
         } else if ((flag == "--host-window-ms") && arg_start + 1 < argc) {
-            cfg.host_window = true;
+            launch_cfg.host_window = true;
             try {
-                cfg.host_window_linger_ms = std::stoi(argv[arg_start + 1], nullptr, 0);
+                launch_cfg.host_window_linger_ms =
+                    std::stoi(argv[arg_start + 1], nullptr, 0);
             } catch (const std::exception&) {
                 std::cerr << "Invalid --host-window-ms value: "
                           << argv[arg_start + 1] << "\n";
@@ -435,23 +421,23 @@ int main(int argc, char** argv)
             }
             arg_start += 2;
         } else if ((flag == "--jni-call") && arg_start + 3 < argc) {
-            cfg.jni_call.enabled = true;
-            cfg.jni_call.class_name  = argv[arg_start + 1];
-            cfg.jni_call.method_name = argv[arg_start + 2];
-            cfg.jni_call.signature   = argv[arg_start + 3];
+            launch_cfg.jni_call.enabled = true;
+            launch_cfg.jni_call.class_name = argv[arg_start + 1];
+            launch_cfg.jni_call.method_name = argv[arg_start + 2];
+            launch_cfg.jni_call.signature = argv[arg_start + 3];
             arg_start += 4;
         } else if (flag == "--jni-static") {
-            cfg.jni_call.receiver_explicit = true;
-            cfg.jni_call.receiver_static = true;
+            launch_cfg.jni_call.receiver_explicit = true;
+            launch_cfg.jni_call.receiver_static = true;
             ++arg_start;
         } else if (flag == "--jni-instance") {
-            cfg.jni_call.receiver_explicit = true;
-            cfg.jni_call.receiver_static = false;
+            launch_cfg.jni_call.receiver_explicit = true;
+            launch_cfg.jni_call.receiver_static = false;
             ++arg_start;
         } else if ((flag == "--jni-int" || flag == "--jni-arg") &&
                    arg_start + 1 < argc) {
             try {
-                cfg.jni_call.int_args.push_back(
+                launch_cfg.jni_call.int_args.push_back(
                     std::stoll(argv[arg_start + 1], nullptr, 0));
             } catch (const std::exception&) {
                 std::cerr << "Invalid --jni-int value: "
@@ -474,19 +460,19 @@ int main(int argc, char** argv)
         return 1;
     }
 
-    // -----------------------------------------------------------------------
-    // Build the guest config
-    // -----------------------------------------------------------------------
-    std::string input_path = argv[arg_start];
-    cfg.elf_path = input_path;
-    cfg.verbose = true;
+    launch_cfg.input_path = argv[arg_start];
+    launch_cfg.verbose = true;
 
     if (prefix_spec) {
         try {
             active_prefix = muplar::runtime::prefix::open_prefix(
-                *prefix_spec, cfg.sysroot, true);
-            if (cfg.sysroot.empty() && !active_prefix->runtime_sysroot.empty())
-                cfg.sysroot = active_prefix->runtime_sysroot.string();
+                *prefix_spec, launch_cfg.sysroot, true);
+            if (launch_cfg.sysroot.empty() &&
+                !active_prefix->runtime_sysroot.empty()) {
+                launch_cfg.sysroot =
+                    active_prefix->runtime_sysroot.string();
+            }
+            launch_cfg.active_prefix = active_prefix;
             std::string prefix_kind =
                 muplar::runtime::prefix::to_string(active_prefix->kind);
             std::string guest_arch =
@@ -507,88 +493,13 @@ int main(int argc, char** argv)
         }
     }
 
-    if (apk_mode || lower_ext(input_path) == ".apk") {
-        try {
-            if (active_prefix &&
-                active_prefix->kind !=
-                    muplar::runtime::prefix::PrefixKind::Android) {
-                std::cerr << "APK launch requires an android prefix; got kind="
-                          << muplar::runtime::prefix::to_string(
-                                 active_prefix->kind)
-                          << "\n";
-                return 1;
-            }
-            muplar::runtime::apk::ApkLaunchConfig apk_cfg;
-            apk_cfg.apk_path = input_path;
-            apk_cfg.lib_name = apk_lib_name;
-            apk_cfg.output_dir = apk_extract_dir;
-            if (active_prefix)
-                apk_cfg.output_base_dir = active_prefix->apk_cache_dir;
-
-            auto apk = muplar::runtime::apk::prepare_apk_launch(apk_cfg);
-            cfg.elf_path = apk.so_path.string();
-            cfg.native_activity = true;
-            cfg.force_android_so = true;
-            cfg.native_lib_search_dirs.push_back(
-                (apk.extract_dir / "lib" / "arm64-v8a").string());
-            cfg.apk_assets_dir = apk.assets_dir.string();
-            cfg.package_code_path = apk.apk_path.string();
-            if (apk.manifest_package)
-                cfg.package_name = *apk.manifest_package;
-
-            std::cerr << "[APK] extracted " << apk.extracted_libs.size()
-                      << " arm64-v8a lib(s) to "
-                      << apk.extract_dir.string() << "\n";
-            if (!apk.extracted_assets.empty()) {
-                std::cerr << "[APK] extracted " << apk.extracted_assets.size()
-                          << " asset(s) to "
-                          << apk.assets_dir.string() << "\n";
-            }
-            if (apk.manifest_lib) {
-                std::cerr << "[APK] manifest lib_name="
-                          << *apk.manifest_lib << "\n";
-            }
-            if (apk.manifest_package) {
-                std::cerr << "[APK] manifest package="
-                          << *apk.manifest_package << "\n";
-            }
-            std::cerr << "[APK] selected lib " << apk.selected_lib
-                      << ".so -> " << cfg.elf_path << "\n";
-        } catch (const std::exception& e) {
-            std::cerr << "APK error: " << e.what() << "\n";
-            return 1;
-        }
-    }
-
-    // argv[0] inside the guest = the executable path; followed by user args.
-    cfg.argv.push_back(cfg.elf_path);
     for (int i = arg_start + 1; i < argc; ++i) {
-        cfg.argv.push_back(argv[i]);
+        launch_cfg.guest_args.push_back(argv[i]);
     }
 
-    // -----------------------------------------------------------------------
-    // Optional: use ElfLoader to print info before running (debug aid)
-    // -----------------------------------------------------------------------
     try {
-        muplar::runtime::elf::ElfLoader loader;
-        auto image = loader.load(cfg.elf_path);
-
-        std::cout << "ELF entry   : 0x" << std::hex << image.entry << "\n"
-                  << "Load range  : 0x" << image.load_min
-                  << " – 0x"            << image.load_max << "\n"
-                  << "Segments    : " << std::dec << image.segments.size() << "\n";
-    } catch (const std::exception& e) {
-        std::cerr << "ELF inspect error: " << e.what() << "\n";
-        // Non-fatal — GuestRunner will re-validate internally via elfuse
-    }
-
-    // -----------------------------------------------------------------------
-    // Run through elfuse Hypervisor.framework pipeline
-    // -----------------------------------------------------------------------
-    try {
-        muplar::runtime::elf::GuestRunner runner;
-        return runner.run(cfg);
-
+        muplar::runtime::android::AndroidAarch64Runtime runtime;
+        return runtime.run(launch_cfg);
     } catch (const std::exception& e) {
         std::cerr << "Fatal: " << e.what() << "\n";
         return 1;

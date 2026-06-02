@@ -2,6 +2,7 @@
 
 # ── Source files ──────────────────────────────────────────────────────────────
 set(MUPLAR_ANDROID_SOURCES
+    android_aarch64_runtime.cpp
     android_runtime.cpp
 )
 
@@ -25,6 +26,7 @@ target_include_directories(muplar_runtime_android
         ${CMAKE_SOURCE_DIR}/platform/android-aarch64/android
         ${CMAKE_SOURCE_DIR}/platform/android-aarch64/elf
         ${CMAKE_SOURCE_DIR}/platform/android-aarch64/jni
+        ${CMAKE_SOURCE_DIR}/platform/commons/runtime
     PRIVATE
         ${CMAKE_SOURCE_DIR}/third_party/elfuse/src
         ${CMAKE_SOURCE_DIR}/third_party/elfuse/build
@@ -35,8 +37,10 @@ target_include_directories(muplar_runtime_android
 target_link_libraries(muplar_runtime_android
     PUBLIC
         muplar_runtime_memory
+        muplar_runtime_platform
         muplar_runtime_elf
         muplar_runtime_jni
+        muplar_runtime_apk
     PRIVATE
         # ANGLE dylibs — loaded at runtime via the RPATH below.
         # We link them so the host process has libEGL/libGLESv2 symbols
