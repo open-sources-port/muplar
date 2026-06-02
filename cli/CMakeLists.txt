@@ -17,16 +17,18 @@ target_link_libraries(mup
     muplar_runtime_jni
     muplar_runtime_android
     muplar_runtime_apk
+    muplar_runtime_prefix
 )
 
 target_include_directories(mup PUBLIC
     ${CMAKE_SOURCE_DIR}
     ${CMAKE_SOURCE_DIR}/platform/android/bionic/include
     ${CMAKE_SOURCE_DIR}/runtime
-    ${CMAKE_SOURCE_DIR}/runtime/elf
-    ${CMAKE_SOURCE_DIR}/runtime/memory
-    ${CMAKE_SOURCE_DIR}/runtime/jni
-    ${CMAKE_SOURCE_DIR}/runtime/apk
+    ${CMAKE_SOURCE_DIR}/runtime/platform/commons/memory
+    ${CMAKE_SOURCE_DIR}/runtime/platform/commons/prefix
+    ${CMAKE_SOURCE_DIR}/runtime/platform/android-aarch64/elf
+    ${CMAKE_SOURCE_DIR}/runtime/platform/android-aarch64/jni
+    ${CMAKE_SOURCE_DIR}/runtime/platform/android-aarch64/apk
     ${CMAKE_SOURCE_DIR}/third_party/angle-include
 )
 

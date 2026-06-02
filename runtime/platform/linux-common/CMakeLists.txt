@@ -1,0 +1,1 @@
+add_library(muplar_runtime_linux_common INTERFACE)

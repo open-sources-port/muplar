@@ -6,11 +6,14 @@ ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 SCRIPT_NAME="$0"
 MUP="$ROOT_DIR/build/bin/mup"
 SYSROOT="$ROOT_DIR/build/sysroot"
+PREFIX=""
 LOG_DIR="$ROOT_DIR/build/apk-compat-scan"
 REPORT="$LOG_DIR/report.md"
 REPORT_EXPLICIT=false
 APK_LIB_NAME=""
 MUP_ENTRY_ARGS=()
+HV_RETRIES="${MUPLAR_HV_RETRIES:-2}"
+HV_RETRY_SLEEP="${MUPLAR_HV_RETRY_SLEEP:-5}"
 APKS=()
 
 guess_jni_call_parts() {
@@ -37,7 +40,7 @@ guess_jni_call_parts() {
 }
 
 usage() {
-    echo "Usage: $SCRIPT_NAME [--mup PATH] [--sysroot PATH] [--log-dir PATH] [--report PATH] [--apk-lib NAME] [--jni-call CLASS METHOD SIGNATURE] [--jni-int VALUE ...] APK..."
+    echo "Usage: $SCRIPT_NAME [--mup PATH] [--sysroot PATH] [--prefix NAME|PATH] [--log-dir PATH] [--report PATH] [--apk-lib NAME] [--jni-call CLASS METHOD SIGNATURE] [--jni-static|--jni-instance] [--jni-int VALUE ...] [--hv-retries N] [--hv-retry-sleep SECONDS] APK..."
     echo
     echo "Runs each APK with --strict-direct-imports and summarizes native"
     echo "dependency/import gaps before broader app startup debugging."
@@ -48,6 +51,9 @@ usage() {
     echo
     echo "--jni-call and --jni-int are passed through to mup for JNI-only APK"
     echo "libraries that have exported native methods but no default entrypoint."
+    echo
+    echo "--hv-retries and --hv-retry-sleep handle transient macOS"
+    echo "Hypervisor.framework hv_vm_create failures during large scans."
 }
 
 while [ "$#" -gt 0 ]; do
@@ -66,6 +72,14 @@ while [ "$#" -gt 0 ]; do
                 exit 2
             fi
             SYSROOT="$2"
+            shift 2
+            ;;
+        --prefix)
+            if [ "$#" -lt 2 ]; then
+                echo "--prefix requires a name or path" >&2
+                exit 2
+            fi
+            PREFIX="$2"
             shift 2
             ;;
         --log-dir)
@@ -104,12 +118,32 @@ while [ "$#" -gt 0 ]; do
             MUP_ENTRY_ARGS+=(--jni-call "$2" "$3" "$4")
             shift 4
             ;;
+        --jni-static|--jni-instance)
+            MUP_ENTRY_ARGS+=("$1")
+            shift
+            ;;
         --jni-int|--jni-arg)
             if [ "$#" -lt 2 ]; then
                 echo "$1 requires a value" >&2
                 exit 2
             fi
             MUP_ENTRY_ARGS+=("$1" "$2")
+            shift 2
+            ;;
+        --hv-retries)
+            if [ "$#" -lt 2 ]; then
+                echo "--hv-retries requires a number" >&2
+                exit 2
+            fi
+            HV_RETRIES="$2"
+            shift 2
+            ;;
+        --hv-retry-sleep)
+            if [ "$#" -lt 2 ]; then
+                echo "--hv-retry-sleep requires seconds" >&2
+                exit 2
+            fi
+            HV_RETRY_SLEEP="$2"
             shift 2
             ;;
         -h|--help)
@@ -150,6 +184,16 @@ if [ ! -d "$SYSROOT" ]; then
     exit 2
 fi
 
+if ! [[ "$HV_RETRIES" == <-> ]]; then
+    echo "--hv-retries must be a non-negative integer" >&2
+    exit 2
+fi
+
+if ! [[ "$HV_RETRY_SLEEP" == <-> ]]; then
+    echo "--hv-retry-sleep must be a non-negative integer" >&2
+    exit 2
+fi
+
 LLVM_NM=""
 if [ -n "${ANDROID_NDK_HOME:-}" ] &&
    [ -x "$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/darwin-x86_64/bin/llvm-nm" ]; then
@@ -186,6 +230,28 @@ trap 'rm -f "$SUMMARY_TMP" "$MISSING_TMP" "$UNRESOLVED_TMP" "$CAPS_TMP" "$LIBSEL
 : > "$ENTRY_TMP"
 : > "$JNI_EXPORT_TMP"
 
+run_mup_with_hv_retry() {
+    local log="$1"
+    shift
+
+    local attempt=0
+    local rc=0
+    while true; do
+        "$@" > "$log" 2>&1
+        rc=$?
+        if ! grep -q "hv_vm_create failed" "$log"; then
+            return "$rc"
+        fi
+        if [ "$attempt" -ge "$HV_RETRIES" ]; then
+            return "$rc"
+        fi
+
+        attempt=$((attempt + 1))
+        echo "host HV unavailable; retrying $attempt/$HV_RETRIES after ${HV_RETRY_SLEEP}s" >&2
+        sleep "$HV_RETRY_SLEEP"
+    done
+}
+
 overall=0
 for apk in "${APKS[@]}"; do
     if [ ! -f "$apk" ]; then
@@ -203,12 +269,15 @@ for apk in "${APKS[@]}"; do
     log="$LOG_DIR/${slug:r}-$sum.log"
 
     cmd=("$MUP" --strict-direct-imports --sysroot "$SYSROOT")
+    if [ -n "$PREFIX" ]; then
+        cmd+=(--prefix "$PREFIX")
+    fi
     if [ -n "$APK_LIB_NAME" ]; then
         cmd+=(--apk-lib "$APK_LIB_NAME")
     fi
     cmd+=("${MUP_ENTRY_ARGS[@]}")
     cmd+=("$apk")
-    "${cmd[@]}" > "$log" 2>&1
+    run_mup_with_hv_retry "$log" "${cmd[@]}"
     rc=$?
 
     lib_selection_required="$(
@@ -238,6 +307,8 @@ for apk in "${APKS[@]}"; do
         scan_status="apk-lib-required"
     elif [ -n "$entrypoint_required" ]; then
         scan_status="entrypoint-required"
+    elif grep -q "hv_vm_create failed" "$log"; then
+        scan_status="host-hv-unavailable"
     elif [ -n "$missing$unresolved$capped" ] || grep -q "strict direct import mode" "$log"; then
         scan_status="native-deps-incomplete"
     else
@@ -255,6 +326,11 @@ for apk in "${APKS[@]}"; do
         while IFS= read -r available; do
             [ -n "$available" ] && printf "%s\t%s\n" "$available" "$apk" >> "$LIBSEL_TMP"
         done <<< "$lib_selection_required"
+    fi
+
+    if [ "$scan_status" = "host-hv-unavailable" ]; then
+        echo "host HV unavailable:"
+        echo "  hv_vm_create failed after $((HV_RETRIES + 1)) attempt(s); rerun later or increase --hv-retries"
     fi
 
     if [ -n "$entrypoint_required" ]; then
@@ -281,16 +357,22 @@ for apk in "${APKS[@]}"; do
                         if [ -n "$PYTHON3" ] && [ -x "$DEX_SIG_TOOL" ] &&
                            [ -n "$class_guess" ] && [ -n "$method_guess" ]; then
                             signatures="$(
-                                "$PYTHON3" "$DEX_SIG_TOOL" "$apk" \
+                                "$PYTHON3" "$DEX_SIG_TOOL" --with-flags "$apk" \
                                     "$class_guess" "$method_guess" 2>/dev/null ||
                                     true
                             )"
                         fi
 
                         if [ -n "$signatures" ]; then
-                            while IFS= read -r signature; do
+                            while IFS=$'\t' read -r signature receiver_kind; do
                                 [ -n "$signature" ] || continue
-                                echo "  $jni_symbol -> --jni-call $class_guess $method_guess '$signature'"
+                                receiver_flag=""
+                                if [ "$receiver_kind" = "static" ]; then
+                                    receiver_flag=" --jni-static"
+                                elif [ "$receiver_kind" = "instance" ]; then
+                                    receiver_flag=" --jni-instance"
+                                fi
+                                echo "  $jni_symbol -> --jni-call $class_guess $method_guess '$signature'$receiver_flag"
                                 printf "%s\t%s\t%s\t%s\t%s\n" \
                                     "$jni_symbol" "$class_guess" \
                                     "$method_guess" "$signature" "$apk" \
