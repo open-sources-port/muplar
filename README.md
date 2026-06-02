@@ -90,6 +90,39 @@ APK compatibility checks can use `mup --strict-direct-imports --sysroot build/sy
 to fail before launch when a direct native import is still unsupported.  Omit the flag for
 exploratory runs that install trap stubs and report only if the guest actually calls one.
 
+Muplar also supports Wine-style prefix metadata for isolated Android
+environments. A prefix owns its package cache, runtime selection metadata, and a
+reserved `rootfs/` tree while the shared Android runtime still comes from
+`--sysroot`:
+
+```bash
+build/bin/mup prefix create default --kind android --arch aarch64 --sysroot build/sysroot
+build/bin/mup prefix create android-ext --root ~/Muplar/android-ext --kind android --arch aarch64 --sysroot build/sysroot
+build/bin/mup prefix list
+build/bin/mup prefix info default
+build/bin/mup prefix clone default android-test
+build/bin/mup prefix clone default android-external --root ~/Muplar/android-external
+build/bin/mup prefix delete android-test --yes
+build/bin/mup --prefix default --sysroot build/sysroot path/to/app.apk
+```
+
+On macOS, the native desktop manager is available as an AppKit bundle:
+
+```bash
+tools/run-instance-manager.sh
+```
+
+When `--prefix` is set, APK extraction caches are written under the prefix and
+`prefix.toml` records the intended runtime tuple. The visible instance list is
+managed by `~/.muplar/instances.json`, so prefixes can live outside
+`~/.muplar/prefixes` and arbitrary folders are not treated as instances. Prefix
+metadata is generic:
+Android currently runs as `kind=android`, `arch=aarch64`, `runner=elfuse`, while
+future Linux and Wine prefixes can use the same layout with their own Muplar-side
+runtime policies. The desktop manager currently shows instances as stopped until
+a long-lived `muplard` session layer owns real app lifetime. The elfuse
+third-party runner remains prefix-agnostic.
+
 For batch APK triage, use:
 
 ```bash

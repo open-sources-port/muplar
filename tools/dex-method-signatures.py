@@ -5,7 +5,7 @@ import zipfile
 
 
 def usage():
-    print("Usage: dex-method-signatures.py APK CLASS METHOD", file=sys.stderr)
+    print("Usage: dex-method-signatures.py [--with-flags] APK CLASS METHOD", file=sys.stderr)
     print("CLASS uses slash form, for example com/example/Foo.", file=sys.stderr)
 
 
@@ -42,6 +42,8 @@ def parse_dex_methods(data):
     proto_ids_off = u32(0x4C)
     method_ids_size = u32(0x58)
     method_ids_off = u32(0x5C)
+    class_defs_size = u32(0x60)
+    class_defs_off = u32(0x64)
 
     strings = []
     for i in range(string_ids_size):
@@ -68,12 +70,42 @@ def parse_dex_methods(data):
             params = "".join(param_types)
         protos.append(f"({params}){types[return_type_idx]}")
 
+    method_flags = {}
+    for i in range(class_defs_size):
+        base = class_defs_off + i * 32
+        class_data_off = u32(base + 24)
+        if not class_data_off:
+            continue
+
+        offset = class_data_off
+        static_fields_size, offset = read_uleb128(data, offset)
+        instance_fields_size, offset = read_uleb128(data, offset)
+        direct_methods_size, offset = read_uleb128(data, offset)
+        virtual_methods_size, offset = read_uleb128(data, offset)
+
+        for _ in range(static_fields_size + instance_fields_size):
+            _, offset = read_uleb128(data, offset)
+            _, offset = read_uleb128(data, offset)
+
+        method_idx = 0
+        for _ in range(direct_methods_size + virtual_methods_size):
+            method_idx_diff, offset = read_uleb128(data, offset)
+            access_flags, offset = read_uleb128(data, offset)
+            _, offset = read_uleb128(data, offset)
+            method_idx += method_idx_diff
+            method_flags[method_idx] = access_flags
+
     methods = []
     for i in range(method_ids_size):
         base = method_ids_off + i * 8
         class_idx, proto_idx = struct.unpack_from("<HH", data, base)
         name_idx = u32(base + 4)
-        methods.append((types[class_idx], strings[name_idx], protos[proto_idx]))
+        methods.append((
+            types[class_idx],
+            strings[name_idx],
+            protos[proto_idx],
+            method_flags.get(i, 0),
+        ))
     return methods
 
 
@@ -85,13 +117,19 @@ def descriptor_for_class(class_name):
 
 
 def main(argv):
-    if len(argv) != 4:
+    with_flags = False
+    args = argv[1:]
+    if args and args[0] == "--with-flags":
+        with_flags = True
+        args = args[1:]
+
+    if len(args) != 3:
         usage()
         return 2
 
-    apk, class_name, method_name = argv[1:4]
+    apk, class_name, method_name = args
     target_class = descriptor_for_class(class_name)
-    found = set()
+    found = {}
 
     with zipfile.ZipFile(apk) as zf:
         dex_names = sorted(
@@ -101,12 +139,17 @@ def main(argv):
         )
         for dex_name in dex_names:
             methods = parse_dex_methods(zf.read(dex_name))
-            for cls, name, sig in methods:
+            for cls, name, sig, access_flags in methods:
                 if cls == target_class and name == method_name:
-                    found.add(sig)
+                    flags = found.get(sig, 0)
+                    found[sig] = flags | access_flags
 
-    for sig in sorted(found):
-        print(sig)
+    for sig, access_flags in sorted(found.items()):
+        if with_flags:
+            kind = "static" if access_flags & 0x0008 else "instance"
+            print(f"{sig}\t{kind}")
+        else:
+            print(sig)
     return 0 if found else 1
 
 

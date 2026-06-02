@@ -6,15 +6,18 @@ ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 SCRIPT_NAME="$0"
 MUP="$ROOT_DIR/build/bin/mup"
 SYSROOT="$ROOT_DIR/build/sysroot"
+PREFIX=""
 LOG_DIR="$ROOT_DIR/build/apk-native-surface-scan"
 REPORT="$LOG_DIR/report.md"
 REPORT_EXPLICIT=false
 MAX_JNI_METHODS=3
 PROBE_JNI=true
+HV_RETRIES="${MUPLAR_HV_RETRIES:-2}"
+HV_RETRY_SLEEP="${MUPLAR_HV_RETRY_SLEEP:-5}"
 APKS=()
 
 usage() {
-    echo "Usage: $SCRIPT_NAME [--mup PATH] [--sysroot PATH] [--log-dir PATH] [--report PATH] [--max-jni-methods N] [--no-jni-probe] APK..."
+    echo "Usage: $SCRIPT_NAME [--mup PATH] [--sysroot PATH] [--prefix NAME|PATH] [--log-dir PATH] [--report PATH] [--max-jni-methods N] [--no-jni-probe] [--hv-retries N] [--hv-retry-sleep SECONDS] APK..."
     echo
     echo "Enumerates each APK's arm64 native libraries, runs each selected library"
     echo "through the compatibility scanner, and probes exported JNI methods when"
@@ -37,6 +40,14 @@ while [ "$#" -gt 0 ]; do
                 exit 2
             fi
             SYSROOT="$2"
+            shift 2
+            ;;
+        --prefix)
+            if [ "$#" -lt 2 ]; then
+                echo "--prefix requires a name or path" >&2
+                exit 2
+            fi
+            PREFIX="$2"
             shift 2
             ;;
         --log-dir)
@@ -70,6 +81,22 @@ while [ "$#" -gt 0 ]; do
         --no-jni-probe)
             PROBE_JNI=false
             shift
+            ;;
+        --hv-retries)
+            if [ "$#" -lt 2 ]; then
+                echo "--hv-retries requires a number" >&2
+                exit 2
+            fi
+            HV_RETRIES="$2"
+            shift 2
+            ;;
+        --hv-retry-sleep)
+            if [ "$#" -lt 2 ]; then
+                echo "--hv-retry-sleep requires seconds" >&2
+                exit 2
+            fi
+            HV_RETRY_SLEEP="$2"
+            shift 2
             ;;
         -h|--help)
             usage
@@ -111,6 +138,16 @@ fi
 
 if ! [[ "$MAX_JNI_METHODS" == <-> ]]; then
     echo "--max-jni-methods must be a non-negative integer" >&2
+    exit 2
+fi
+
+if ! [[ "$HV_RETRIES" == <-> ]]; then
+    echo "--hv-retries must be a non-negative integer" >&2
+    exit 2
+fi
+
+if ! [[ "$HV_RETRY_SLEEP" == <-> ]]; then
+    echo "--hv-retry-sleep must be a non-negative integer" >&2
     exit 2
 fi
 
@@ -203,11 +240,19 @@ for apk in "${APKS[@]}"; do
         scan_report="$LOG_DIR/${apk_slug:r}-${lib_slug}.compat.md"
         compat_log_dir="$LOG_DIR/compat"
 
+        compat_prefix_args=()
+        if [ -n "$PREFIX" ]; then
+            compat_prefix_args=(--prefix "$PREFIX")
+        fi
+
         "$COMPAT_SCAN" \
             --mup "$MUP" \
             --sysroot "$SYSROOT" \
+            "${compat_prefix_args[@]}" \
             --log-dir "$compat_log_dir" \
             --report "$scan_report" \
+            --hv-retries "$HV_RETRIES" \
+            --hv-retry-sleep "$HV_RETRY_SLEEP" \
             --apk-lib "$lib_name" \
             "$apk" > "$scan_log" 2>&1
         scan_rc=$?
@@ -225,6 +270,7 @@ for apk in "${APKS[@]}"; do
 
         if [ "$lib_status" = "runtime-failed" ] ||
            [ "$lib_status" = "native-deps-incomplete" ] ||
+           [ "$lib_status" = "host-hv-unavailable" ] ||
            [ "$lib_status" = "scan-failed" ]; then
             overall=1
         fi
@@ -233,7 +279,22 @@ for apk in "${APKS[@]}"; do
            [ "$MAX_JNI_METHODS" -gt 0 ] &&
            [ "$lib_status" = "entrypoint-required" ]; then
             candidates="$(
-                sed -n "s/^  .* -> --jni-call \([^ ]*\) \([^ ]*\) '\([^']*\)'$/\1\t\2\t\3/p" "$scan_log"
+                awk '
+                    /^  .* -> --jni-call / {
+                        line = $0
+                        sub(/^  .* -> --jni-call /, "", line)
+                        split(line, parts, " ")
+                        class_name = parts[1]
+                        method_name = parts[2]
+                        sub(/^[^ ]+ [^ ]+ '\''/, "", line)
+                        signature = line
+                        sub(/'\''.*/, "", signature)
+                        receiver = "auto"
+                        if (line ~ /--jni-static/) receiver = "static"
+                        else if (line ~ /--jni-instance/) receiver = "instance"
+                        print class_name "\t" method_name "\t" signature "\t" receiver
+                    }
+                ' "$scan_log"
             )"
             if [ -z "$candidates" ]; then
                 printf "not-probed\t-\t%s\t%s\t-\t-\t-\t-\t-\t%s\n" \
@@ -242,7 +303,7 @@ for apk in "${APKS[@]}"; do
             fi
 
             probed=0
-            while IFS=$'\t' read -r class_name method_name signature; do
+            while IFS=$'\t' read -r class_name method_name signature receiver_kind; do
                 [ -n "$class_name" ] || continue
                 [ -n "$signature" ] || continue
                 if [ "$probed" -ge "$MAX_JNI_METHODS" ]; then
@@ -261,13 +322,23 @@ for apk in "${APKS[@]}"; do
                 probed=$((probed + 1))
                 method_log="$LOG_DIR/${apk_slug:r}-${lib_slug}-jni-${probed}.txt"
                 method_report="$LOG_DIR/${apk_slug:r}-${lib_slug}-jni-${probed}.md"
+                receiver_args=()
+                if [ "$receiver_kind" = "static" ]; then
+                    receiver_args+=(--jni-static)
+                elif [ "$receiver_kind" = "instance" ]; then
+                    receiver_args+=(--jni-instance)
+                fi
                 "$COMPAT_SCAN" \
                     --mup "$MUP" \
                     --sysroot "$SYSROOT" \
+                    "${compat_prefix_args[@]}" \
                     --log-dir "$compat_log_dir" \
                     --report "$method_report" \
+                    --hv-retries "$HV_RETRIES" \
+                    --hv-retry-sleep "$HV_RETRY_SLEEP" \
                     --apk-lib "$lib_name" \
                     --jni-call "$class_name" "$method_name" "$signature" \
+                    "${receiver_args[@]}" \
                     "$apk" > "$method_log" 2>&1
                 method_rc=$?
 
@@ -318,6 +389,7 @@ done
     fi
 
     printf "## Next Actions\n\n"
+    printf '%s\n' "- For libraries marked \`host-hv-unavailable\`, the host Hypervisor.framework VM could not be created even after retries; rerun later, increase \`--hv-retries\`, or reboot if it persists."
     printf '%s\n' "- For libraries marked \`native-deps-incomplete\`, inspect their compatibility logs for missing platform dependencies or direct imports."
     printf '%s\n' "- For JNI probes marked \`runtime-failed\`, inspect the method log; those are now real method-level failures instead of entrypoint selection gaps."
     printf '%s\n' "- Raise \`--max-jni-methods\` when you want broader JNI coverage for large libraries."

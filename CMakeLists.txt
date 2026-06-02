@@ -109,6 +109,7 @@ add_subdirectory(cli)
 # add_subdirectory(compositor)
 add_subdirectory(platform)
 add_subdirectory(runtime)
+add_subdirectory(apps)
 
 # Test
 add_subdirectory(tests/platform/android/bionic/smoke)
