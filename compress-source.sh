@@ -12,7 +12,7 @@ COMMON_FILES=(
   *.svg
   platform
   rependencies
-  roadmap
+  docs
   tests
   tools
   .gitmodules
