@@ -1,0 +1,29 @@
+{
+  "name": "android-arm64-api35",
+  "kind": "android",
+  "arch": "arm64",
+  "api": 35,
+  "cache_root_hint": "~/.muplar/sysroots/android-arm64/api-35",
+  "android_root_source": "local emulator/device pull or extracted Android runtime tree",
+  "required_android_root": [
+    "system/bin/app_process64",
+    "system/framework/framework.jar",
+    "system/lib64/libandroid_runtime.so",
+    "apex/com.android.art/javalib/core-oj.jar",
+    "apex/com.android.art/javalib/core-libart.jar",
+    "apex/com.android.art/lib64/libart.so"
+  ],
+  "optional_android_root": [
+    "apex/com.android.conscrypt/javalib/conscrypt.jar",
+    "apex/com.android.i18n/javalib/core-icu4j.jar",
+    "apex/com.android.art/javalib/okhttp.jar",
+    "apex/com.android.art/javalib/bouncycastle.jar",
+    "apex/com.android.art/javalib/apache-xml.jar"
+  ],
+  "ndk_runtime": [
+    "toolchains/llvm/prebuilt/*/sysroot/usr/lib/aarch64-linux-android/libc++_shared.so"
+  ],
+  "generated": [
+    "data/local/tmp/muplar/art/muplar-art-bootstrap.jar"
+  ]
+}

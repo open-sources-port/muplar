@@ -404,9 +404,96 @@ plain_manifest_attribute(const std::string& manifest,
 }
 
 std::optional<std::string>
+tag_attribute(const std::string& tag, const std::string& attr)
+{
+    size_t attr_pos = tag.find(attr);
+    if (attr_pos == std::string::npos)
+        return std::nullopt;
+    size_t eq = tag.find('=', attr_pos + attr.size());
+    if (eq == std::string::npos)
+        return std::nullopt;
+    size_t quote = tag.find_first_of("\"'", eq + 1);
+    if (quote == std::string::npos)
+        return std::nullopt;
+    char q = tag[quote];
+    size_t close = tag.find(q, quote + 1);
+    if (close == std::string::npos)
+        return std::nullopt;
+    return tag.substr(quote + 1, close - quote - 1);
+}
+
+std::string normalize_activity_name(const std::string& package_name,
+                                    std::string activity_name)
+{
+    if (activity_name.empty())
+        return activity_name;
+    if (!package_name.empty() && activity_name.front() == '.')
+        return package_name + activity_name;
+    if (!package_name.empty() &&
+        activity_name.find('.') == std::string::npos) {
+        return package_name + "." + activity_name;
+    }
+    return activity_name;
+}
+
+std::optional<std::string>
 infer_plain_manifest_package(const std::string& manifest)
 {
     return plain_manifest_attribute(manifest, "manifest", "package");
+}
+
+std::optional<std::string>
+infer_plain_manifest_launch_activity(const std::string& manifest,
+                                     const std::optional<std::string>& package_name)
+{
+    struct ActivityCandidate {
+        std::string name;
+        bool is_launcher = false;
+    };
+
+    std::vector<ActivityCandidate> candidates;
+    size_t pos = 0;
+    while (true) {
+        size_t activity_start = manifest.find("<activity", pos);
+        if (activity_start == std::string::npos)
+            break;
+        size_t open_end = manifest.find('>', activity_start);
+        if (open_end == std::string::npos)
+            break;
+
+        std::string tag = manifest.substr(activity_start, open_end - activity_start + 1);
+        std::optional<std::string> name =
+            tag_attribute(tag, "android:name");
+        if (!name)
+            name = tag_attribute(tag, "name");
+
+        size_t activity_end = manifest.find("</activity>", open_end);
+        size_t block_end = activity_end == std::string::npos
+            ? open_end
+            : activity_end + std::string("</activity>").size();
+        std::string block = manifest.substr(
+            activity_start, block_end - activity_start);
+
+        if (name) {
+            ActivityCandidate candidate;
+            candidate.name = normalize_activity_name(
+                package_name.value_or(std::string()), *name);
+            candidate.is_launcher =
+                block.find("android.intent.action.MAIN") != std::string::npos &&
+                block.find("android.intent.category.LAUNCHER") != std::string::npos;
+            candidates.push_back(std::move(candidate));
+        }
+
+        pos = block_end;
+    }
+
+    for (const auto& candidate : candidates) {
+        if (candidate.is_launcher)
+            return candidate.name;
+    }
+    if (!candidates.empty())
+        return candidates.front().name;
+    return std::nullopt;
 }
 
 std::optional<std::string>
@@ -490,6 +577,7 @@ infer_binary_manifest_package(const std::vector<uint8_t>& manifest)
 struct ManifestInfo {
     std::optional<std::string> lib_name;
     std::optional<std::string> package_name;
+    std::optional<std::string> launch_activity;
 };
 
 ManifestInfo infer_manifest_info(const std::vector<uint8_t>& manifest,
@@ -500,14 +588,18 @@ ManifestInfo infer_manifest_info(const std::vector<uint8_t>& manifest,
     if (first_nonspace != manifest.end() && *first_nonspace == '<') {
         std::string text(reinterpret_cast<const char*>(manifest.data()),
                          manifest.size());
+        auto package_name = infer_plain_manifest_package(text);
         return {
             infer_plain_manifest_lib(text, available_bases),
-            infer_plain_manifest_package(text)
+            package_name,
+            infer_plain_manifest_launch_activity(text, package_name)
         };
     }
+    auto package_name = infer_binary_manifest_package(manifest);
     return {
         infer_binary_manifest_lib(manifest, available_bases),
-        infer_binary_manifest_package(manifest)
+        package_name,
+        std::nullopt
     };
 }
 
@@ -566,6 +658,8 @@ ApkClassification classify_entries(const std::filesystem::path& apk_path,
         ManifestInfo manifest_info = infer_manifest_info(manifest, available_bases);
         classification.manifest_lib = manifest_info.lib_name;
         classification.manifest_package = manifest_info.package_name;
+        classification.manifest_launch_activity =
+            manifest_info.launch_activity;
     }
 
     std::sort(classification.arm64_libs.begin(),
@@ -646,6 +740,8 @@ ApkLaunchResult prepare_apk_launch(const ApkLaunchConfig& config)
     std::optional<std::string> manifest_lib = classification.manifest_lib;
     std::optional<std::string> manifest_package =
         classification.manifest_package;
+    std::optional<std::string> manifest_launch_activity =
+        classification.manifest_launch_activity;
 
     const ZipEntry* selected = nullptr;
     if (config.lib_name) {
@@ -700,6 +796,7 @@ ApkLaunchResult prepare_apk_launch(const ApkLaunchConfig& config)
     result.selected_lib = lib_base_name(selected->name);
     result.manifest_lib = manifest_lib;
     result.manifest_package = manifest_package;
+    result.manifest_launch_activity = manifest_launch_activity;
 
     for (const ZipEntry& lib : arm64_libs) {
         std::vector<uint8_t> bytes = extract_entry_data(apk, lib);

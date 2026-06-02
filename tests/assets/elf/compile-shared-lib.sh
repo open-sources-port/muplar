@@ -407,6 +407,10 @@ chmod +x "$ROOT_DIR/linker64/build-linker64.sh"
 "$ROOT_DIR/linker64/build-linker64.sh"
 
 echo "Building native aidl..."
-cp "$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/darwin-x86_64/sysroot/usr/lib/aarch64-linux-android/libc++_shared.so" \
-   "$SYSROOT_TMP/libc++_shared.so"
+if [ ! -f "$SYSROOT_TMP/libc++_shared.so" ]; then
+    "$ROOT_DIR/tools/prepare-android-sysroot.sh" \
+        --sysroot "$ROOT_DIR/build/sysroot" \
+        --no-android-root \
+        --no-art-bootstrap
+fi
 "$ROOT_DIR/tests/assets/apk/create-native-aidl-ndk-apk.sh"

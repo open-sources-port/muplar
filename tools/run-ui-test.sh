@@ -25,6 +25,18 @@ fi
 echo "Building the source code done."
 
 echo "========================================="
+echo "Preparing Android ARM64 sysroot inputs..."
+"$ROOT_DIR/tools/prepare-android-sysroot.sh" \
+    --sysroot "$ROOT_DIR/build/sysroot" \
+    --no-android-root
+returnCode=$?
+if [ "$returnCode" -ne 0 ]; then
+    echo "Preparing Android ARM64 sysroot inputs error."
+  exit 1
+fi
+echo "Preparing Android ARM64 sysroot inputs done."
+
+echo "========================================="
 echo "Building basic test binary..."
 export scriptToRun=$ROOT_DIR/tests/assets/elf/compile-basic.sh
 chmod +x ${scriptToRun}

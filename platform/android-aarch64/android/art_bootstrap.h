@@ -20,11 +20,15 @@ struct ArtBootstrapPlan {
     std::string guest_apk_path;
     std::filesystem::path sysroot;
     std::optional<std::string> package_name;
+    std::optional<std::string> launch_activity;
     std::vector<std::string> dex_files;
 
     std::filesystem::path app_process64;
     std::string app_process64_guest_path;
+    std::filesystem::path bootstrap_jar;
+    std::string bootstrap_jar_guest_path;
     std::filesystem::path framework_dir;
+    std::vector<std::filesystem::path> classpath;
     std::vector<std::filesystem::path> bootclasspath;
     std::vector<std::filesystem::path> required_native_libraries;
     std::vector<std::string> native_library_paths;

@@ -172,6 +172,19 @@ std::vector<GuestPathCandidates> bootclasspath_candidates()
     };
 }
 
+std::vector<GuestPathCandidates> classpath_candidates()
+{
+    return {
+        {
+            "muplar-art-bootstrap.jar",
+            true,
+            {
+                "/data/local/tmp/muplar/art/muplar-art-bootstrap.jar",
+            },
+        },
+    };
+}
+
 std::vector<GuestPathCandidates> native_runtime_candidates()
 {
     return {
@@ -303,6 +316,7 @@ ArtBootstrapPlan build_art_bootstrap_plan(const ArtBootstrapConfig& config)
         ? std::filesystem::path()
         : std::filesystem::absolute(config.sysroot).lexically_normal();
     plan.package_name = config.apk_classification.manifest_package;
+    plan.launch_activity = config.apk_classification.manifest_launch_activity;
     plan.dex_files = config.apk_classification.dex_files;
 
     if (plan.sysroot.empty()) {
@@ -324,6 +338,21 @@ ArtBootstrapPlan build_art_bootstrap_plan(const ArtBootstrapConfig& config)
     }
     if (!exists_dir(plan.framework_dir)) {
         plan.missing_required_inputs.push_back("system/framework/");
+    }
+
+    std::vector<std::string> guest_classpath;
+    for (const auto& candidates : classpath_candidates()) {
+        std::filesystem::path host_path =
+            first_existing_regular(plan.sysroot, candidates);
+        if (!host_path.empty()) {
+            plan.bootstrap_jar = host_path;
+            plan.bootstrap_jar_guest_path =
+                guest_path_for(host_path, plan.sysroot);
+            plan.classpath.push_back(host_path);
+            guest_classpath.push_back(plan.bootstrap_jar_guest_path);
+            continue;
+        }
+        plan.missing_required_inputs.push_back(candidate_summary(candidates));
     }
 
     std::vector<std::string> guest_bootclasspath;
@@ -366,6 +395,10 @@ ArtBootstrapPlan build_art_bootstrap_plan(const ArtBootstrapConfig& config)
         guest_library_paths.push_back(guest_dir_string);
     }
 
+    if (!guest_classpath.empty()) {
+        plan.env.push_back("CLASSPATH=" +
+                           join_strings(guest_classpath, ":"));
+    }
     if (!guest_bootclasspath.empty()) {
         plan.env.push_back("BOOTCLASSPATH=" +
                            join_strings(guest_bootclasspath, ":"));
@@ -392,6 +425,8 @@ ArtBootstrapPlan build_art_bootstrap_plan(const ArtBootstrapConfig& config)
         : plan.guest_apk_path);
     if (plan.package_name)
         plan.argv.push_back(*plan.package_name);
+    if (plan.launch_activity)
+        plan.argv.push_back(*plan.launch_activity);
 
     return plan;
 }
@@ -404,6 +439,8 @@ void print_art_bootstrap_plan(const ArtBootstrapPlan& plan)
         std::cerr << "[ART] guest apk=" << plan.guest_apk_path << "\n";
     if (plan.package_name)
         std::cerr << "[ART] package=" << *plan.package_name << "\n";
+    if (plan.launch_activity)
+        std::cerr << "[ART] launch activity=" << *plan.launch_activity << "\n";
     std::cerr << "[ART] dex files=" << plan.dex_files.size() << "\n";
     for (const std::string& dex : plan.dex_files)
         std::cerr << "[ART]   dex: " << dex << "\n";
@@ -412,7 +449,19 @@ void print_art_bootstrap_plan(const ArtBootstrapPlan& plan)
         std::cerr << "[ART] guest app_process64="
                   << plan.app_process64_guest_path << "\n";
     }
+    std::cerr << "[ART] bootstrap jar=" << plan.bootstrap_jar.string()
+              << "\n";
+    if (!plan.bootstrap_jar_guest_path.empty()) {
+        std::cerr << "[ART] guest bootstrap jar="
+                  << plan.bootstrap_jar_guest_path << "\n";
+    }
     std::cerr << "[ART] framework dir=" << plan.framework_dir.string() << "\n";
+    if (!plan.classpath.empty()) {
+        std::cerr << "[ART] classpath entries=" << plan.classpath.size()
+                  << "\n";
+        for (const auto& entry : plan.classpath)
+            std::cerr << "[ART]   " << entry.string() << "\n";
+    }
     if (!plan.bootclasspath.empty()) {
         std::cerr << "[ART] bootclasspath entries="
                   << plan.bootclasspath.size() << "\n";

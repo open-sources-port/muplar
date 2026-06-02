@@ -20,6 +20,7 @@ of these milestones instead of creating more numbered phases.
 - [APK Dependencies](./apk-dependencies.md)
 - [Compatibility Scanning](./compatibility-scanning.md)
 - [Java and ART Surface](./java-art-surface.md)
+- [Android Sysroot](./sysroot.md)
 
 Rule of thumb: use the SVG files for a compact visual summary, and use these
 Markdown files for actionable work tracking.

@@ -29,6 +29,7 @@ struct ApkLaunchResult {
     std::string selected_lib;
     std::optional<std::string> manifest_lib;
     std::optional<std::string> manifest_package;
+    std::optional<std::string> manifest_launch_activity;
     std::vector<std::string> extracted_libs;
     std::vector<std::string> extracted_assets;
 };
@@ -39,6 +40,7 @@ struct ApkClassification {
     bool has_manifest = false;
     std::optional<std::string> manifest_lib;
     std::optional<std::string> manifest_package;
+    std::optional<std::string> manifest_launch_activity;
     std::vector<std::string> arm64_libs;
     std::vector<std::string> dex_files;
     std::vector<std::string> asset_entries;

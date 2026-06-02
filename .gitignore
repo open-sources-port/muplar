@@ -55,6 +55,9 @@ dkms.conf
 *.dwo
 
 /build
+/android-root/
+/sysroots/local/
+/.muplar-sysroots/
 /**/.cache
 /**/*.log
 /**/.DS_Store

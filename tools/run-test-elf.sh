@@ -25,6 +25,18 @@ fi
 echo "Building the source code done."
 
 echo "========================================="
+echo "Preparing Android ARM64 sysroot inputs..."
+"$ROOT_DIR/tools/prepare-android-sysroot.sh" \
+    --sysroot "$ROOT_DIR/build/sysroot" \
+    --no-android-root
+returnCode=$?
+if [ "$returnCode" -ne 0 ]; then
+    echo "Preparing Android ARM64 sysroot inputs error."
+  exit 1
+fi
+echo "Preparing Android ARM64 sysroot inputs done."
+
+echo "========================================="
 echo "Building basic test binary..."
 export scriptToRun=$ROOT_DIR/tests/assets/elf/compile-basic.sh
 chmod +x ${scriptToRun}
@@ -91,6 +103,28 @@ if [ "$returnCode" -ne 0 ]; then
   exit 1
 fi
 echo "Building Java-only APK classification test done."
+
+echo "========================================="
+echo "Building tiny Java Activity APK test..."
+export scriptToRun=$ROOT_DIR/tests/assets/apk/create-tiny-java-activity-apk.sh
+sh ${scriptToRun}
+returnCode=$?
+if [ "$returnCode" -ne 0 ]; then
+    echo "Building tiny Java Activity APK test error."
+  exit 1
+fi
+echo "Building tiny Java Activity APK test done."
+
+echo "========================================="
+echo "Building Java ART bootstrap jar..."
+export scriptToRun=$ROOT_DIR/tools/build-art-bootstrap-jar.sh
+sh ${scriptToRun} --sysroot "$ROOT_DIR/build/sysroot"
+returnCode=$?
+if [ "$returnCode" -ne 0 ]; then
+    echo "Building Java ART bootstrap jar error."
+  exit 1
+fi
+echo "Building Java ART bootstrap jar done."
 
 echo "========================================="
 echo "Building APK unsupported import trap test..."
@@ -429,6 +463,34 @@ if ! grep -q "Java/ART Runtime Required" "$SCAN_REPORT"; then
 fi
 if ! grep -q "app_process64" "$SCAN_REPORT"; then
     echo "Compatibility scan report did not include missing ART executable."
+    exit 1
+fi
+javaOnlyLog="$(sed -n 's/^log: //p' "$SCAN_LOG" | head -1)"
+if [ -z "$javaOnlyLog" ] ||
+   ! grep -q "muplar-art-bootstrap.jar" "$javaOnlyLog"; then
+    echo "Compatibility scan did not include Muplar ART bootstrap jar in the plan."
+    exit 1
+fi
+
+"$ROOT_DIR/tools/run-apk-compat-scan.sh" --report "$SCAN_REPORT" "$SYSROOT_TMP/tinyjavaactivity.apk" > "$SCAN_LOG" 2>&1
+scanCode=$?
+cat "$SCAN_LOG"
+if [ "$scanCode" -eq 0 ]; then
+    echo "Compatibility scan unexpectedly passed tiny Java Activity APK."
+    exit 1
+fi
+if ! grep -q "status: java-runtime-required" "$SCAN_LOG"; then
+    echo "Compatibility scan did not classify tiny Java Activity APK correctly."
+    exit 1
+fi
+tinyJavaLog="$(sed -n 's/^log: //p' "$SCAN_LOG" | head -1)"
+if [ -z "$tinyJavaLog" ] ||
+   ! grep -q "launch activity=com.example.muplar.tiny.TinyActivity" "$tinyJavaLog"; then
+    echo "Tiny Java Activity launch target was not recorded in the ART plan."
+    exit 1
+fi
+if ! grep -q "muplar-art-bootstrap.jar" "$tinyJavaLog"; then
+    echo "Tiny Java Activity ART plan did not include the Muplar bootstrap jar."
     exit 1
 fi
 
