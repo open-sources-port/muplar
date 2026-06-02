@@ -1,8 +1,0 @@
-add_subdirectory(commons)
-add_subdirectory(android-aarch64)
-add_subdirectory(linux-common)
-add_subdirectory(linux-aarch64)
-add_subdirectory(linux-x64)
-add_subdirectory(windows-common)
-add_subdirectory(windows-aarch64)
-add_subdirectory(windows-x64)

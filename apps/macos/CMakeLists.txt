@@ -18,7 +18,7 @@ target_link_libraries(muplar_prefix_manager
 
 target_include_directories(muplar_prefix_manager
     PRIVATE
-        ${CMAKE_SOURCE_DIR}/runtime/platform/commons/prefix
+        ${CMAKE_SOURCE_DIR}/platform/commons/prefix
 )
 
 target_compile_options(muplar_prefix_manager PRIVATE

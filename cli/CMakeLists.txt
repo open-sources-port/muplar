@@ -22,13 +22,11 @@ target_link_libraries(mup
 
 target_include_directories(mup PUBLIC
     ${CMAKE_SOURCE_DIR}
-    ${CMAKE_SOURCE_DIR}/platform/android/bionic/include
-    ${CMAKE_SOURCE_DIR}/runtime
-    ${CMAKE_SOURCE_DIR}/runtime/platform/commons/memory
-    ${CMAKE_SOURCE_DIR}/runtime/platform/commons/prefix
-    ${CMAKE_SOURCE_DIR}/runtime/platform/android-aarch64/elf
-    ${CMAKE_SOURCE_DIR}/runtime/platform/android-aarch64/jni
-    ${CMAKE_SOURCE_DIR}/runtime/platform/android-aarch64/apk
+    ${CMAKE_SOURCE_DIR}/platform/commons/memory
+    ${CMAKE_SOURCE_DIR}/platform/commons/prefix
+    ${CMAKE_SOURCE_DIR}/platform/android-aarch64/elf
+    ${CMAKE_SOURCE_DIR}/platform/android-aarch64/jni
+    ${CMAKE_SOURCE_DIR}/platform/android-aarch64/apk
     ${CMAKE_SOURCE_DIR}/third_party/angle-include
 )
 

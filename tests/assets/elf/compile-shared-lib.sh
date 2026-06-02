@@ -362,9 +362,10 @@ $CXX -shared -fPIC \
     -std=c++17 \
     -mbranch-protection=none \
     -Wl,-z,max-page-size=4096 \
-    -I"$ROOT_DIR/platform/android/ndk_cpp" \
+    -I"$ROOT_DIR/platform/android-commons/libcpp-config" \
     -I"$ROOT_DIR/tests/assets/aidl/generated-ndk/include" \
     -I"$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/darwin-x86_64/sysroot/usr/include" \
+    -idirafter "$ROOT_DIR/platform/android-commons" \
     "$ROOT_DIR/tests/assets/elf/libaidlndktest.cpp" \
     "$ROOT_DIR/tests/assets/aidl/generated-ndk/cpp/com/example/muplar/IRealAdder.cpp" \
     -landroid \
