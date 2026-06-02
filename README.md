@@ -118,10 +118,10 @@ managed by `~/.muplar/instances.json`, so prefixes can live outside
 `~/.muplar/prefixes` and arbitrary folders are not treated as instances. Prefix
 metadata is generic:
 Android currently runs as `kind=android`, `arch=aarch64`, `runner=elfuse`, while
-future Linux and Wine prefixes can use the same layout with their own Muplar-side
-runtime policies. The desktop manager currently shows instances as stopped until
-a long-lived `muplard` session layer owns real app lifetime. The elfuse
-third-party runner remains prefix-agnostic.
+future Linux and Wine prefixes can use `arch=aarch64` or `arch=x86_64` with
+their own Muplar-side runtime policies. The desktop manager currently shows
+instances as stopped until a long-lived `muplard` session layer owns real app
+lifetime. The elfuse third-party runner remains prefix-agnostic.
 
 For batch APK triage, use:
 

@@ -96,7 +96,6 @@ add_dependencies(elfuse elfuse_lib)
 # Global include directories
 # =========================================
 include_directories(
-    ${CMAKE_SOURCE_DIR}/android/bionic/include
     ${CMAKE_SOURCE_DIR}/third_party/elfuse/src
     ${ELFUSE_BUILD_DIR}   # shim_blob.h / version.h / dispatch.h
 )
@@ -108,11 +107,7 @@ include_directories(
 add_subdirectory(cli)
 # add_subdirectory(compositor)
 add_subdirectory(platform)
-add_subdirectory(runtime)
 add_subdirectory(apps)
-
-# Test
-add_subdirectory(tests/platform/android/bionic/smoke)
 
 find_program(DETECTED_OBJCOPY
     NAMES objcopy

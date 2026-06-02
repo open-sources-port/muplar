@@ -45,6 +45,7 @@ static void print_usage(const char* prog)
                  " [--kind android|linux|wine]"
               << " [--arch aarch64|x86_64] [--runner elfuse]"
               << " [--sysroot PATH]\n"
+              << "              (android supports aarch64 only)\n"
               << "       " << prog << " prefix list [--plain]\n"
               << "       " << prog << " prefix info NAME|PATH\n"
               << "       " << prog << " prefix clone SRC_NAME|PATH DST_NAME"
