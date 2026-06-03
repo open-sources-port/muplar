@@ -5,6 +5,8 @@
 #include <fstream>
 #include <sstream>
 #include <stdexcept>
+#include <sys/types.h>
+#include <signal.h>
 
 namespace muplar::runtime::prefix {
 namespace {
@@ -425,7 +427,6 @@ void ensure_layout_dirs(const PrefixLayout& layout)
         std::filesystem::create_directories(layout.rootfs / "var");
         break;
     case PrefixKind::Wine:
-        std::filesystem::create_directories(layout.rootfs / "dosdevices");
         std::filesystem::create_directories(layout.rootfs / "drive_c");
         std::filesystem::create_directories(layout.rootfs / "home" / "muplar");
         std::filesystem::create_directories(layout.rootfs / "var");
@@ -813,8 +814,9 @@ bool is_supported_runtime_tuple(PrefixKind kind, GuestArch arch)
     switch (kind) {
     case PrefixKind::Android:
         return arch == GuestArch::Aarch64;
-    case PrefixKind::Linux:
     case PrefixKind::Wine:
+        return arch == GuestArch::X86_64;
+    case PrefixKind::Linux:
         return arch == GuestArch::Aarch64 || arch == GuestArch::X86_64;
     }
     return false;
@@ -914,6 +916,42 @@ void delete_prefix(const std::string& spec)
                                  ec.message());
     }
     unregister_instance(layout);
+}
+
+// ---------------------------------------------------------------------------
+// Instance lifecycle helpers (PID file based)
+// ---------------------------------------------------------------------------
+
+std::filesystem::path pid_file_path(const PrefixLayout& layout)
+{
+    return layout.root / "run" / "wine.pid";
+}
+
+pid_t read_prefix_pid(const PrefixLayout& layout)
+{
+    std::filesystem::path pid_path = pid_file_path(layout);
+    std::ifstream in(pid_path);
+    if (!in)
+        return 0;
+    pid_t pid = 0;
+    in >> pid;
+    return (in && pid > 0) ? pid : 0;
+}
+
+PrefixState query_prefix_state(const PrefixLayout& layout)
+{
+    pid_t pid = read_prefix_pid(layout);
+    if (pid <= 0)
+        return PrefixState::Stopped;
+
+    // kill(pid, 0) succeeds if the process exists (even if we can't signal it).
+    if (kill(pid, 0) == 0)
+        return PrefixState::Running;
+
+    // Stale PID file — process is gone, clean it up.
+    std::error_code ec;
+    std::filesystem::remove(pid_file_path(layout), ec);
+    return PrefixState::Stopped;
 }
 
 } // namespace muplar::runtime::prefix

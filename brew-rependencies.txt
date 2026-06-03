@@ -1,0 +1,27 @@
+Brew ARM64:
+binutils
+android-ndk
+cmake
+freetype
+gnutls
+
+Rosetta 2:
+softwareupdate --install-rosetta --agree-to-license
+
+Brew X86_64:
+sudo mkdir -p /usr/local/share/zsh/site-functions
+sudo chown -R "$(whoami)":admin \
+  /usr/local/Homebrew \
+  /usr/local/bin \
+  /usr/local/etc \
+  /usr/local/include \
+  /usr/local/lib \
+  /usr/local/opt \
+  /usr/local/sbin \
+  /usr/local/share \
+  /usr/local/var 2>/dev/null || true
+sudo chmod -R u+rwX /usr/local/share/zsh
+arch -x86_64 /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
+
+arch -x86_64 /usr/local/bin/brew install bison flex pkg-config mingw-w64 freetype gettext gnutls zlib bzip2 libpng freetype pkg-config
+arch -x86_64 /usr/local/bin/brew install sdl2 meson llvm

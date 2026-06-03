@@ -93,6 +93,70 @@ set_target_properties(elfuse PROPERTIES IMPORTED_LOCATION ${ELFUSE_STATIC_LIB})
 add_dependencies(elfuse elfuse_lib)
 
 # =========================================
+# Wine: always built via autoconf
+# =========================================
+set(WINE_SRC_DIR    ${CMAKE_SOURCE_DIR}/third_party/wine)
+set(WINE_BUILD_DIR  ${CMAKE_BINARY_DIR}/wine-build)
+set(WINE_PREFIX_DIR ${CMAKE_BINARY_DIR}/wine-prefix)
+
+set(WINE_BUILD_SHELL ${CMAKE_SOURCE_DIR}/tools/build-wine-x86_64.sh)
+
+ExternalProject_Add(wine_external
+    DOWNLOAD_COMMAND ""
+    SOURCE_DIR      ${WINE_BUILD_DIR}
+    CONFIGURE_COMMAND ""
+    BUILD_COMMAND   sh ${WINE_BUILD_SHELL}
+    INSTALL_COMMAND ""
+    BUILD_IN_SOURCE 0
+    USES_TERMINAL_BUILD YES
+    BINARY_DIR      ${WINE_BUILD_DIR}
+    BUILD_BYPRODUCTS
+        ${WINE_PREFIX_DIR}/bin/wine
+        ${WINE_PREFIX_DIR}/lib/libwine.dylib
+)
+
+add_custom_target(wine_lib DEPENDS wine_external)
+
+# =========================================
+# DXMT: install prebuilt binary into Wine
+# =========================================
+set(DXMT_INSTALL_SHELL ${CMAKE_SOURCE_DIR}/tools/build-dxmt-x86_64.sh)
+
+if(APPLE)
+    set(BREW_LLVM_PATH "/usr/local/opt/llvm@15")
+else()
+    set(BREW_LLVM_PATH "/usr/lib/llvm")
+endif()
+
+ExternalProject_Add(dxmt_external
+    DOWNLOAD_COMMAND ""
+    SOURCE_DIR      ${CMAKE_SOURCE_DIR}/third_party/dxmt
+    CONFIGURE_COMMAND ""
+    BUILD_COMMAND   ${CMAKE_COMMAND} -E env
+                    DXMT_SRC_DIR=${CMAKE_SOURCE_DIR}/third_party/dxmt
+                    DXMT_BUILD_DIR=${CMAKE_BINARY_DIR}/dxmt-build
+                    WINE_INSTALL_PATH=${WINE_PREFIX_DIR}
+                    LLVM_PATH=${BREW_LLVM_PATH}
+                    sh ${DXMT_INSTALL_SHELL}
+    INSTALL_COMMAND ""
+    BUILD_IN_SOURCE 0
+    USES_TERMINAL_BUILD YES
+    DEPENDS         wine_lib
+    BUILD_BYPRODUCTS
+        ${WINE_PREFIX_DIR}/lib/wine/x86_64-unix/winemetal.so
+        ${WINE_PREFIX_DIR}/lib/wine/x86_64-windows/winemetal.dll
+        ${WINE_PREFIX_DIR}/lib/wine/x86_64-windows/d3d11.dll
+        ${WINE_PREFIX_DIR}/lib/wine/x86_64-windows/dxgi.dll
+)
+
+add_custom_target(dxmt_lib DEPENDS dxmt_external)
+
+set(MUPLAR_WINE_PREFIX_DIR ${WINE_PREFIX_DIR})
+set(MUPLAR_HAS_WINE ON)
+message(STATUS "Wine backend: enabled")
+message(STATUS "Wine prefix:  ${WINE_PREFIX_DIR}")
+
+# =========================================
 # Global include directories
 # =========================================
 include_directories(

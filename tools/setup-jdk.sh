@@ -121,13 +121,21 @@ if [ -z "$DOWNLOAD_URL" ]; then
     exit 1
 fi
 
-echo "[setup-jdk] Downloading: $DOWNLOAD_URL"
+# ---------------------------------------------------------------------------
+# Cache downloaded tarball in .cache/
+# ---------------------------------------------------------------------------
+CACHE_DIR="$ROOT_DIR/.cache"
+mkdir -p "$CACHE_DIR"
 
-TMPDIR_WORK="$(mktemp -d)"
-trap 'rm -rf "$TMPDIR_WORK"' EXIT
-
-TARBALL="$TMPDIR_WORK/temurin-${JDK_VERSION}-${ARCH}.tar.gz"
-curl -fL --progress-bar -o "$TARBALL" "$DOWNLOAD_URL"
+# Derive a stable cache filename from the download URL
+TARBALL_NAME="$(basename "$DOWNLOAD_URL")"
+TARBALL="$CACHE_DIR/$TARBALL_NAME"
+if [ -f "$TARBALL" ] && [ "$FORCE" = false ]; then
+    echo "[setup-jdk] Using cached: $TARBALL"
+else
+    echo "[setup-jdk] Downloading: $DOWNLOAD_URL"
+    curl -fL --progress-bar -o "$TARBALL" "$DOWNLOAD_URL"
+fi
 
 echo "[setup-jdk] Extracting..."
 EXTRACT_DIR="$TMPDIR_WORK/extracted"
