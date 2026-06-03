@@ -63,3 +63,10 @@ dkms.conf
 /**/.DS_Store
 .codegraph
 *.txt
+
+# Bundled JDK binaries — downloaded by tools/setup-jdk.sh, not committed to git.
+# Each developer runs this once: tools/setup-jdk.sh
+third_party/jdk-bin/
+
+# Keep pre-built ANGLE dylibs tracked (overrides the *.dylib rule above)
+!third_party/angle-bin/*.dylib

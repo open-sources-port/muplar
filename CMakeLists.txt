@@ -101,6 +101,35 @@ include_directories(
 )
 
 # =========================================
+# Bundled JDK (Eclipse Temurin 21)
+# Used for Java-only APK bootstrap via host JNI_CreateJavaVM.
+# Run tools/setup-jdk.sh once to download.
+# =========================================
+if(APPLE)
+    if(CMAKE_SYSTEM_PROCESSOR MATCHES "arm64|aarch64")
+        set(JDK_BIN_ARCH "macos-aarch64")
+    else()
+        set(JDK_BIN_ARCH "macos-x86_64")
+    endif()
+
+    set(JDK_BIN_DIR     ${CMAKE_SOURCE_DIR}/third_party/jdk-bin/${JDK_BIN_ARCH})
+    set(JDK_LIBJVM      ${JDK_BIN_DIR}/lib/server/libjvm.dylib)
+    set(JDK_LIBJLI      ${JDK_BIN_DIR}/lib/jli/libjli.dylib)
+    set(JDK_INCLUDE_DIR ${JDK_BIN_DIR}/include)
+
+    if(EXISTS "${JDK_LIBJVM}")
+        message(STATUS "Bundled JDK: ${JDK_LIBJVM}")
+        set(MUPLAR_HAS_BUNDLED_JDK ON)
+    else()
+        message(WARNING
+            "Bundled JDK not found at ${JDK_BIN_DIR}\n"
+            "  Run: tools/setup-jdk.sh\n"
+            "  Java-only APK bootstrap will be disabled until then.")
+        set(MUPLAR_HAS_BUNDLED_JDK OFF)
+    endif()
+endif()
+
+# =========================================
 # Subdirectories
 # =========================================
 # add_subdirectory(core)

@@ -2,6 +2,8 @@ package com.muplar.runtime;
 
 import java.io.File;
 import java.lang.reflect.Constructor;
+import java.net.URL;
+import java.net.URLClassLoader;
 
 public final class ArtApkMain {
     private ArtApkMain() {
@@ -54,6 +56,7 @@ public final class ArtApkMain {
             parent = ArtApkMain.class.getClassLoader();
         }
 
+        // 1st choice: dalvik.system.DexClassLoader  (running in ART)
         try {
             Class<?> dexClassLoader =
                 Class.forName("dalvik.system.DexClassLoader");
@@ -64,7 +67,12 @@ public final class ArtApkMain {
             System.out.println("[Muplar/ART] classLoader="
                 + dexClassLoader.getName());
             return loader;
-        } catch (ClassNotFoundException e) {
+        } catch (ClassNotFoundException ignored) {
+            // Not running in ART — fall through.
+        }
+
+        // 2nd choice: dalvik.system.PathClassLoader  (older ART)
+        try {
             Class<?> pathClassLoader =
                 Class.forName("dalvik.system.PathClassLoader");
             Constructor<?> ctor = pathClassLoader.getConstructor(
@@ -74,12 +82,34 @@ public final class ArtApkMain {
             System.out.println("[Muplar/ART] classLoader="
                 + pathClassLoader.getName());
             return loader;
+        } catch (ClassNotFoundException ignored) {
+            // Not running in ART — fall through.
         }
+
+        // 3rd choice: java.net.URLClassLoader  (running in host JDK via libjvm)
+        // The APK has been pre-converted from DEX to a plain JAR by d8
+        // (host_jvm_launcher.cpp calls convert_apk_dex_to_jar() before launch).
+        URL apkUrl = new File(apkPath).toURI().toURL();
+        ClassLoader loader = new URLClassLoader(new URL[]{apkUrl}, parent);
+        System.out.println("[Muplar/ART] classLoader=URLClassLoader (host JDK)");
+        return loader;
     }
 
     private static String ensureDexOptDir(String packageName) {
+        // Portable scratch dir: works in ART (/data/local/tmp) and host JDK.
+        String base;
+        String artBase = "/data/local/tmp/muplar/art/dexopt";
+        File artParent = new File(artBase).getParentFile();
+        if (artParent != null && artParent.canWrite()) {
+            base = artBase;
+        } else {
+            // Host JDK: java.io.tmpdir is set by host_jvm_launcher.cpp
+            base = System.getProperty("java.io.tmpdir",
+                       System.getProperty("user.home"))
+                 + "/muplar/art/dexopt";
+        }
         String dirName = packageName.isEmpty() ? "default" : sanitize(packageName);
-        File dir = new File("/data/local/tmp/muplar/art/dexopt/" + dirName);
+        File dir = new File(base + "/" + dirName);
         if (!dir.exists() && !dir.mkdirs()) {
             throw new IllegalStateException(
                 "unable to create dexopt directory: " + dir.getAbsolutePath());

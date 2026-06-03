@@ -7,6 +7,10 @@ set(MUPLAR_ANDROID_SOURCES
     art_bootstrap.cpp
 )
 
+if(MUPLAR_HAS_BUNDLED_JDK)
+    list(APPEND MUPLAR_ANDROID_SOURCES host_jvm_launcher.cpp)
+endif()
+
 if(APPLE)
     enable_language(OBJCXX)
     list(APPEND MUPLAR_ANDROID_SOURCES host_window_mac.mm)
@@ -54,6 +58,18 @@ if(APPLE)
     target_link_libraries(muplar_runtime_android PRIVATE "-framework AppKit")
     set_source_files_properties(host_window_mac.mm PROPERTIES
         COMPILE_OPTIONS "-fobjc-arc"
+    )
+endif()
+
+# ── Bundled JDK (optional — enabled when tools/setup-jdk.sh has been run) ────
+if(MUPLAR_HAS_BUNDLED_JDK)
+    target_compile_definitions(muplar_runtime_android PRIVATE
+        MUPLAR_HAS_BUNDLED_JDK=1
+        MUPLAR_JDK_LIBJVM_PATH="${JDK_LIBJVM}"
+    )
+    target_include_directories(muplar_runtime_android PRIVATE
+        ${JDK_INCLUDE_DIR}
+        ${JDK_INCLUDE_DIR}/darwin
     )
 endif()
 

@@ -5,6 +5,7 @@
 #include <exception>
 #include <filesystem>
 #include <iostream>
+#include <sstream>
 #include <stdexcept>
 #include <string>
 
@@ -12,6 +13,9 @@
 #include "art_bootstrap.h"
 #include "elf_loader.h"
 #include "guest_runner.h"
+#ifdef MUPLAR_HAS_BUNDLED_JDK
+#include "host_jvm_launcher.h"
+#endif
 
 namespace muplar::runtime::android {
 namespace {
@@ -104,9 +108,66 @@ void apply_apk_launch(const PlatformLaunchConfig& launch_cfg,
 int handle_java_apk_launch(const PlatformLaunchConfig& launch_cfg,
                            const apk::ApkClassification& classification)
 {
+#ifdef MUPLAR_HAS_BUNDLED_JDK
+    // ── Host JVM path (bundled Temurin JDK) ─────────────────────────────────
+    // Converts DEX -> plain JAR then runs ArtApkMain via host JNI_CreateJavaVM.
+    // No elfuse / app_process64 / boot OAT files needed.
+    std::cerr << "[ART] using host JVM (bundled Temurin JDK)\n";
+
+    // Determine scratch directory for the converted JAR and dexopt files.
+    std::filesystem::path scratch_dir;
+    if (!launch_cfg.sysroot.empty())
+        scratch_dir = std::filesystem::path(launch_cfg.sysroot) / "data" / "local" / "tmp"
+                    / "muplar" / "host-jvm";
+    else
+        scratch_dir = std::filesystem::temp_directory_path() / "muplar" / "host-jvm";
+
+    // Build the bootstrap jar path (reuse existing ART bootstrap jar if present).
+    std::filesystem::path bootstrap_jar;
+    if (!launch_cfg.sysroot.empty()) {
+        bootstrap_jar = std::filesystem::path(launch_cfg.sysroot) / "data" / "local" / "tmp"
+                      / "muplar" / "art" / "muplar-art-bootstrap.jar";
+    }
+
+    // Convert APK DEX -> plain JAR so URLClassLoader can load it.
+    std::filesystem::path apk_jar;
+    if (!classification.dex_files.empty()) {
+        // Stamp the output name by APK filename so re-conversion is skipped
+        // when the APK hasn't changed.
+        std::string apk_stem =
+            std::filesystem::path(launch_cfg.input_path).stem().string();
+        std::filesystem::path out_jar = scratch_dir / (apk_stem + "-classes.jar");
+        apk_jar = convert_apk_dex_to_jar(
+            launch_cfg.input_path, out_jar, scratch_dir);
+        if (apk_jar.empty()) {
+            std::cerr << "[ART] warning: DEX->JAR conversion failed; "
+                         "class loading may fail if APK has DEX\n";
+        }
+    }
+
+    HostJvmLaunchConfig jvm_cfg;
+    jvm_cfg.bootstrap_jar   = bootstrap_jar;
+    jvm_cfg.apk_jar         = apk_jar;
+    // For the host JVM path, pass the converted JAR as apk_path so that
+    // ArtApkMain's URLClassLoader fallback loads the JAR (plain .class files)
+    // rather than the original APK containing raw DEX bytecode.
+    jvm_cfg.apk_path        = apk_jar.empty()
+                                  ? launch_cfg.input_path
+                                  : std::filesystem::absolute(apk_jar).string();
+    jvm_cfg.package_name    =
+        classification.manifest_package.value_or("");
+    jvm_cfg.launch_activity =
+        classification.manifest_launch_activity.value_or("");
+    jvm_cfg.scratch_dir     = scratch_dir;
+
+    return host_jvm_launch(jvm_cfg);
+
+#else
+    // ── ART guest path (requires sysroot + boot OAT files) ───────────────────
     if (launch_cfg.sysroot.empty()) {
-        std::cerr << "APK error: Java/ART bootstrap incomplete: missing "
-                  << "--sysroot is required for Java/ART bootstrap\n";
+        std::cerr << "APK error: Java/ART bootstrap incomplete: "
+                     "--sysroot is required (or run tools/setup-jdk.sh for "
+                     "the host JVM path)\n";
         return 1;
     }
 
@@ -149,6 +210,7 @@ int handle_java_apk_launch(const PlatformLaunchConfig& launch_cfg,
     std::cerr << "[ART] executing app_process64 bootstrap path\n";
     elf::GuestRunner runner;
     return runner.run(guest_cfg);
+#endif
 }
 
 } // namespace

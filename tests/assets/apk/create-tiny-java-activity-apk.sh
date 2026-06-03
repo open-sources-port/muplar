@@ -96,6 +96,12 @@ EOF
         "$CLASSES_DIR/com/example/muplar/tiny/TinyActivity.class"
     cp "$DEX_DIR/classes.dex" "$APK_ROOT/classes.dex"
     echo "[apk] DEX: real via $D8_BIN"
+
+    # Also produce a plain classes JAR for the host JVM launcher (URLClassLoader
+    # cannot read DEX bytecode; it needs standard .class files in a JAR).
+    CLASSES_JAR="${APK_OUT%.apk}-classes.jar"
+    (cd "$CLASSES_DIR" && jar cf "$CLASSES_JAR" .)
+    echo "[apk] Classes JAR: $CLASSES_JAR"
 elif [ "$REQUIRE_REAL_DEX" = true ]; then
     echo "d8 not found; cannot build real tiny Java Activity DEX." >&2
     echo "Set D8=/path/to/d8 or ANDROID_HOME/ANDROID_SDK_ROOT to an Android SDK." >&2
