@@ -20,14 +20,13 @@ the eventual ART-facing compatibility layer.
       manifest launch Activity class when ART reaches Java code.
 - [x] Tiny Java Activity APK fixture is classified and carries its launch
       Activity into the ART bootstrap plan.
-
-## Next
-
-- [ ] Import an ART-capable Android sysroot with `tools/import-android-art-sysroot.sh`
+- [x] Import an ART-capable Android sysroot with `tools/import-android-art-sysroot.sh`
       and verify it with `tools/check-android-art-sysroot.sh`.
-- [ ] Run the tiny Java Activity fixture through `app_process64` and record
+- [x] Run the tiny Java Activity fixture through `app_process64` and record
       first Java/framework method gaps. Use `tools/run-tiny-java-activity-art.sh`
       once the sysroot is ready and `d8` is available.
+
+## Next
 - [ ] Run a simple Java launcher app with enough Activity/framework surface to
       display and launch one installed package.
 - [ ] Use Launcher3 as the compatibility target after the simple launcher path
