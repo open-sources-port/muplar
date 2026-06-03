@@ -17,64 +17,63 @@ namespace {
 // ---------------------------------------------------------------------------
 // Locate d8 for DEX -> JAR conversion
 // ---------------------------------------------------------------------------
+// std::string find_d8()
+// {
+//     // 1. Explicit env var
+//     if (const char* d8 = std::getenv("D8")) {
+//         if (std::filesystem::is_regular_file(d8))
+//             return d8;
+//     }
 
-std::string find_d8()
-{
-    // 1. Explicit env var
-    if (const char* d8 = std::getenv("D8")) {
-        if (std::filesystem::is_regular_file(d8))
-            return d8;
-    }
+//     // 2. PATH
+//     {
+//         FILE* f = popen("command -v d8 2>/dev/null", "r");
+//         if (f) {
+//             char buf[2048] = {};
+//             if (fgets(buf, sizeof(buf), f)) {
+//                 pclose(f);
+//                 std::string path(buf);
+//                 while (!path.empty() &&
+//                        (path.back() == '\n' || path.back() == '\r'))
+//                     path.pop_back();
+//                 if (!path.empty() && std::filesystem::is_regular_file(path))
+//                     return path;
+//             } else {
+//                 pclose(f);
+//             }
+//         }
+//     }
 
-    // 2. PATH
-    {
-        FILE* f = popen("command -v d8 2>/dev/null", "r");
-        if (f) {
-            char buf[2048] = {};
-            if (fgets(buf, sizeof(buf), f)) {
-                pclose(f);
-                std::string path(buf);
-                while (!path.empty() &&
-                       (path.back() == '\n' || path.back() == '\r'))
-                    path.pop_back();
-                if (!path.empty() && std::filesystem::is_regular_file(path))
-                    return path;
-            } else {
-                pclose(f);
-            }
-        }
-    }
+//     // 3. Android SDK known locations
+//     const char* sdk_env_vars[] = {"ANDROID_HOME", "ANDROID_SDK_ROOT", nullptr};
+//     std::vector<std::string> sdk_roots;
+//     for (int i = 0; sdk_env_vars[i]; ++i) {
+//         if (const char* v = std::getenv(sdk_env_vars[i]))
+//             sdk_roots.push_back(v);
+//     }
+//     if (const char* home = std::getenv("HOME"))
+//         sdk_roots.push_back(std::string(home) + "/Library/Android/sdk");
 
-    // 3. Android SDK known locations
-    const char* sdk_env_vars[] = {"ANDROID_HOME", "ANDROID_SDK_ROOT", nullptr};
-    std::vector<std::string> sdk_roots;
-    for (int i = 0; sdk_env_vars[i]; ++i) {
-        if (const char* v = std::getenv(sdk_env_vars[i]))
-            sdk_roots.push_back(v);
-    }
-    if (const char* home = std::getenv("HOME"))
-        sdk_roots.push_back(std::string(home) + "/Library/Android/sdk");
+//     for (const auto& sdk : sdk_roots) {
+//         std::filesystem::path bt(sdk + "/build-tools");
+//         if (!std::filesystem::is_directory(bt))
+//             continue;
+//         std::string latest;
+//         std::error_code ec;
+//         for (auto& entry : std::filesystem::directory_iterator(bt, ec)) {
+//             if (!entry.is_directory()) continue;
+//             std::string name = entry.path().filename().string();
+//             if (name > latest) latest = name;
+//         }
+//         if (!latest.empty()) {
+//             auto candidate = bt / latest / "d8";
+//             if (std::filesystem::is_regular_file(candidate))
+//                 return candidate.string();
+//         }
+//     }
 
-    for (const auto& sdk : sdk_roots) {
-        std::filesystem::path bt(sdk + "/build-tools");
-        if (!std::filesystem::is_directory(bt))
-            continue;
-        std::string latest;
-        std::error_code ec;
-        for (auto& entry : std::filesystem::directory_iterator(bt, ec)) {
-            if (!entry.is_directory()) continue;
-            std::string name = entry.path().filename().string();
-            if (name > latest) latest = name;
-        }
-        if (!latest.empty()) {
-            auto candidate = bt / latest / "d8";
-            if (std::filesystem::is_regular_file(candidate))
-                return candidate.string();
-        }
-    }
-
-    return {};
-}
+//     return {};
+// }
 
 // ---------------------------------------------------------------------------
 // libjvm path — resolved at compile time by CMakeLists.txt

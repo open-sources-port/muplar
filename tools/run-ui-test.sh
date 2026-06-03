@@ -8,8 +8,7 @@ SYSROOT_LIB="$ROOT_DIR/build/sysroot/system/lib64"
 
 echo "ROOT [${ROOT_DIR}]"
 echo "ANDROID SDK [${ANDROID_NDK_HOME}]"
-echo "Cleaning up build folder..."
-rm -rfv build/*
+sh $ROOT_DIR/tools/clean-build.sh
 
 echo "Configuring source code..."
 cmake -B build -G Ninja

@@ -1,1 +1,0 @@
-add_library(muplar_runtime_windows_common INTERFACE)

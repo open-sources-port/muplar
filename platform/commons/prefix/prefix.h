@@ -4,6 +4,7 @@
 #include <optional>
 #include <string>
 #include <vector>
+#include <cstdint>
 
 namespace muplar::runtime::prefix {
 
@@ -16,6 +17,12 @@ enum class PrefixKind {
 enum class GuestArch {
     Aarch64,
     X86_64,
+};
+
+/// Runtime liveness state derived from the PID file.
+enum class PrefixState {
+    Stopped,  ///< No PID file or process is no longer alive.
+    Running,  ///< PID file exists and the process is alive.
 };
 
 struct PrefixLayout {
@@ -36,6 +43,16 @@ struct PrefixLayout {
 std::filesystem::path muplar_home();
 std::filesystem::path instance_registry_path();
 std::filesystem::path resolve_prefix_root(const std::string& spec);
+
+/// Path to the PID file stored inside the prefix run directory.
+std::filesystem::path pid_file_path(const PrefixLayout& layout);
+
+/// Read the PID file and check whether the process is still alive.
+/// Removes a stale PID file if the process has exited.
+PrefixState query_prefix_state(const PrefixLayout& layout);
+
+/// Read the raw PID from the prefix PID file (0 if not running).
+pid_t read_prefix_pid(const PrefixLayout& layout);
 
 std::string to_string(PrefixKind kind);
 std::string to_string(GuestArch arch);
