@@ -18,6 +18,7 @@
 #include <stdexcept>
 #include <string>
 #include <vector>
+#include <sys/resource.h>
 
 #include "android_aarch64_runtime.h"
 #include "platform_runtime.h"
@@ -359,6 +360,16 @@ static int handle_prefix_command(int argc, char** argv)
 
 int main(int argc, char** argv)
 {
+    // Increase soft limit for open files descriptor limit from 256 to maximum allowed
+    struct rlimit rl;
+    if (getrlimit(RLIMIT_NOFILE, &rl) == 0) {
+        rl.rlim_cur = rl.rlim_max;
+        if (setrlimit(RLIMIT_NOFILE, &rl) != 0) {
+            rl.rlim_cur = 10240;
+            setrlimit(RLIMIT_NOFILE, &rl);
+        }
+    }
+
     std::cout << "Muplar CLI (mup)\n";
 
     if (argc < 2) {

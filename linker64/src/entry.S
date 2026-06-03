@@ -129,3 +129,10 @@ _start:
 
     /* Make _DYNAMIC visible to the assembler for the adrp above */
     .extern _DYNAMIC
+
+    .globl tlsdesc_static_resolver
+    .type tlsdesc_static_resolver, @function
+tlsdesc_static_resolver:
+    ldr     x0, [x0, #8]
+    ret
+    .size tlsdesc_static_resolver, . - tlsdesc_static_resolver

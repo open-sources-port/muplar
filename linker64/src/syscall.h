@@ -19,6 +19,7 @@
 #define SYS_mprotect   226
 #define SYS_munmap     215
 #define SYS_exit_group  94
+#define SYS_gettid     178
 
 /* mmap / mprotect flags */
 #define PROT_READ    1
@@ -102,6 +103,10 @@ static inline long __syscall6(long nr, long a, long b, long c,
 static inline void sys_exit(int code) {
     __syscall1(SYS_exit_group, code);
     __builtin_unreachable();
+}
+
+static inline long sys_gettid(void) {
+    return __syscall0(SYS_gettid);
 }
 
 static inline long sys_write(int fd, const void *buf, size_t n) {

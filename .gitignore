@@ -62,3 +62,4 @@ dkms.conf
 /**/*.log
 /**/.DS_Store
 .codegraph
+*.txt

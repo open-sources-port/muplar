@@ -53,4 +53,7 @@ add_custom_command(TARGET mup POST_BUILD
             -change ./libGLESv2.dylib
             @loader_path/libGLESv2.dylib
             "$<TARGET_FILE_DIR:mup>/libEGL.dylib"
+
+        COMMAND codesign --entitlements "${CMAKE_SOURCE_DIR}/mup.entitlements" --force -s - "$<TARGET_FILE:mup>"
     )
+

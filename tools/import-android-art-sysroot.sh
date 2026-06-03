@@ -169,7 +169,9 @@ copy_optional apex/com.android.art/javalib
 copy_optional apex/com.android.art/lib64
 copy_optional apex/com.android.runtime/lib64
 copy_optional apex/com.android.conscrypt/javalib
+copy_optional apex/com.android.conscrypt/lib64
 copy_optional apex/com.android.i18n/javalib
+copy_optional apex/com.android.i18n/lib64
 copy_optional apex/com.android.tzdata
 
 if [ "$missing" -ne 0 ]; then

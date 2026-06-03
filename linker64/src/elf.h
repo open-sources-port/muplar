@@ -19,6 +19,7 @@
 #define PT_DYNAMIC 2
 #define PT_INTERP  3
 #define PT_PHDR    6
+#define PT_TLS     7
 #define PT_GNU_RELRO 0x6474e552
 
 #define DT_NULL      0
@@ -37,17 +38,24 @@
 #define DT_JMPREL   23
 #define DT_RUNPATH  29
 #define DT_RELACOUNT 0x6ffffff9
+#define DT_ANDROID_RELA      0x60000011
+#define DT_ANDROID_RELASZ    0x60000012
 
 #define R_AARCH64_NONE       0
 #define R_AARCH64_ABS64    257
 #define R_AARCH64_GLOB_DAT 1025
 #define R_AARCH64_JUMP_SLOT 1026
 #define R_AARCH64_RELATIVE 1027
+#define R_AARCH64_TLS_TPREL64 1030
+#define R_AARCH64_TLSDESC     1031
+#define R_AARCH64_IRELATIVE   1032
 
 #define STB_LOCAL  0
 #define STB_WEAK   2
 #define STB_FROM_INFO(i) ((i) >> 4)
 #define SHN_UNDEF 0
+#define STT_GNU_IFUNC 10
+#define ELF64_ST_TYPE(i) ((i) & 0xf)
 
 #define PF_X 1
 #define PF_W 2
@@ -60,6 +68,7 @@
 #define AT_PAGESZ    6
 #define AT_BASE      7
 #define AT_ENTRY     9
+#define AT_HWCAP    16
 #define AT_RANDOM   25
 #define AT_EXECFN   31
 

@@ -66,6 +66,7 @@ $CC \
     -Wl,--dynamic-linker='' \
     -Wl,--build-id=none \
     -Wl,-z,norelro \
+    -Wl,--pack-dyn-relocs=none \
     "$BUILD/entry.o" \
     "$BUILD/linker.o" \
     -o "$OUT/linker64"
