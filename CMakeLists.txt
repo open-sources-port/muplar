@@ -151,6 +151,29 @@ ExternalProject_Add(dxmt_external
 
 add_custom_target(dxmt_lib DEPENDS dxmt_external)
 
+# =========================================
+# BusyBox: cross-compiles static shells
+# =========================================
+set(BUSYBOX_BUILD_SHELL ${CMAKE_SOURCE_DIR}/tools/build-busybox.sh)
+set(BUSYBOX_AARCH64_BIN ${CMAKE_BINARY_DIR}/bin/busybox_aarch64)
+set(BUSYBOX_X86_64_BIN  ${CMAKE_BINARY_DIR}/bin/busybox_x86_64)
+
+ExternalProject_Add(busybox_external
+    DOWNLOAD_COMMAND ""
+    SOURCE_DIR      ${CMAKE_SOURCE_DIR}/third_party/busybox
+    CONFIGURE_COMMAND ""
+    BUILD_COMMAND   sh ${BUSYBOX_BUILD_SHELL}
+    INSTALL_COMMAND ""
+    BUILD_IN_SOURCE 0
+    USES_TERMINAL_BUILD YES
+    BINARY_DIR      ${CMAKE_BINARY_DIR}
+    BUILD_BYPRODUCTS
+        ${BUSYBOX_AARCH64_BIN}
+        ${BUSYBOX_X86_64_BIN}
+)
+
+add_custom_target(busybox_bin DEPENDS busybox_external)
+
 set(MUPLAR_WINE_PREFIX_DIR ${WINE_PREFIX_DIR})
 set(MUPLAR_HAS_WINE ON)
 message(STATUS "Wine backend: enabled")

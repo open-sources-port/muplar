@@ -65,6 +65,47 @@ static constexpr int64_t MU_DT_ANDROID_RELRENT = 0x6fffe003;
 static constexpr uint64_t MUPLAR_RUNTIME_ARENA_GPA  = 0x1E0000000ULL;
 static constexpr uint64_t MUPLAR_RUNTIME_ARENA_SIZE = 0x00400000ULL;
 
+class ScopedHostCwd {
+public:
+    explicit ScopedHostCwd(const std::string& path)
+    {
+        if (path.empty())
+            return;
+
+        std::error_code ec;
+        original_ = std::filesystem::current_path(ec);
+        if (ec)
+            throw std::runtime_error("GuestRunner: failed to read host cwd: " +
+                                     ec.message());
+
+        std::filesystem::create_directories(path, ec);
+        if (ec)
+            throw std::runtime_error("GuestRunner: failed to create host cwd: " +
+                                     path + ": " + ec.message());
+
+        std::filesystem::current_path(path, ec);
+        if (ec)
+            throw std::runtime_error("GuestRunner: failed to enter host cwd: " +
+                                     path + ": " + ec.message());
+        active_ = true;
+    }
+
+    ~ScopedHostCwd()
+    {
+        if (!active_)
+            return;
+        std::error_code ec;
+        std::filesystem::current_path(original_, ec);
+    }
+
+    ScopedHostCwd(const ScopedHostCwd&) = delete;
+    ScopedHostCwd& operator=(const ScopedHostCwd&) = delete;
+
+private:
+    std::filesystem::path original_;
+    bool active_ = false;
+};
+
 static uint64_t read_guest_u64_or_zero(guest_t *g, uint64_t gpa)
 {
     uint64_t value = 0;
@@ -1215,6 +1256,24 @@ int GuestRunner::run(const GuestRunnerConfig& cfg)
 {
     log_init();
     if (cfg.verbose) log_set_level(LOG_DEBUG);
+    ScopedHostCwd scoped_host_cwd(cfg.host_cwd);
+
+    bool is_shared_lib = false;
+    if (cfg.is_android) {
+        is_shared_lib = cfg.force_android_so;
+        FILE* ef = std::fopen(cfg.elf_path.c_str(), "rb");
+        if (ef) {
+            Elf64_Ehdr ehdr{};
+            if (std::fread(&ehdr, sizeof(ehdr), 1, ef) == 1) {
+                if (ehdr.e_type == ET_DYN &&
+                    (cfg.force_android_so || ehdr.e_entry == 0)) {
+                    is_shared_lib = true;
+                }
+            }
+            std::fclose(ef);
+        }
+    }
+    bool is_android_run = cfg.is_android;
 
     const char*  elf_path   = cfg.elf_path.c_str();
     std::string  guest_elf_path_storage =
@@ -1226,8 +1285,14 @@ int GuestRunner::run(const GuestRunnerConfig& cfg)
     if (!guest_argv) throw std::runtime_error("GuestRunner: OOM allocating argv");
     std::vector<std::string> guest_env_storage;
     const char** guest_envp = nullptr;
-    if (!cfg.env.empty()) {
+    bool use_explicit_envp = !cfg.inherit_host_env;
+    if (cfg.inherit_host_env) {
         guest_env_storage = merge_environment(cfg.env);
+        use_explicit_envp = !guest_env_storage.empty();
+    } else {
+        guest_env_storage = cfg.env;
+    }
+    if (use_explicit_envp) {
         guest_envp = to_null_terminated_cstrings(guest_env_storage);
         if (!guest_envp) {
             free_cstrings(guest_argv, guest_argc);
@@ -1239,7 +1304,8 @@ int GuestRunner::run(const GuestRunnerConfig& cfg)
     bool              guest_initialized = false;
     guest_bootstrap_t boot;
 
-    std::printf("[Muplar] guest_bootstrap_prepare...\n");
+    if (!cfg.quiet)
+        std::printf("[Muplar] guest_bootstrap_prepare...\n");
     int rc = guest_bootstrap_prepare(&g, elf_path, false, guest_elf_path, sysroot,
                                       guest_argc, guest_argv,
                                       guest_envp ? const_cast<char**>(guest_envp)
@@ -1257,7 +1323,8 @@ int GuestRunner::run(const GuestRunnerConfig& cfg)
     hv_vcpu_t       vcpu;
     hv_vcpu_exit_t* vexit;
 
-    std::printf("[Muplar] guest_bootstrap_create_vcpu...\n");
+    if (!cfg.quiet)
+        std::printf("[Muplar] guest_bootstrap_create_vcpu...\n");
     rc = guest_bootstrap_create_vcpu(&g, &boot, cfg.verbose, &vcpu, &vexit);
     if (rc < 0) {
         guest_destroy(&g);
@@ -1265,41 +1332,53 @@ int GuestRunner::run(const GuestRunnerConfig& cfg)
     }
 
     // ── muplar subsystems ─────────────────────────────────────────────────────
-    // Do not place Muplar user-mode tables/stubs in elfuse shim_data. Recent
-    // elfuse maps shim_data as EL1-only, so guest EL0 cannot read JNI tables or
-    // execute HVC stubs there. Keep Muplar runtime state in a normal
-    // guest-visible arena instead.
-    map_muplar_runtime_arena(&g);
-    uint64_t muplar_arena_gpa  = MUPLAR_RUNTIME_ARENA_GPA;
-    uint64_t jni_stubs_gpa     = muplar_arena_gpa + 0x000000;
-    uint64_t android_stubs_gpa = muplar_arena_gpa + 0x020000;
-    uint64_t jni_table_gpa     = muplar_arena_gpa + 0x030000;
-    uint64_t java_vm_gpa       = muplar_arena_gpa + 0x031000;
-    uint64_t activity_gpa      = muplar_arena_gpa + 0x032000;
-    uint64_t synthetic_arg_gpa = muplar_arena_gpa + 0x033000;
+    std::optional<jni::JniEnv>             opt_jni_env;
+    std::optional<jni::JniBridge>          opt_jni_bridge;
+    std::optional<jni::JniOnLoad>          opt_jni_onload;
+    std::optional<android::AndroidRuntime> opt_art;
+    std::optional<MuplarCtx>               ctx;
 
-    jni::JniEnv    jni_env;
+    uint64_t synthetic_arg_gpa = 0;
+    uint64_t activity_gpa      = 0;
+    uint64_t activity_object   = 0;
+
     std::string package_name = cfg.package_name.empty()
         ? "muplar"
         : cfg.package_name;
-    jni_env.set_app_context(package_name, cfg.package_code_path);
-    uint64_t activity_object =
-        jni_env.register_object("android/app/NativeActivity");
 
-    jni::JniBridge jni_bridge(&g, &jni_env, jni_table_gpa, jni_stubs_gpa);
-    jni_bridge.install();
+    if (is_android_run) {
+        // Do not place Muplar user-mode tables/stubs in elfuse shim_data. Recent
+        // elfuse maps shim_data as EL1-only, so guest EL0 cannot read JNI tables or
+        // execute HVC stubs there. Keep Muplar runtime state in a normal
+        // guest-visible arena instead.
+        map_muplar_runtime_arena(&g);
+        uint64_t muplar_arena_gpa  = MUPLAR_RUNTIME_ARENA_GPA;
+        uint64_t jni_stubs_gpa     = muplar_arena_gpa + 0x000000;
+        uint64_t android_stubs_gpa = muplar_arena_gpa + 0x020000;
+        uint64_t jni_table_gpa     = muplar_arena_gpa + 0x030000;
+        uint64_t java_vm_gpa       = muplar_arena_gpa + 0x031000;
+        activity_gpa               = muplar_arena_gpa + 0x032000;
+        synthetic_arg_gpa          = muplar_arena_gpa + 0x033000;
 
-    jni::JniOnLoad jni_onload(&g, &jni_bridge, &jni_env, java_vm_gpa);
-    jni_onload.install();
+        opt_jni_env.emplace();
+        opt_jni_env->set_app_context(package_name, cfg.package_code_path);
+        activity_object = opt_jni_env->register_object("android/app/NativeActivity");
 
-    android::AndroidRuntime art(&g, android_stubs_gpa, cfg.host_window);
-    art.set_asset_root(cfg.apk_assets_dir);
-    art.install();
+        opt_jni_bridge.emplace(&g, &*opt_jni_env, jni_table_gpa, jni_stubs_gpa);
+        opt_jni_bridge->install();
 
-    // ── Register HVC #6 hook ──────────────────────────────────────────────────
-    MuplarCtx ctx{ &jni_onload, &art };
-    g.hvc6_handler  = hvc6_handler;
-    g.hvc6_userdata = &ctx;
+        opt_jni_onload.emplace(&g, &*opt_jni_bridge, &*opt_jni_env, java_vm_gpa);
+        opt_jni_onload->install();
+
+        opt_art.emplace(&g, android_stubs_gpa, cfg.host_window);
+        opt_art->set_asset_root(cfg.apk_assets_dir);
+        opt_art->install();
+
+        // ── Register HVC #6 hook ──────────────────────────────────────────────────
+        ctx.emplace(MuplarCtx{ &*opt_jni_onload, &*opt_art });
+        g.hvc6_handler  = hvc6_handler;
+        g.hvc6_userdata = &*ctx;
+    }
 
     // ── Patch __aarch64_have_lse_atomics ─────────────────────────────────────
     {
@@ -1342,29 +1421,16 @@ int GuestRunner::run(const GuestRunnerConfig& cfg)
         if (lse_flag_gpa) {
             uint8_t zero = 0;
             guest_write(&g, lse_flag_gpa, &zero, 1);
-            std::printf("[Muplar] patched __aarch64_have_lse_atomics=0 "
-                        "at GPA 0x%llx\n", (unsigned long long)lse_flag_gpa);
+            if (!cfg.quiet) {
+                std::printf("[Muplar] patched __aarch64_have_lse_atomics=0 "
+                            "at GPA 0x%llx\n",
+                            (unsigned long long)lse_flag_gpa);
+            }
         } else {
-            std::fprintf(stderr,
-                "[Muplar] WARNING: __aarch64_have_lse_atomics not found\n");
-        }
-    }
-
-    // ── Detect if the input is a shared library (ET_DYN with no _start) ──────
-    bool is_shared_lib = cfg.force_android_so;
-    {
-        FILE* ef = std::fopen(cfg.elf_path.c_str(), "rb");
-        if (ef) {
-            Elf64_Ehdr ehdr{};
-            std::fread(&ehdr, sizeof(ehdr), 1, ef);
-            // ET_DYN with entry=0 means .so (no _start); ET_DYN with entry≠0
-            // is a PIE executable.  libjnitest.so has e_entry=0.
-            // APK-selected libs are Android shared objects even when the ELF
-            // header carries a non-zero entry.
-            if (ehdr.e_type == ET_DYN &&
-                (cfg.force_android_so || ehdr.e_entry == 0))
-                is_shared_lib = true;
-            std::fclose(ef);
+            if (!cfg.quiet) {
+                std::fprintf(stderr,
+                    "[Muplar] WARNING: __aarch64_have_lse_atomics not found\n");
+            }
         }
     }
 
@@ -1377,6 +1443,10 @@ int GuestRunner::run(const GuestRunnerConfig& cfg)
     if (is_shared_lib) {
         // For .so files: run Android/JNI entrypoints directly.
         std::printf("[Muplar] detected shared library — running Android .so path\n");
+
+        android::AndroidRuntime& art = *opt_art;
+        jni::JniOnLoad& jni_onload = *opt_jni_onload;
+        jni::JniEnv& jni_env = *opt_jni_env;
 
         DirectSoObject main_so;
         if (parse_direct_so_metadata(cfg.elf_path, &main_so)) {
@@ -2006,14 +2076,16 @@ int GuestRunner::run(const GuestRunnerConfig& cfg)
         }
     } else {
         // For executables: run the normal elfuse main loop.
-        std::printf("[Muplar] entering vcpu_run_loop...\n");
+        if (!cfg.quiet)
+            std::printf("[Muplar] entering vcpu_run_loop...\n");
         exit_code = vcpu_run_loop(vcpu, vexit, &g, cfg.verbose, cfg.timeout_sec);
     }
 
-    if (cfg.host_window && !host_app_loop_ran)
-        art.run_host_window_after_guest(cfg.host_window_linger_ms);
+    if (is_android_run && cfg.host_window && !host_app_loop_ran)
+        opt_art->run_host_window_after_guest(cfg.host_window_linger_ms);
 
-    std::printf("[Muplar] exit code: %d\n", exit_code);
+    if (!cfg.quiet)
+        std::printf("[Muplar] exit code: %d\n", exit_code);
 
     guest_destroy(&g);
     return exit_code;

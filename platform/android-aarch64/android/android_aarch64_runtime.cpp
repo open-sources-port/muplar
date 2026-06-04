@@ -8,6 +8,7 @@
 #include <sstream>
 #include <stdexcept>
 #include <string>
+#include <vector>
 
 #include "apk_envelope.h"
 #include "art_bootstrap.h"
@@ -38,6 +39,59 @@ void copy_jni_call_config(const RuntimeJniCallConfig& from,
     to.int_args = from.int_args;
     to.receiver_explicit = from.receiver_explicit;
     to.receiver_static = from.receiver_static;
+}
+
+std::vector<std::string> default_guest_environment(
+    const prefix::PrefixLayout& active_prefix)
+{
+    switch (active_prefix.kind) {
+    case prefix::PrefixKind::Android:
+        return {
+            "PATH=/system/bin:/system/xbin:/bin",
+            "ANDROID_DATA=/data",
+            "ANDROID_ROOT=/system",
+            "HOME=/data/local/tmp",
+            "LOGNAME=shell",
+            "SHELL=/system/bin/sh",
+            "TMPDIR=/data/local/tmp",
+            "USER=shell",
+            "TERM=xterm-256color",
+        };
+    case prefix::PrefixKind::Linux:
+        return {
+            "PATH=/bin:/usr/bin:/sbin:/usr/sbin",
+            "HOME=/home/muplar",
+            "LOGNAME=muplar",
+            "PWD=/home/muplar",
+            "SHELL=/bin/sh",
+            "TMPDIR=/tmp",
+            "USER=muplar",
+            "TERM=xterm-256color",
+        };
+    case prefix::PrefixKind::Wine:
+        return {
+            "PATH=/bin:/usr/bin",
+            "HOME=/home/muplar",
+            "LOGNAME=muplar",
+            "TMPDIR=/tmp",
+            "USER=muplar",
+            "TERM=xterm-256color",
+        };
+    }
+    return {};
+}
+
+std::filesystem::path default_host_cwd(
+    const prefix::PrefixLayout& active_prefix)
+{
+    switch (active_prefix.kind) {
+    case prefix::PrefixKind::Android:
+        return active_prefix.rootfs / "data/local/tmp";
+    case prefix::PrefixKind::Linux:
+    case prefix::PrefixKind::Wine:
+        return active_prefix.rootfs / "home/muplar";
+    }
+    return active_prefix.rootfs;
 }
 
 void inspect_elf(const std::string& elf_path)
@@ -220,7 +274,31 @@ int AndroidAarch64Runtime::run(const PlatformLaunchConfig& config)
     elf::GuestRunnerConfig guest_cfg;
     guest_cfg.elf_path = config.input_path;
     guest_cfg.sysroot = config.sysroot;
+    guest_cfg.is_android = !config.active_prefix || (config.active_prefix->kind == prefix::PrefixKind::Android) || config.apk_mode || lower_ext(config.input_path) == ".apk";
+    if (config.active_prefix) {
+        guest_cfg.inherit_host_env = false;
+        guest_cfg.env = default_guest_environment(*config.active_prefix);
+        guest_cfg.host_cwd = default_host_cwd(*config.active_prefix).string();
+    }
+    
+    if (!guest_cfg.sysroot.empty() && !config.input_path.empty() && config.input_path[0] == '/') {
+        std::filesystem::path host_candidate = std::filesystem::path(guest_cfg.sysroot) / config.input_path.substr(1);
+        std::error_code ec;
+        if (std::filesystem::exists(host_candidate, ec)) {
+            guest_cfg.elf_path = host_candidate.string();
+            guest_cfg.guest_elf_path = config.input_path;
+        }
+    }
+    
+    if (guest_cfg.guest_elf_path.empty() && !guest_cfg.sysroot.empty() && guest_cfg.elf_path.rfind(guest_cfg.sysroot, 0) == 0) {
+        guest_cfg.guest_elf_path = guest_cfg.elf_path.substr(guest_cfg.sysroot.length());
+        if (guest_cfg.guest_elf_path.empty() || guest_cfg.guest_elf_path[0] != '/') {
+            guest_cfg.guest_elf_path = "/" + guest_cfg.guest_elf_path;
+        }
+    }
+    
     guest_cfg.verbose = config.verbose;
+    guest_cfg.quiet = config.quiet;
     guest_cfg.timeout_sec = config.timeout_sec;
     guest_cfg.native_activity = config.native_activity;
     guest_cfg.strict_direct_imports = config.strict_direct_imports;
@@ -248,11 +326,14 @@ int AndroidAarch64Runtime::run(const PlatformLaunchConfig& config)
         }
     }
 
-    guest_cfg.argv.push_back(guest_cfg.elf_path);
+    guest_cfg.argv.push_back(
+        guest_cfg.guest_elf_path.empty() ? guest_cfg.elf_path
+                                         : guest_cfg.guest_elf_path);
     for (const auto& arg : config.guest_args)
         guest_cfg.argv.push_back(arg);
 
-    inspect_elf(guest_cfg.elf_path);
+    if (!config.quiet)
+        inspect_elf(guest_cfg.elf_path);
 
     elf::GuestRunner runner;
     return runner.run(guest_cfg);

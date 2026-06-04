@@ -30,6 +30,7 @@ struct PrefixLayout {
     PrefixKind kind = PrefixKind::Android;
     GuestArch arch = GuestArch::Aarch64;
     std::string runner = "elfuse";
+    std::string distro;
     std::filesystem::path root;
     std::filesystem::path rootfs;
     std::filesystem::path packages_dir;
@@ -65,14 +66,16 @@ PrefixLayout open_prefix(const std::string& spec,
                          bool create_if_missing = false,
                          PrefixKind kind = PrefixKind::Android,
                          GuestArch arch = GuestArch::Aarch64,
-                         std::string runner = "elfuse");
+                         std::string runner = "elfuse",
+                         std::string distro = "");
 PrefixLayout open_prefix_at_root(const std::string& name,
                                  const std::filesystem::path& root,
                                  const std::filesystem::path& runtime_sysroot = {},
                                  bool create_if_missing = false,
                                  PrefixKind kind = PrefixKind::Android,
                                  GuestArch arch = GuestArch::Aarch64,
-                                 std::string runner = "elfuse");
+                                 std::string runner = "elfuse",
+                                 std::string distro = "");
 
 std::vector<PrefixLayout> list_prefixes();
 bool is_prefix_root(const std::filesystem::path& root);

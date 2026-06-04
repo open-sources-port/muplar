@@ -22,7 +22,7 @@ else
   "$CMAKE_BIN" -S "$ROOT_DIR" -B "$ROOT_DIR/build"
 fi
 
-"$CMAKE_BIN" --build "$ROOT_DIR/build" --target muplar_prefix_manager -j4
+"$CMAKE_BIN" --build "$ROOT_DIR/build" --target populate_manager_bundle -j4
 
 APP="$ROOT_DIR/build/bin/Muplar Instance Manager.app"
 APP_NAME="Muplar Instance Manager"

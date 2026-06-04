@@ -29,6 +29,10 @@
 #include "platform_runtime.h"
 #include "prefix.h"
 
+extern "C" {
+#include "runtime/forkipc.h"
+}
+
 #ifdef MUPLAR_HAS_WINE
 #include "wine_runtime.h"
 #endif
@@ -36,7 +40,7 @@
 static void print_usage(const char* prog)
 {
     std::cerr << "Usage: " << prog
-              << " [--verbose] [--sysroot PATH]\n"
+              << " [--verbose] [--quiet] [--sysroot PATH]\n"
               << "              [--prefix NAME|PATH]\n"
               << "              [--apk] [--apk-lib NAME] [--apk-extract-dir PATH]\n"
               << "              [--native-activity]\n"
@@ -50,6 +54,7 @@ static void print_usage(const char* prog)
               << " prefix create NAME|PATH [--root PATH]"
                  " [--kind android|linux|wine]"
               << " [--arch aarch64|x86_64] [--runner elfuse]"
+              << " [--distro alpine|debian|ubuntu|fedora|arch|opensuse|generic]"
               << " [--sysroot PATH]\n"
               << "              (android supports aarch64 only; wine supports x86_64 only; linux supports both)\n"
               << "       " << prog << " prefix list [--plain]\n"
@@ -96,6 +101,7 @@ static void print_prefix_table(
     struct Row {
         std::string name;
         std::string kind;
+        std::string distro;
         std::string arch;
         std::string runner;
         std::string state;
@@ -109,6 +115,7 @@ static void print_prefix_table(
         rows.push_back({
             prefix.name,
             prefix_kind_string(prefix),
+            prefix.distro.empty() ? "-" : prefix.distro,
             prefix_arch_string(prefix),
             prefix.runner,
             prefix_state_string(prefix),
@@ -124,11 +131,12 @@ static void print_prefix_table(
         return;
     }
 
-    size_t name_w = 4, kind_w = 4, arch_w = 4, runner_w = 6, state_w = 5,
+    size_t name_w = 4, kind_w = 4, distro_w = 6, arch_w = 4, runner_w = 6, state_w = 5,
            sysroot_w = 7;
     for (const auto& row : rows) {
         name_w = std::max(name_w, row.name.size());
         kind_w = std::max(kind_w, row.kind.size());
+        distro_w = std::max(distro_w, row.distro.size());
         arch_w = std::max(arch_w, row.arch.size());
         runner_w = std::max(runner_w, row.runner.size());
         state_w = std::max(state_w, row.state.size());
@@ -138,6 +146,7 @@ static void print_prefix_table(
     std::cout << std::left
               << std::setw(static_cast<int>(name_w + 2)) << "Name"
               << std::setw(static_cast<int>(kind_w + 2)) << "Kind"
+              << std::setw(static_cast<int>(distro_w + 2)) << "Distro"
               << std::setw(static_cast<int>(arch_w + 2)) << "Arch"
               << std::setw(static_cast<int>(runner_w + 2)) << "Runner"
               << std::setw(static_cast<int>(state_w + 2)) << "State"
@@ -145,6 +154,7 @@ static void print_prefix_table(
               << "Root\n";
     std::cout << std::string(name_w, '-') << "  "
               << std::string(kind_w, '-') << "  "
+              << std::string(distro_w, '-') << "  "
               << std::string(arch_w, '-') << "  "
               << std::string(runner_w, '-') << "  "
               << std::string(state_w, '-') << "  "
@@ -155,6 +165,7 @@ static void print_prefix_table(
         std::cout << std::left
                   << std::setw(static_cast<int>(name_w + 2)) << row.name
                   << std::setw(static_cast<int>(kind_w + 2)) << row.kind
+                  << std::setw(static_cast<int>(distro_w + 2)) << row.distro
                   << std::setw(static_cast<int>(arch_w + 2)) << row.arch
                   << std::setw(static_cast<int>(runner_w + 2)) << row.runner
                   << std::setw(static_cast<int>(state_w + 2)) << row.state
@@ -169,6 +180,7 @@ static void print_prefix_plain(
     for (const auto& prefix : prefixes) {
         std::cout << prefix.name
                   << "\t" << prefix_kind_string(prefix)
+                  << "\t" << (prefix.distro.empty() ? "-" : prefix.distro)
                   << "\t" << prefix_arch_string(prefix)
                   << "\t" << prefix.runner
                   << "\t" << prefix.root.string();
@@ -183,6 +195,9 @@ static void print_prefix_info(
 {
     std::cout << "Name: " << prefix.name << "\n";
     std::cout << "Kind: " << prefix_kind_string(prefix) << "\n";
+    if (!prefix.distro.empty()) {
+        std::cout << "Distro: " << prefix.distro << "\n";
+    }
     std::cout << "Arch: " << prefix_arch_string(prefix) << "\n";
     std::cout << "Runner: " << prefix.runner << "\n";
     std::cout << "State: " << prefix_state_string(prefix) << "\n";
@@ -326,6 +341,7 @@ static int handle_prefix_command(int argc, char** argv)
     auto kind = muplar::runtime::prefix::PrefixKind::Android;
     auto arch = muplar::runtime::prefix::GuestArch::Aarch64;
     std::string runner = "elfuse";
+    std::string distro = "";
     bool arch_set = false;
     for (int i = 4; i < argc;) {
         std::string flag = argv[i];
@@ -355,6 +371,9 @@ static int handle_prefix_command(int argc, char** argv)
         } else if (flag == "--runner" && i + 1 < argc) {
             runner = argv[i + 1];
             i += 2;
+        } else if (flag == "--distro" && i + 1 < argc) {
+            distro = argv[i + 1];
+            i += 2;
         } else {
             std::cerr << "Unknown prefix create flag: " << flag << "\n";
             return 2;
@@ -368,12 +387,14 @@ static int handle_prefix_command(int argc, char** argv)
     try {
         auto prefix = root.empty()
             ? muplar::runtime::prefix::open_prefix(
-                  spec, runtime_sysroot, true, kind, arch, runner)
+                  spec, runtime_sysroot, true, kind, arch, runner, distro)
             : muplar::runtime::prefix::open_prefix_at_root(
-                  spec, root, runtime_sysroot, true, kind, arch, runner);
+                  spec, root, runtime_sysroot, true, kind, arch, runner, distro);
         std::cout << "prefix: " << prefix.root << "\n";
         std::cout << "kind: "
                   << muplar::runtime::prefix::to_string(prefix.kind) << "\n";
+        if (!prefix.distro.empty())
+            std::cout << "distro: " << prefix.distro << "\n";
         std::cout << "arch: "
                   << muplar::runtime::prefix::to_string(prefix.arch) << "\n";
         std::cout << "runner: " << prefix.runner << "\n";
@@ -613,6 +634,31 @@ static int handle_instance_command(int argc, char** argv)
 
 int main(int argc, char** argv)
 {
+    // Check if we are running as a fork-child helper process
+    int fork_child_fd = -1;
+    int vfork_notify_fd = -1;
+    bool verbose = false;
+    int timeout_sec = 10;
+
+    for (int i = 1; i < argc; ++i) {
+        std::string arg = argv[i];
+        if (arg == "--fork-child" && i + 1 < argc) {
+            try {
+                fork_child_fd = std::stoi(argv[i + 1]);
+            } catch (...) {}
+        } else if (arg == "--vfork-notify-fd" && i + 1 < argc) {
+            try {
+                vfork_notify_fd = std::stoi(argv[i + 1]);
+            } catch (...) {}
+        } else if (arg == "--verbose" || arg == "-v") {
+            verbose = true;
+        }
+    }
+
+    if (fork_child_fd >= 0) {
+        return fork_child_main(fork_child_fd, vfork_notify_fd, verbose, timeout_sec);
+    }
+
     // Increase soft limit for open files descriptor limit from 256 to maximum allowed
     struct rlimit rl;
     if (getrlimit(RLIMIT_NOFILE, &rl) == 0) {
@@ -623,12 +669,34 @@ int main(int argc, char** argv)
         }
     }
 
-    std::cout << "Muplar CLI (mup)\n";
-
     if (argc < 2) {
+        std::cout << "Muplar CLI (mup)\n";
         print_usage(argv[0]);
         return 1;
     }
+
+    bool quiet_requested = false;
+    for (int i = 1; i < argc && argv[i][0] == '-'; ++i) {
+        std::string flag = argv[i];
+        if (flag == "--quiet" || flag == "-q") {
+            quiet_requested = true;
+            break;
+        }
+        if (flag == "--")
+            break;
+        if ((flag == "--apk-lib" || flag == "--apk-extract-dir" ||
+             flag == "--sysroot" || flag == "--prefix" ||
+             flag == "--host-window-ms" || flag == "--jni-int" ||
+             flag == "--jni-arg") &&
+            i + 1 < argc) {
+            ++i;
+        } else if (flag == "--jni-call" && i + 3 < argc) {
+            i += 3;
+        }
+    }
+
+    if (!quiet_requested)
+        std::cout << "Muplar CLI (mup)\n";
 
     if (std::string(argv[1]) == "prefix")
         return handle_prefix_command(argc, argv);
@@ -649,6 +717,9 @@ int main(int argc, char** argv)
 
         if (flag == "--verbose" || flag == "-v") {
             launch_cfg.verbose = true;
+            ++arg_start;
+        } else if (flag == "--quiet" || flag == "-q") {
+            launch_cfg.quiet = true;
             ++arg_start;
         } else if (flag == "--apk") {
             launch_cfg.apk_mode = true;
@@ -728,31 +799,36 @@ int main(int argc, char** argv)
     }
 
     launch_cfg.input_path = argv[arg_start];
-    launch_cfg.verbose = true;
 
     if (prefix_spec) {
         try {
             active_prefix = muplar::runtime::prefix::open_prefix(
                 *prefix_spec, launch_cfg.sysroot, true);
-            if (launch_cfg.sysroot.empty() &&
-                !active_prefix->runtime_sysroot.empty()) {
-                launch_cfg.sysroot =
-                    active_prefix->runtime_sysroot.string();
+            if (launch_cfg.sysroot.empty()) {
+                if (!active_prefix->runtime_sysroot.empty() && std::filesystem::exists(active_prefix->runtime_sysroot)) {
+                    launch_cfg.sysroot =
+                        active_prefix->runtime_sysroot.string();
+                } else if (active_prefix->kind == muplar::runtime::prefix::PrefixKind::Android ||
+                           active_prefix->kind == muplar::runtime::prefix::PrefixKind::Linux) {
+                    launch_cfg.sysroot = active_prefix->rootfs.string();
+                }
             }
             launch_cfg.active_prefix = active_prefix;
             std::string prefix_kind =
                 muplar::runtime::prefix::to_string(active_prefix->kind);
             std::string guest_arch =
                 muplar::runtime::prefix::to_string(active_prefix->arch);
-            std::cerr << "[Prefix] " << active_prefix->name
-                      << " kind=" << prefix_kind
-                      << " arch=" << guest_arch
-                      << " runner=" << active_prefix->runner
-                      << " root=" << active_prefix->root.string()
-                      << " rootfs=" << active_prefix->rootfs.string() << "\n";
-            if (!active_prefix->runtime_sysroot.empty()) {
-                std::cerr << "[Prefix] runtime sysroot="
-                          << active_prefix->runtime_sysroot.string() << "\n";
+            if (!launch_cfg.quiet) {
+                std::cerr << "[Prefix] " << active_prefix->name
+                          << " kind=" << prefix_kind
+                          << " arch=" << guest_arch
+                          << " runner=" << active_prefix->runner
+                          << " root=" << active_prefix->root.string()
+                          << " rootfs=" << active_prefix->rootfs.string() << "\n";
+                if (!active_prefix->runtime_sysroot.empty()) {
+                    std::cerr << "[Prefix] runtime sysroot="
+                              << active_prefix->runtime_sysroot.string() << "\n";
+                }
             }
         } catch (const std::exception& e) {
             std::cerr << "Prefix error: " << e.what() << "\n";

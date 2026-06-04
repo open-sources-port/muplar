@@ -1,6 +1,11 @@
 #!/bin/zsh
 
 ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+ANGLE_DYLIB_DIR="$ROOT_DIR/third_party/angle-bin"
+if [ -d "$ANGLE_DYLIB_DIR" ]; then
+    export DYLD_LIBRARY_PATH="$ANGLE_DYLIB_DIR${DYLD_LIBRARY_PATH:+:$DYLD_LIBRARY_PATH}"
+fi
+MUP="$ROOT_DIR/build/bin/mup"
 
 NDK_SYSROOT=$NDK_PREBUILT/sysroot
 SYSROOT_TMP="$ROOT_DIR/build/sysroot/data/local/tmp"
@@ -12,53 +17,53 @@ zsh ${scriptToRun}
 
 ELF="$ROOT_DIR/build/bin/test_return_42"
 echo "========================\nCalling $ELF..."
-"$ROOT_DIR/build/bin/mup" "$ELF"
+"$MUP" "$ELF"
 echo "Exit code: $?"
 
 ELF="$ROOT_DIR/build/bin/simple_app_with_print"
 echo "========================\nCalling $ELF..."
-"$ROOT_DIR/build/bin/mup" "$ELF"
+"$MUP" "$ELF"
 echo "Exit code: $?"
 
 ELF="$ROOT_DIR/build/bin/test_shared"
 echo "========================\nCalling $ELF..."
-"$ROOT_DIR/build/bin/mup" --sysroot "$ROOT_DIR/build/sysroot" "$ELF"
+"$MUP" --sysroot "$ROOT_DIR/build/sysroot" "$ELF"
 echo "Exit code: $?"
 
 ELF="$SYSROOT_TMP/libjnitest.so"
 echo "========================\nCalling $ELF..."
-"$ROOT_DIR/build/bin/mup" --sysroot "$ROOT_DIR/build/sysroot" "$ELF"
+"$MUP" --sysroot "$ROOT_DIR/build/sysroot" "$ELF"
 echo "Exit code: $?"
 
 ELF="$SYSROOT_TMP/libnativeactivitytest.so"
 echo "========================\nCalling $ELF..."
-"$ROOT_DIR/build/bin/mup" --native-activity --sysroot "$ROOT_DIR/build/sysroot" "$ELF"
+"$MUP" --native-activity --sysroot "$ROOT_DIR/build/sysroot" "$ELF"
 echo "Exit code: $?"
 
 ELF="$SYSROOT_TMP/libnativegluethreadtest.so"
 echo "========================\nCalling $ELF..."
-"$ROOT_DIR/build/bin/mup" --native-activity --sysroot "$ROOT_DIR/build/sysroot" "$ELF"
+"$MUP" --native-activity --sysroot "$ROOT_DIR/build/sysroot" "$ELF"
 echo "Exit code: $?"
 
 ELF="$SYSROOT_TMP/libnativeappgluecmdtest.so"
 echo "========================\nCalling $ELF..."
-"$ROOT_DIR/build/bin/mup" --native-activity --sysroot "$ROOT_DIR/build/sysroot" "$ELF"
+"$MUP" --native-activity --sysroot "$ROOT_DIR/build/sysroot" "$ELF"
 echo "Exit code: $?"
 
 APK="$SYSROOT_TMP/nativeappgluecmdtest.apk"
 echo "========================\nCalling $APK..."
-"$ROOT_DIR/build/bin/mup" --sysroot "$ROOT_DIR/build/sysroot" "$APK"
+"$MUP" --sysroot "$ROOT_DIR/build/sysroot" "$APK"
 echo "Exit code: $?"
 
 APK="$SYSROOT_TMP/nativeapkdeptest.apk"
 echo "========================\nCalling $APK..."
-"$ROOT_DIR/build/bin/mup" --sysroot "$ROOT_DIR/build/sysroot" "$APK"
+"$MUP" --sysroot "$ROOT_DIR/build/sysroot" "$APK"
 echo "Exit code: $?"
 
 APK="$SYSROOT_TMP/nativejnionlytest.apk"
 JNI_ONLY_LOG="$ROOT_DIR/build/nativejnionlytest.log"
 echo "========================\nCalling $APK..."
-"$ROOT_DIR/build/bin/mup" --sysroot "$ROOT_DIR/build/sysroot" "$APK" > "$JNI_ONLY_LOG" 2>&1
+"$MUP" --sysroot "$ROOT_DIR/build/sysroot" "$APK" > "$JNI_ONLY_LOG" 2>&1
 jniOnlyCode=$?
 cat "$JNI_ONLY_LOG"
 echo "Exit code: $jniOnlyCode"
@@ -77,12 +82,12 @@ fi
 
 APK="$SYSROOT_TMP/nativeunsupportedimporttest.apk"
 echo "========================\nCalling $APK..."
-"$ROOT_DIR/build/bin/mup" --sysroot "$ROOT_DIR/build/sysroot" "$APK"
+"$MUP" --sysroot "$ROOT_DIR/build/sysroot" "$APK"
 echo "Exit code: $?"
 
 STRICT_LOG="$ROOT_DIR/build/nativeunsupportedimporttest-strict.log"
 echo "========================\nCalling $APK with --strict-direct-imports (expected failure)..."
-"$ROOT_DIR/build/bin/mup" --strict-direct-imports --sysroot "$ROOT_DIR/build/sysroot" "$APK" > "$STRICT_LOG" 2>&1
+"$MUP" --strict-direct-imports --sysroot "$ROOT_DIR/build/sysroot" "$APK" > "$STRICT_LOG" 2>&1
 strictCode=$?
 cat "$STRICT_LOG"
 echo "Exit code: $strictCode"
@@ -151,49 +156,65 @@ fi
 "$ROOT_DIR/tools/run-apk-compat-scan.sh" --report "$SCAN_REPORT" "$SYSROOT_TMP/javaonlytest.apk" > "$SCAN_LOG" 2>&1
 scanCode=$?
 cat "$SCAN_LOG"
-if [ "$scanCode" -eq 0 ]; then
-    echo "Compatibility scan unexpectedly passed Java-only APK."
-    exit 1
-fi
-if ! grep -q "status: java-runtime-required" "$SCAN_LOG"; then
-    echo "Compatibility scan did not classify Java-only APK correctly."
-    exit 1
-fi
-if ! grep -q "Java/ART Runtime Required" "$SCAN_REPORT"; then
-    echo "Compatibility scan report did not include the Java/ART backlog."
-    exit 1
-fi
-if ! grep -q "app_process64" "$SCAN_REPORT"; then
-    echo "Compatibility scan report did not include missing ART executable."
-    exit 1
-fi
 javaOnlyLog="$(sed -n 's/^log: //p' "$SCAN_LOG" | head -1)"
-if [ -z "$javaOnlyLog" ] ||
-   ! grep -q "muplar-art-bootstrap.jar" "$javaOnlyLog"; then
-    echo "Compatibility scan did not include Muplar ART bootstrap jar in the plan."
-    exit 1
+if [ "$scanCode" -eq 0 ]; then
+    if ! grep -q "status: launch-ok" "$SCAN_LOG"; then
+        echo "Compatibility scan passed Java-only APK without launch-ok status."
+        exit 1
+    fi
+    if [ -z "$javaOnlyLog" ] ||
+       ! grep -q "ArtApkMain.main returned successfully" "$javaOnlyLog"; then
+        echo "Java-only APK did not complete through the host JVM bootstrap path."
+        exit 1
+    fi
+else
+    if ! grep -q "status: java-runtime-required" "$SCAN_LOG"; then
+        echo "Compatibility scan did not classify Java-only APK correctly."
+        exit 1
+    fi
+    if ! grep -q "Java/ART Runtime Required" "$SCAN_REPORT"; then
+        echo "Compatibility scan report did not include the Java/ART backlog."
+        exit 1
+    fi
+    if ! grep -q "app_process64" "$SCAN_REPORT"; then
+        echo "Compatibility scan report did not include missing ART executable."
+        exit 1
+    fi
+    if [ -z "$javaOnlyLog" ] ||
+       ! grep -q "muplar-art-bootstrap.jar" "$javaOnlyLog"; then
+        echo "Compatibility scan did not include Muplar ART bootstrap jar in the plan."
+        exit 1
+    fi
 fi
 
 "$ROOT_DIR/tools/run-apk-compat-scan.sh" --report "$SCAN_REPORT" "$SYSROOT_TMP/tinyjavaactivity.apk" > "$SCAN_LOG" 2>&1
 scanCode=$?
 cat "$SCAN_LOG"
-if [ "$scanCode" -eq 0 ]; then
-    echo "Compatibility scan unexpectedly passed tiny Java Activity APK."
-    exit 1
-fi
-if ! grep -q "status: java-runtime-required" "$SCAN_LOG"; then
-    echo "Compatibility scan did not classify tiny Java Activity APK correctly."
-    exit 1
-fi
 tinyJavaLog="$(sed -n 's/^log: //p' "$SCAN_LOG" | head -1)"
-if [ -z "$tinyJavaLog" ] ||
-   ! grep -q "launch activity=com.example.muplar.tiny.TinyActivity" "$tinyJavaLog"; then
-    echo "Tiny Java Activity launch target was not recorded in the ART plan."
-    exit 1
-fi
-if ! grep -q "muplar-art-bootstrap.jar" "$tinyJavaLog"; then
-    echo "Tiny Java Activity ART plan did not include the Muplar bootstrap jar."
-    exit 1
+if [ "$scanCode" -eq 0 ]; then
+    if ! grep -q "status: launch-ok" "$SCAN_LOG"; then
+        echo "Compatibility scan passed tiny Java Activity APK without launch-ok status."
+        exit 1
+    fi
+    if [ -z "$tinyJavaLog" ] ||
+       ! grep -q "ArtApkMain.main returned successfully" "$tinyJavaLog"; then
+        echo "Tiny Java Activity did not complete through the host JVM bootstrap path."
+        exit 1
+    fi
+else
+    if ! grep -q "status: java-runtime-required" "$SCAN_LOG"; then
+        echo "Compatibility scan did not classify tiny Java Activity APK correctly."
+        exit 1
+    fi
+    if [ -z "$tinyJavaLog" ] ||
+       ! grep -q "launch activity=com.example.muplar.tiny.TinyActivity" "$tinyJavaLog"; then
+        echo "Tiny Java Activity launch target was not recorded in the ART plan."
+        exit 1
+    fi
+    if ! grep -q "muplar-art-bootstrap.jar" "$tinyJavaLog"; then
+        echo "Tiny Java Activity ART plan did not include the Muplar bootstrap jar."
+        exit 1
+    fi
 fi
 
 EXTERNAL_JAVA_APK="$ROOT_DIR/build/javaonlytest-external.apk"
@@ -201,22 +222,30 @@ cp "$SYSROOT_TMP/javaonlytest.apk" "$EXTERNAL_JAVA_APK"
 "$ROOT_DIR/tools/run-apk-compat-scan.sh" --report "$SCAN_REPORT" "$EXTERNAL_JAVA_APK" > "$SCAN_LOG" 2>&1
 scanCode=$?
 cat "$SCAN_LOG"
-if [ "$scanCode" -eq 0 ]; then
-    echo "Compatibility scan unexpectedly passed external Java-only APK."
-    exit 1
-fi
-if ! grep -q "status: java-runtime-required" "$SCAN_LOG"; then
-    echo "Compatibility scan did not classify external Java-only APK correctly."
-    exit 1
-fi
 externalJavaLog="$(sed -n 's/^log: //p' "$SCAN_LOG" | head -1)"
-if [ -z "$externalJavaLog" ] || ! grep -q "staged APK for guest path" "$externalJavaLog"; then
-    echo "External Java-only APK was not staged into the guest sysroot."
-    exit 1
-fi
-if ! grep -q "guest apk=/data/local/tmp/muplar/apks/" "$externalJavaLog"; then
-    echo "External Java-only APK did not get a guest-visible APK path."
-    exit 1
+if [ "$scanCode" -eq 0 ]; then
+    if ! grep -q "status: launch-ok" "$SCAN_LOG"; then
+        echo "Compatibility scan passed external Java-only APK without launch-ok status."
+        exit 1
+    fi
+    if [ -z "$externalJavaLog" ] ||
+       ! grep -q "ArtApkMain.main returned successfully" "$externalJavaLog"; then
+        echo "External Java-only APK did not complete through the host JVM bootstrap path."
+        exit 1
+    fi
+else
+    if ! grep -q "status: java-runtime-required" "$SCAN_LOG"; then
+        echo "Compatibility scan did not classify external Java-only APK correctly."
+        exit 1
+    fi
+    if [ -z "$externalJavaLog" ] || ! grep -q "staged APK for guest path" "$externalJavaLog"; then
+        echo "External Java-only APK was not staged into the guest sysroot."
+        exit 1
+    fi
+    if ! grep -q "guest apk=/data/local/tmp/muplar/apks/" "$externalJavaLog"; then
+        echo "External Java-only APK did not get a guest-visible APK path."
+        exit 1
+    fi
 fi
 
 "$ROOT_DIR/tools/run-apk-compat-scan.sh" --report "$SCAN_REPORT" "$SYSROOT_TMP/nativeunsupportedimporttest.apk" > "$SCAN_LOG" 2>&1
@@ -253,77 +282,77 @@ fi
 
 APK="$SYSROOT_TMP/nativeassettest.apk"
 echo "========================\nCalling $APK..."
-"$ROOT_DIR/build/bin/mup" --sysroot "$ROOT_DIR/build/sysroot" "$APK"
+"$MUP" --sysroot "$ROOT_DIR/build/sysroot" "$APK"
 echo "Exit code: $?"
 
 APK="$SYSROOT_TMP/nativecontexttest.apk"
 echo "========================\nCalling $APK..."
-"$ROOT_DIR/build/bin/mup" --sysroot "$ROOT_DIR/build/sysroot" "$APK"
+"$MUP" --sysroot "$ROOT_DIR/build/sysroot" "$APK"
 echo "Exit code: $?"
 
 APK="$SYSROOT_TMP/nativebindertest.apk"
 echo "========================\nCalling $APK..."
-"$ROOT_DIR/build/bin/mup" --sysroot "$ROOT_DIR/build/sysroot" "$APK"
+"$MUP" --sysroot "$ROOT_DIR/build/sysroot" "$APK"
 echo "Exit code: $?"
 
 APK="$SYSROOT_TMP/nativebindertranstest.apk"
 echo "========================\nCalling $APK..."
-"$ROOT_DIR/build/bin/mup" --sysroot "$ROOT_DIR/build/sysroot" "$APK"
+"$MUP" --sysroot "$ROOT_DIR/build/sysroot" "$APK"
 echo "Exit code: $?"
 
 APK="$SYSROOT_TMP/nativebinderlocaltest.apk"
 echo "========================\nCalling $APK..."
-"$ROOT_DIR/build/bin/mup" --sysroot "$ROOT_DIR/build/sysroot" "$APK"
+"$MUP" --sysroot "$ROOT_DIR/build/sysroot" "$APK"
 echo "Exit code: $?"
 
 APK="$SYSROOT_TMP/nativebinderstringtest.apk"
 echo "========================\nCalling $APK..."
-"$ROOT_DIR/build/bin/mup" --sysroot "$ROOT_DIR/build/sysroot" "$APK"
+"$MUP" --sysroot "$ROOT_DIR/build/sysroot" "$APK"
 echo "Exit code: $?"
 
 APK="$SYSROOT_TMP/nativebinderarraytest.apk"
 echo "========================\nCalling $APK..."
-"$ROOT_DIR/build/bin/mup" --sysroot "$ROOT_DIR/build/sysroot" "$APK"
+"$MUP" --sysroot "$ROOT_DIR/build/sysroot" "$APK"
 echo "Exit code: $?"
 
 APK="$SYSROOT_TMP/nativebinderparcelabletest.apk"
 echo "========================\nCalling $APK..."
-"$ROOT_DIR/build/bin/mup" --sysroot "$ROOT_DIR/build/sysroot" "$APK"
+"$MUP" --sysroot "$ROOT_DIR/build/sysroot" "$APK"
 echo "Exit code: $?"
 
 APK="$SYSROOT_TMP/nativebinderlifecycletest.apk"
 echo "========================\nCalling $APK..."
-"$ROOT_DIR/build/bin/mup" --sysroot "$ROOT_DIR/build/sysroot" "$APK"
+"$MUP" --sysroot "$ROOT_DIR/build/sysroot" "$APK"
 echo "Exit code: $?"
 
 APK="$SYSROOT_TMP/nativebinderdrivertest.apk"
 echo "========================\nCalling $APK..."
-"$ROOT_DIR/build/bin/mup" --sysroot "$ROOT_DIR/build/sysroot" "$APK"
+"$MUP" --sysroot "$ROOT_DIR/build/sysroot" "$APK"
 echo "Exit code: $?"
 
 APK="$SYSROOT_TMP/nativeaidlsmoketest.apk"
 echo "========================\nCalling $APK..."
-"$ROOT_DIR/build/bin/mup" --sysroot "$ROOT_DIR/build/sysroot" "$APK"
+"$MUP" --sysroot "$ROOT_DIR/build/sysroot" "$APK"
 echo "Exit code: $?"
 
 APK="$SYSROOT_TMP/nativeaidlgeneratedtest.apk"
 echo "========================\nCalling $APK..."
-"$ROOT_DIR/build/bin/mup" --sysroot "$ROOT_DIR/build/sysroot" "$APK"
+"$MUP" --sysroot "$ROOT_DIR/build/sysroot" "$APK"
 echo "Exit code: $?"
 
 APK="$SYSROOT_TMP/nativebinderweaktest.apk"
 echo "========================\nCalling $APK..."
-"$ROOT_DIR/build/bin/mup" --sysroot "$ROOT_DIR/build/sysroot" "$APK"
+"$MUP" --sysroot "$ROOT_DIR/build/sysroot" "$APK"
 echo "Exit code: $?"
 
 APK="$SYSROOT_TMP/nativeaidlrealsourcetest.apk"
 echo "========================\nCalling $APK..."
-"$ROOT_DIR/build/bin/mup" --sysroot "$ROOT_DIR/build/sysroot" "$APK"
+"$MUP" --sysroot "$ROOT_DIR/build/sysroot" "$APK"
 echo "Exit code: $?"
 
 APK="$SYSROOT_TMP/nativeaidlndktest.apk"
 echo "========================\nCalling $APK..."
-"$ROOT_DIR/build/bin/mup" --sysroot "$ROOT_DIR/build/sysroot" "$APK"
+"$MUP" --sysroot "$ROOT_DIR/build/sysroot" "$APK"
 echo "Exit code: $?"
 
 echo "Script run finished!"

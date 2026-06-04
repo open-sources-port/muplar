@@ -5,8 +5,8 @@ add_executable(mup
 set(ANGLE_DYLIB_DIR "${CMAKE_SOURCE_DIR}/third_party/angle-bin")
 
 set_target_properties(mup PROPERTIES
-    BUILD_RPATH "@executable_path"
-    INSTALL_RPATH "@executable_path;@executable_path/../Frameworks/angle"
+    BUILD_RPATH "${ANGLE_DYLIB_DIR};@executable_path"
+    INSTALL_RPATH "@executable_path;@executable_path/../Frameworks/angle;${ANGLE_DYLIB_DIR}"
     MACOSX_RPATH ON
 )
 
@@ -37,6 +37,7 @@ target_include_directories(mup PUBLIC
 )
 
 add_custom_command(TARGET mup POST_BUILD
+    COMMAND install_name_tool -change ./libEGL.dylib @rpath/libEGL.dylib "$<TARGET_FILE:mup>"
+    COMMAND install_name_tool -change ./libGLESv2.dylib @rpath/libGLESv2.dylib "$<TARGET_FILE:mup>"
     COMMAND codesign --entitlements "${CMAKE_SOURCE_DIR}/mup.entitlements" --force -s - "$<TARGET_FILE:mup>"
 )
-

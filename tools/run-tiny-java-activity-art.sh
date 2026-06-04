@@ -3,6 +3,10 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 ROOT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
+ANGLE_DYLIB_DIR="$ROOT_DIR/third_party/angle-bin"
+if [ -d "$ANGLE_DYLIB_DIR" ]; then
+    export DYLD_LIBRARY_PATH="$ANGLE_DYLIB_DIR${DYLD_LIBRARY_PATH:+:$DYLD_LIBRARY_PATH}"
+fi
 
 SYSROOT="$ROOT_DIR/build/sysroot"
 MUP="$ROOT_DIR/build/bin/mup"

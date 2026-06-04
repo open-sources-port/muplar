@@ -61,7 +61,21 @@ add_custom_target(populate_manager_bundle ALL
              cp -f '${CMAKE_BINARY_DIR}/bin/mup' '${APP_CONTENTS}/MacOS/mup'; \
              install_name_tool -change ./libEGL.dylib @executable_path/../Frameworks/angle/libEGL.dylib '${APP_CONTENTS}/MacOS/mup'; \
              install_name_tool -change ./libGLESv2.dylib @executable_path/../Frameworks/angle/libGLESv2.dylib '${APP_CONTENTS}/MacOS/mup'; \
+             install_name_tool -change @rpath/libEGL.dylib @executable_path/../Frameworks/angle/libEGL.dylib '${APP_CONTENTS}/MacOS/mup'; \
+             install_name_tool -change @rpath/libGLESv2.dylib @executable_path/../Frameworks/angle/libGLESv2.dylib '${APP_CONTENTS}/MacOS/mup'; \
              codesign --entitlements '${CMAKE_SOURCE_DIR}/mup.entitlements' --force -s - '${APP_CONTENTS}/MacOS/mup'; \
+         fi"
+
+    # ── BusyBox Static Binaries → Frameworks/ ────────────────────────────────
+    COMMAND bash -c
+        "if [ -f '${CMAKE_BINARY_DIR}/bin/busybox_aarch64' ]; then \
+             cp -f '${CMAKE_BINARY_DIR}/bin/busybox_aarch64' '${APP_CONTENTS}/Frameworks/busybox_aarch64'; \
+             codesign --force -s - '${APP_CONTENTS}/Frameworks/busybox_aarch64'; \
+         fi"
+    COMMAND bash -c
+        "if [ -f '${CMAKE_BINARY_DIR}/bin/busybox_x86_64' ]; then \
+             cp -f '${CMAKE_BINARY_DIR}/bin/busybox_x86_64' '${APP_CONTENTS}/Frameworks/busybox_x86_64'; \
+             codesign --force -s - '${APP_CONTENTS}/Frameworks/busybox_x86_64'; \
          fi"
 
     # ── ANGLE (libEGL / libGLESv2) → Frameworks/ ──────────────────────────────
@@ -151,4 +165,4 @@ add_custom_target(populate_manager_bundle ALL
     VERBATIM
 )
 
-add_dependencies(populate_manager_bundle muplar_prefix_manager wine_lib dxmt_lib mup)
+add_dependencies(populate_manager_bundle muplar_prefix_manager wine_lib dxmt_lib mup busybox_bin)

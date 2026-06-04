@@ -25,6 +25,7 @@ struct PlatformLaunchConfig {
     std::vector<std::string> guest_args;
     std::string sysroot;
     bool verbose = false;
+    bool quiet = false;
     int timeout_sec = 10;
 
     std::optional<prefix::PrefixLayout> active_prefix;

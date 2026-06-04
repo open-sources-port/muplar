@@ -2,7 +2,6 @@
 
 export OUTPUT_ZIP=../muplar.zip
 COMMON_FILES=(
-  *.sh
   CMakeLists.txt
   LICENSE
   README.md

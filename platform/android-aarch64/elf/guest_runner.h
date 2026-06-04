@@ -47,9 +47,18 @@ namespace muplar::runtime::elf {
         // argv[0] is conventionally the binary name; add real args after.
         std::vector<std::string> argv;
 
-        // Optional KEY=value environment entries to overlay onto the host
-        // environment before building the guest stack.
+        // Optional KEY=value environment entries passed to the guest stack.
         std::vector<std::string> env;
+
+        // Preserve host environment variables unless env overrides them.
+        // Prefix-backed launches should set this to false so guest shells do
+        // not inherit macOS PATH/HOME/etc.
+        bool inherit_host_env = true;
+
+        // Optional host cwd to enter before booting the guest. When this path
+        // lives under sysroot, elfuse reports the stripped guest path from
+        // getcwd() and /proc/self/cwd.
+        std::string host_cwd;
 
         // Optional sysroot. When set, elfuse resolves absolute guest paths
         // (e.g. /lib/ld-musl-aarch64.so.1) under this sysroot first.
@@ -58,6 +67,9 @@ namespace muplar::runtime::elf {
 
         // Print every guest syscall as it executes (very verbose).
         bool verbose = false;
+
+        // Suppress Muplar loader diagnostics for interactive guest shells.
+        bool quiet = false;
 
         // Per-vCPU-iteration timeout in seconds.  A guest that spins
         // indefinitely without a syscall will be killed after this.
@@ -95,6 +107,10 @@ namespace muplar::runtime::elf {
         // and lightweight Java Context methods such as getPackageName().
         std::string package_name;
         std::string package_code_path;
+
+        // Flag to indicate if JNI/ART/ANGLE (Android runtime environment) should be initialized.
+        // For pure Linux ARM64 binaries (e.g. bash), this can be set to false.
+        bool is_android = true;
 
         // Negative means wait until the window closes. Non-negative means
         // pump the host window for that many milliseconds before exiting.

@@ -4,6 +4,10 @@ set -u
 
 ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 SCRIPT_NAME="$0"
+ANGLE_DYLIB_DIR="$ROOT_DIR/third_party/angle-bin"
+if [ -d "$ANGLE_DYLIB_DIR" ]; then
+    export DYLD_LIBRARY_PATH="$ANGLE_DYLIB_DIR${DYLD_LIBRARY_PATH:+:$DYLD_LIBRARY_PATH}"
+fi
 MUP="$ROOT_DIR/build/bin/mup"
 SYSROOT="$ROOT_DIR/build/sysroot"
 PREFIX=""

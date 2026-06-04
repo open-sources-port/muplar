@@ -11,6 +11,197 @@
 namespace muplar::runtime::prefix {
 namespace {
 
+#if defined(__APPLE__)
+#include <mach-o/dyld.h>
+#endif
+
+static std::filesystem::path get_executable_path()
+{
+#if defined(__APPLE__)
+    char path[1024];
+    uint32_t size = sizeof(path);
+    if (_NSGetExecutablePath(path, &size) == 0) {
+        std::error_code ec;
+        return std::filesystem::canonical(path, ec).parent_path();
+    }
+#endif
+    return std::filesystem::current_path();
+}
+
+static std::filesystem::path find_guest_sh()
+{
+    auto exec_dir = get_executable_path();
+    
+    // Check if guest_sh is in the same directory (CLI)
+    auto candidate = exec_dir / "guest_sh";
+    std::error_code ec;
+    if (std::filesystem::exists(candidate, ec)) {
+        return candidate;
+    }
+    
+    // Check if it's next to the app bundle (MacOS app -> Contents/MacOS -> Contents -> App -> parent)
+    auto parent_dir = exec_dir.parent_path().parent_path().parent_path();
+    candidate = parent_dir / "guest_sh";
+    if (std::filesystem::exists(candidate, ec)) {
+        return candidate;
+    }
+    
+    // Check if it's inside the bundle frameworks (MacOS app bundle -> Contents/Frameworks/guest_sh)
+    candidate = exec_dir.parent_path().parent_path() / "Frameworks" / "guest_sh";
+    if (std::filesystem::exists(candidate, ec)) {
+        return candidate;
+    }
+    
+    return {};
+}
+
+static std::filesystem::path find_guest_busybox(GuestArch arch)
+{
+    auto exec_dir = get_executable_path();
+    std::string filename = (arch == GuestArch::Aarch64) ? "busybox_aarch64" : "busybox_x86_64";
+    
+    // Check if the binary is in the same directory (CLI/build bin)
+    auto candidate = exec_dir / filename;
+    std::error_code ec;
+    if (std::filesystem::exists(candidate, ec)) {
+        return candidate;
+    }
+    
+    // Check if it's next to the app bundle
+    auto parent_dir = exec_dir.parent_path().parent_path().parent_path();
+    candidate = parent_dir / filename;
+    if (std::filesystem::exists(candidate, ec)) {
+        return candidate;
+    }
+    
+    // Check if it's inside the bundle frameworks (MacOS app bundle -> Contents/Frameworks/...)
+    candidate = exec_dir.parent_path().parent_path() / "Frameworks" / filename;
+    if (std::filesystem::exists(candidate, ec)) {
+        return candidate;
+    }
+    
+    return {};
+}
+
+static void copy_file_if_changed(const std::filesystem::path& source,
+                                 const std::filesystem::path& destination,
+                                 std::error_code& ec)
+{
+    ec.clear();
+    std::filesystem::create_directories(destination.parent_path(), ec);
+    ec.clear();
+
+    if (std::filesystem::is_regular_file(destination, ec)) {
+        ec.clear();
+        auto source_size = std::filesystem::file_size(source, ec);
+        if (!ec) {
+            auto destination_size = std::filesystem::file_size(destination, ec);
+            if (!ec && source_size == destination_size) {
+                auto source_time = std::filesystem::last_write_time(source, ec);
+                if (!ec) {
+                    auto destination_time =
+                        std::filesystem::last_write_time(destination, ec);
+                    if (!ec && destination_time >= source_time)
+                        return;
+                }
+            }
+        }
+    }
+
+    ec.clear();
+    std::filesystem::copy_file(source, destination,
+                               std::filesystem::copy_options::overwrite_existing,
+                               ec);
+}
+
+static constexpr const char* kBusyboxApplets[] = {
+    "[", "[[", "acpid", "add-shell", "addgroup", "adduser", "adjtimex",
+    "ar", "arch", "arp", "arping", "ash", "awk", "base64", "basename",
+    "bash", "bc", "blkdiscard", "blkid", "blockdev", "bootchartd", "brctl",
+    "bunzip2", "bzcat", "bzip2", "cal", "cat", "chat", "chattr",
+    "chgrp", "chmod", "chown", "chpasswd", "chroot", "chrt", "chvt",
+    "cksum", "clear", "cmp", "comm", "conspy", "cp", "cpio", "crond",
+    "crontab", "cryptpw", "cttyhack", "cut", "date", "dc", "dd",
+    "deallocvt", "delgroup", "deluser", "depmod", "devmem", "df",
+    "diff", "dirname", "dmesg", "dnsd", "dnsdomainname", "dos2unix",
+    "du", "dumpkmap", "dumpleases", "echo", "ed", "egrep", "eject",
+    "env", "ether-wake", "expand", "expr", "factor", "fallocate",
+    "false", "fatattr", "fbset", "fbsplash", "fdflush", "fdformat",
+    "fdisk", "fgconsole", "fgrep", "find", "findfs", "flock", "fold",
+    "free", "freeramdisk", "fsck", "fsck.minix", "fsfreeze", "fstrim",
+    "ftpget", "ftpput", "getopt", "getty", "grep", "groups", "gunzip",
+    "gzip", "halt", "head", "hexdump", "hexedit", "hostid", "hostname",
+    "httpd", "hush", "hwclock", "i2cdetect", "i2cdump", "i2cget",
+    "i2cset", "i2ctransfer", "id", "ifconfig", "ifdown", "ifenslave",
+    "ifplugd", "ifup", "inetd", "init", "insmod", "install", "ionice",
+    "iostat", "ip", "ipaddr", "ipcalc", "ipcrm", "ipcs", "iplink",
+    "ipneigh", "iproute", "iprule", "iptunnel", "kbd_mode", "kill",
+    "killall", "killall5", "klogd", "last", "less", "link", "linux32",
+    "linux64", "linuxrc", "ln", "loadfont", "loadkmap", "logger",
+    "login", "logname", "losetup", "lpd", "lpq", "lpr", "ls", "lsattr",
+    "lsmod", "lsof", "lspci", "lsscsi", "lsusb", "lzcat", "lzma",
+    "lzop", "makedevs", "md5sum", "mdev", "mesg", "microcom", "mkdir",
+    "mkdosfs", "mke2fs", "mkfifo", "mknod", "mkpasswd", "mkswap",
+    "mktemp", "modinfo", "modprobe", "more", "mount", "mountpoint",
+    "mpstat", "mt", "mv", "nameif", "nanddump", "nandwrite",
+    "nbd-client", "nc", "netstat", "nice", "nl", "nmeter", "nohup",
+    "nologin", "nproc", "nsenter", "nslookup", "ntpd", "od", "openvt",
+    "partprobe", "passwd", "paste", "patch", "pidof", "ping", "ping6",
+    "pipe_progress", "pivot_root", "pkill", "pmap", "poweroff",
+    "printenv", "printf", "ps", "pscan", "pstree", "pwd", "pwdx",
+    "raidautorun", "rdate", "rdev", "readahead", "readlink",
+    "readprofile", "realpath", "reboot", "reformime", "remove-shell",
+    "renice", "reset", "resize", "resume", "rev", "rm", "rmdir",
+    "rmmod", "route", "rpm", "rpm2cpio", "rtcwake", "run-init",
+    "run-parts", "runlevel", "runsv", "runsvdir", "rx", "script",
+    "scriptreplay", "sed", "sendmail", "seq", "setarch", "setconsole",
+    "setfattr", "setfont", "setkeycodes", "setlogcons", "setpriv",
+    "setserial", "setsid", "sh", "sha1sum", "sha256sum", "sha3sum",
+    "sha512sum", "shred", "shuf", "slattach", "sleep", "smemcap",
+    "softlimit", "sort", "split", "ssl_client", "start-stop-daemon",
+    "stat", "strings", "stty", "su", "sulogin", "sum", "sv", "svc",
+    "svlogd", "swapoff", "swapon", "switch_root", "sync", "sysctl",
+    "syslogd", "tac", "tail", "tar", "tc", "tee", "telnet", "telnetd",
+    "test", "tftp", "time", "timeout", "top", "touch", "tr",
+    "traceroute", "traceroute6", "true", "truncate", "ts", "tty",
+    "tunctl", "ubiattach", "ubidetach", "ubimkvol", "ubirename",
+    "ubirmvol", "ubirsvol", "ubiupdatevol", "udhcpc", "udhcpd", "udpsvd",
+    "uevent", "umount", "uname", "uncompress", "unexpand", "uniq",
+    "unix2dos", "unlink", "unlzma", "unshare", "unxz", "unzip", "uptime",
+    "users", "usleep", "uudecode", "uuencode", "vconfig", "vi", "vlock",
+    "volname", "w", "wall", "watch", "watchdog", "wc", "wget", "which",
+    "who", "whoami", "whois", "xargs", "xxd", "xz", "xzcat", "yes",
+    "zcat",
+};
+
+static void ensure_relative_symlink(const std::filesystem::path& link_path,
+                                    const char* target)
+{
+    std::error_code ec;
+    std::filesystem::create_directories(link_path.parent_path(), ec);
+
+    if (std::filesystem::is_symlink(link_path, ec)) {
+        std::filesystem::path existing = std::filesystem::read_symlink(link_path, ec);
+        if (!ec && existing == target)
+            return;
+        std::filesystem::remove(link_path, ec);
+    } else if (std::filesystem::exists(link_path, ec)) {
+        return;
+    }
+
+    std::filesystem::create_symlink(target, link_path, ec);
+}
+
+static void install_busybox_applets(const std::filesystem::path& dir,
+                                    const char* busybox_target)
+{
+    for (const char* applet : kBusyboxApplets) {
+        if (std::string(applet) == "busybox")
+            continue;
+        ensure_relative_symlink(dir / applet, busybox_target);
+    }
+}
+
 struct InstanceRegistryEntry {
     std::string name;
     std::filesystem::path root;
@@ -420,11 +611,51 @@ void ensure_layout_dirs(const PrefixLayout& layout)
             layout.rootfs / "data" / "local" / "tmp");
         std::filesystem::create_directories(layout.rootfs / "data" / "misc");
         std::filesystem::create_directories(layout.rootfs / "data" / "system");
+        std::filesystem::create_directories(layout.rootfs / "system" / "bin");
+        std::filesystem::create_directories(layout.rootfs / "system" / "xbin");
+        {
+            std::error_code ec;
+            auto bb_path = find_guest_busybox(layout.arch);
+            if (!bb_path.empty()) {
+                copy_file_if_changed(bb_path, layout.rootfs / "system" / "bin" / "busybox", ec);
+                install_busybox_applets(layout.rootfs / "system" / "bin", "busybox");
+                install_busybox_applets(layout.rootfs / "system" / "xbin", "../bin/busybox");
+            } else {
+                auto sh_path = find_guest_sh();
+                if (!sh_path.empty()) {
+                    copy_file_if_changed(sh_path, layout.rootfs / "system" / "bin" / "sh", ec);
+                    copy_file_if_changed(sh_path, layout.rootfs / "system" / "bin" / "bash", ec);
+                }
+            }
+        }
         break;
     case PrefixKind::Linux:
         std::filesystem::create_directories(layout.rootfs / "etc");
         std::filesystem::create_directories(layout.rootfs / "home" / "muplar");
         std::filesystem::create_directories(layout.rootfs / "var");
+        std::filesystem::create_directories(layout.rootfs / "bin");
+        std::filesystem::create_directories(layout.rootfs / "usr" / "bin");
+        std::filesystem::create_directories(layout.rootfs / "sbin");
+        std::filesystem::create_directories(layout.rootfs / "usr" / "sbin");
+        {
+            std::error_code ec;
+            auto bb_path = find_guest_busybox(layout.arch);
+            if (!bb_path.empty()) {
+                copy_file_if_changed(bb_path, layout.rootfs / "bin" / "busybox", ec);
+                install_busybox_applets(layout.rootfs / "bin", "busybox");
+                install_busybox_applets(layout.rootfs / "usr" / "bin",
+                                        "../../bin/busybox");
+                install_busybox_applets(layout.rootfs / "sbin", "../bin/busybox");
+                install_busybox_applets(layout.rootfs / "usr" / "sbin",
+                                        "../../bin/busybox");
+            } else {
+                auto sh_path = find_guest_sh();
+                if (!sh_path.empty()) {
+                    copy_file_if_changed(sh_path, layout.rootfs / "bin" / "sh", ec);
+                    copy_file_if_changed(sh_path, layout.rootfs / "bin" / "bash", ec);
+                }
+            }
+        }
         break;
     case PrefixKind::Wine:
         std::filesystem::create_directories(layout.rootfs / "drive_c");
@@ -465,6 +696,9 @@ void write_prefix_toml(const PrefixLayout& layout, bool overwrite = false)
     out << "kind = " << quote_toml(to_string(layout.kind)) << "\n";
     out << "arch = " << quote_toml(to_string(layout.arch)) << "\n";
     out << "runner = " << quote_toml(layout.runner) << "\n";
+    if (!layout.distro.empty()) {
+        out << "distro = " << quote_toml(layout.distro) << "\n";
+    }
     if (!layout.runtime_sysroot.empty()) {
         out << "runtime_sysroot = "
             << quote_toml(std::filesystem::absolute(layout.runtime_sysroot).string())
@@ -612,7 +846,8 @@ PrefixLayout load_prefix_at_root(const std::filesystem::path& root,
                                  bool create_if_missing,
                                  PrefixKind kind,
                                  GuestArch arch,
-                                 std::string runner)
+                                 std::string runner,
+                                 std::string distro)
 {
     PrefixLayout layout;
     layout.root = absolute_normal_path(root);
@@ -624,6 +859,7 @@ PrefixLayout load_prefix_at_root(const std::filesystem::path& root,
     layout.kind = kind;
     layout.arch = arch;
     layout.runner = runner.empty() ? "elfuse" : std::move(runner);
+    layout.distro = std::move(distro);
     assign_layout_paths(layout);
     layout.runtime_sysroot = runtime_sysroot;
 
@@ -652,6 +888,12 @@ PrefixLayout load_prefix_at_root(const std::filesystem::path& root,
             layout.arch = parse_guest_arch(*stored);
         if (auto stored = read_toml_string(metadata, "runner"))
             layout.runner = *stored;
+        if (auto stored = read_toml_string(metadata, "distro"))
+            layout.distro = *stored;
+    }
+
+    if (layout.kind == PrefixKind::Linux && layout.distro.empty()) {
+        layout.distro = "ubuntu";
     }
 
     if (create_if_missing &&
@@ -827,12 +1069,13 @@ PrefixLayout open_prefix(const std::string& spec,
                          bool create_if_missing,
                          PrefixKind kind,
                          GuestArch arch,
-                         std::string runner)
+                         std::string runner,
+                         std::string distro)
 {
     std::filesystem::path root = resolve_prefix_root(spec);
     std::string name = looks_like_path(spec) ? std::string() : spec;
     return load_prefix_at_root(root, name, runtime_sysroot, create_if_missing,
-                               kind, arch, std::move(runner));
+                               kind, arch, std::move(runner), std::move(distro));
 }
 
 PrefixLayout open_prefix_at_root(const std::string& name,
@@ -841,13 +1084,14 @@ PrefixLayout open_prefix_at_root(const std::string& name,
                                  bool create_if_missing,
                                  PrefixKind kind,
                                  GuestArch arch,
-                                 std::string runner)
+                                 std::string runner,
+                                 std::string distro)
 {
     if (name.empty())
         throw std::runtime_error("prefix instance name is required");
     return load_prefix_at_root(expand_user_path(root.string()), name,
                                runtime_sysroot, create_if_missing, kind, arch,
-                               std::move(runner));
+                               std::move(runner), std::move(distro));
 }
 
 std::vector<PrefixLayout> list_prefixes()
@@ -859,7 +1103,7 @@ std::vector<PrefixLayout> list_prefixes()
         try {
             PrefixLayout layout = load_prefix_at_root(
                 entry.root, entry.name, {}, false, PrefixKind::Android,
-                GuestArch::Aarch64, "elfuse");
+                GuestArch::Aarch64, "elfuse", "");
             out.push_back(layout);
         } catch (const std::exception&) {
             // Keep the registry entry. The root may live on removable storage
