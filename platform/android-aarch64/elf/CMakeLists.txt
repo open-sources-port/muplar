@@ -32,6 +32,7 @@ target_link_libraries(muplar_runtime_elf
     PRIVATE
         muplar_runtime_jni
         muplar_runtime_android
+        muplar_runtime_supervisor
         elfuse
         "-framework Hypervisor"
 )

@@ -5,6 +5,7 @@ add_library(muplar_runtime_prefix STATIC
 target_include_directories(muplar_runtime_prefix
     PUBLIC
         ${CMAKE_SOURCE_DIR}/platform/commons/prefix
+        ${CMAKE_SOURCE_DIR}/platform/linux-common
 )
 
 target_compile_options(muplar_runtime_prefix PRIVATE

@@ -9,6 +9,7 @@ target_link_libraries(muplar_runtime_windows_x64
     INTERFACE
         muplar_runtime_memory
         muplar_runtime_prefix
+        muplar_runtime_supervisor
 )
 add_dependencies(muplar_runtime_windows_x64 wine_lib)
 

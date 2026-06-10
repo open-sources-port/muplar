@@ -71,9 +71,9 @@ namespace muplar::runtime::elf {
         // Suppress Muplar loader diagnostics for interactive guest shells.
         bool quiet = false;
 
-        // Per-vCPU-iteration timeout in seconds.  A guest that spins
-        // indefinitely without a syscall will be killed after this.
-        int timeout_sec = 10;
+        // Per-vCPU-iteration timeout in seconds.  Zero disables the guard for
+        // long-lived shells and GUI applications.
+        int timeout_sec = 0;
 
         // Optional phase-5 JNI/native call target for direct Android .so runs.
         JniCallConfig jni_call;

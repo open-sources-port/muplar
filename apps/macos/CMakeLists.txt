@@ -20,6 +20,7 @@ set_target_properties(muplar_prefix_manager PROPERTIES
 target_link_libraries(muplar_prefix_manager
     PRIVATE
         muplar_runtime_prefix
+        muplar_runtime_supervisor
         "-framework AppKit"
         "-framework UniformTypeIdentifiers"
 )
@@ -27,6 +28,7 @@ target_link_libraries(muplar_prefix_manager
 target_include_directories(muplar_prefix_manager
     PRIVATE
         ${CMAKE_SOURCE_DIR}/platform/commons/prefix
+        ${CMAKE_SOURCE_DIR}/platform/commons/supervisor
 )
 
 target_compile_options(muplar_prefix_manager PRIVATE
@@ -50,6 +52,8 @@ add_custom_target(populate_manager_bundle ALL
     COMMAND ${CMAKE_COMMAND} -E make_directory
         "${APP_CONTENTS}/MacOS"
         "${APP_CONTENTS}/Frameworks"
+        "${APP_CONTENTS}/Frameworks/aarch64"
+        "${APP_CONTENTS}/Frameworks/x86_64"
         "${APP_CONTENTS}/Frameworks/angle"
         "${APP_CONTENTS}/Frameworks/wine/bin"
         "${APP_CONTENTS}/Frameworks/wine/lib"
@@ -76,6 +80,80 @@ add_custom_target(populate_manager_bundle ALL
         "if [ -f '${CMAKE_BINARY_DIR}/bin/busybox_x86_64' ]; then \
              cp -f '${CMAKE_BINARY_DIR}/bin/busybox_x86_64' '${APP_CONTENTS}/Frameworks/busybox_x86_64'; \
              codesign --force -s - '${APP_CONTENTS}/Frameworks/busybox_x86_64'; \
+         fi"
+
+    # ── Wawona → Frameworks/ (with dependency bundling) ──────────────────────
+    COMMAND bash -c
+        "if [ -f '${CMAKE_BINARY_DIR}/bin/wawona' ]; then \
+             cp -f '${CMAKE_BINARY_DIR}/bin/wawona' '${APP_CONTENTS}/Frameworks/wawona'; \
+             brew_prefix=''; \
+             for prefix in /opt/homebrew /usr/local; do \
+                 if [ -d \"\$prefix\" ]; then \
+                     brew_prefix=\"\$prefix\"; \
+                     break; \
+                 fi; \
+             done; \
+             if [ -n \"\$brew_prefix\" ]; then \
+                 echo '[bundle] Copying Wawona Homebrew dependencies from' \"\$brew_prefix\"; \
+                 for lib in libpixman-1.0.dylib libxkbcommon.0.dylib libssl.3.dylib libcrypto.3.dylib; do \
+                     lib_src=\"\$brew_prefix/lib/\$lib\"; \
+                     if [ -f \"\$lib_src\" ]; then \
+                         cp -f \"\$lib_src\" '${APP_CONTENTS}/Frameworks/'\"\$lib\"; \
+                         chmod 755 '${APP_CONTENTS}/Frameworks/'\"\$lib\"; \
+                         install_name_tool -id @loader_path/\"\$lib\" '${APP_CONTENTS}/Frameworks/'\"\$lib\"; \
+                     fi; \
+                 done; \
+                 patch_deps() { \
+                     local file=\"\$1\"; \
+                     if [ -f \"\$file\" ]; then \
+                         otool -L \"\$file\" | tail -n +2 | awk '{print \$1}' | while read -r dep; do \
+                             case \"\$dep\" in \
+                                 *libpixman-1*.dylib) \
+                                     install_name_tool -change \"\$dep\" @loader_path/libpixman-1.0.dylib \"\$file\"; \
+                                     ;; \
+                                 *libxkbcommon*.dylib) \
+                                     install_name_tool -change \"\$dep\" @loader_path/libxkbcommon.0.dylib \"\$file\"; \
+                                     ;; \
+                                 *libssl*.dylib) \
+                                     install_name_tool -change \"\$dep\" @loader_path/libssl.3.dylib \"\$file\"; \
+                                     ;; \
+                                 *libcrypto*.dylib) \
+                                     install_name_tool -change \"\$dep\" @loader_path/libcrypto.3.dylib \"\$file\"; \
+                                     ;; \
+                             esac; \
+                         done; \
+                     fi; \
+                 }; \
+                 patch_deps '${APP_CONTENTS}/Frameworks/wawona'; \
+                 patch_deps '${APP_CONTENTS}/Frameworks/libssl.3.dylib'; \
+                 patch_deps '${APP_CONTENTS}/Frameworks/libcrypto.3.dylib'; \
+                 patch_deps '${APP_CONTENTS}/Frameworks/libxkbcommon.0.dylib'; \
+                 patch_deps '${APP_CONTENTS}/Frameworks/libpixman-1.0.dylib'; \
+                 for lib in libpixman-1.0.dylib libxkbcommon.0.dylib libssl.3.dylib libcrypto.3.dylib; do \
+                     if [ -f '${APP_CONTENTS}/Frameworks/'\"\$lib\" ]; then \
+                         codesign --force -s - '${APP_CONTENTS}/Frameworks/'\"\$lib\" 2>/dev/null || true; \
+                     fi; \
+                 done; \
+             fi; \
+             codesign --force -s - '${APP_CONTENTS}/Frameworks/wawona' 2>/dev/null || true; \
+         fi"
+
+    # ── Guest EGL/GLESv2 Stubs → Frameworks/ ─────────────────────────────────
+    COMMAND bash -c
+        "if [ -f '${CMAKE_BINARY_DIR}/bin/aarch64/libEGL.so' ]; then \
+             cp -f '${CMAKE_BINARY_DIR}/bin/aarch64/libEGL.so' '${APP_CONTENTS}/Frameworks/aarch64/libEGL.so'; \
+         fi"
+    COMMAND bash -c
+        "if [ -f '${CMAKE_BINARY_DIR}/bin/aarch64/libGLESv2.so' ]; then \
+             cp -f '${CMAKE_BINARY_DIR}/bin/aarch64/libGLESv2.so' '${APP_CONTENTS}/Frameworks/aarch64/libGLESv2.so'; \
+         fi"
+    COMMAND bash -c
+        "if [ -f '${CMAKE_BINARY_DIR}/bin/x86_64/libEGL.so' ]; then \
+             cp -f '${CMAKE_BINARY_DIR}/bin/x86_64/libEGL.so' '${APP_CONTENTS}/Frameworks/x86_64/libEGL.so'; \
+         fi"
+    COMMAND bash -c
+        "if [ -f '${CMAKE_BINARY_DIR}/bin/x86_64/libGLESv2.so' ]; then \
+             cp -f '${CMAKE_BINARY_DIR}/bin/x86_64/libGLESv2.so' '${APP_CONTENTS}/Frameworks/x86_64/libGLESv2.so'; \
          fi"
 
     # ── ANGLE (libEGL / libGLESv2) → Frameworks/ ──────────────────────────────
@@ -136,12 +214,20 @@ add_custom_target(populate_manager_bundle ALL
 
     # ── Bundle FreeType (and libpng dependency) into the unix lib dir to bypass Rosetta DYLD_* stripping ───
     COMMAND bash -c
-        "if [ -d '${WINE_PREFIX_DIR}/lib/wine/x86_64-unix' ] && [ -f '/usr/local/opt/freetype/lib/libfreetype.6.dylib' ]; then \
+        "ft_lib=''; png_lib=''; \
+         for prefix in /usr/local /opt/homebrew; do \
+             if [ -f \"\$prefix/opt/freetype/lib/libfreetype.6.dylib\" ] && [ -f \"\$prefix/opt/libpng/lib/libpng16.16.dylib\" ]; then \
+                 ft_lib=\"\$prefix/opt/freetype/lib/libfreetype.6.dylib\"; \
+                 png_lib=\"\$prefix/opt/libpng/lib/libpng16.16.dylib\"; \
+                 break; \
+             fi; \
+         done; \
+         if [ -d '${WINE_PREFIX_DIR}/lib/wine/x86_64-unix' ] && [ -n \"\$ft_lib\" ]; then \
              rm -f '${WINE_PREFIX_DIR}/lib/wine/x86_64-unix/libfreetype.6.dylib' '${WINE_PREFIX_DIR}/lib/wine/x86_64-unix/libfreetype.dylib' '${WINE_PREFIX_DIR}/lib/wine/x86_64-unix/libpng16.16.dylib'; \
-             cp -f '/usr/local/opt/freetype/lib/libfreetype.6.dylib' '${WINE_PREFIX_DIR}/lib/wine/x86_64-unix/libfreetype.6.dylib'; \
-             cp -f '/usr/local/opt/libpng/lib/libpng16.16.dylib' '${WINE_PREFIX_DIR}/lib/wine/x86_64-unix/libpng16.16.dylib'; \
+             cp -f \"\$ft_lib\" '${WINE_PREFIX_DIR}/lib/wine/x86_64-unix/libfreetype.6.dylib'; \
+             cp -f \"\$png_lib\" '${WINE_PREFIX_DIR}/lib/wine/x86_64-unix/libpng16.16.dylib'; \
              chmod 755 '${WINE_PREFIX_DIR}/lib/wine/x86_64-unix/libfreetype.6.dylib' '${WINE_PREFIX_DIR}/lib/wine/x86_64-unix/libpng16.16.dylib'; \
-             install_name_tool -change /usr/local/opt/libpng/lib/libpng16.16.dylib @loader_path/libpng16.16.dylib '${WINE_PREFIX_DIR}/lib/wine/x86_64-unix/libfreetype.6.dylib'; \
+             install_name_tool -change \"\$png_lib\" @loader_path/libpng16.16.dylib '${WINE_PREFIX_DIR}/lib/wine/x86_64-unix/libfreetype.6.dylib'; \
              install_name_tool -id @loader_path/libfreetype.6.dylib '${WINE_PREFIX_DIR}/lib/wine/x86_64-unix/libfreetype.6.dylib'; \
              install_name_tool -id @loader_path/libpng16.16.dylib '${WINE_PREFIX_DIR}/lib/wine/x86_64-unix/libpng16.16.dylib'; \
              ln -sf libfreetype.6.dylib '${WINE_PREFIX_DIR}/lib/wine/x86_64-unix/libfreetype.dylib'; \
@@ -149,12 +235,20 @@ add_custom_target(populate_manager_bundle ALL
          fi"
     COMMAND bash -c
         "mkdir -p '${APP_CONTENTS}/Frameworks/wine/lib/wine/x86_64-unix'; \
-         if [ -f '/usr/local/opt/freetype/lib/libfreetype.6.dylib' ]; then \
+         ft_lib=''; png_lib=''; \
+         for prefix in /usr/local /opt/homebrew; do \
+             if [ -f \"\$prefix/opt/freetype/lib/libfreetype.6.dylib\" ] && [ -f \"\$prefix/opt/libpng/lib/libpng16.16.dylib\" ]; then \
+                 ft_lib=\"\$prefix/opt/freetype/lib/libfreetype.6.dylib\"; \
+                 png_lib=\"\$prefix/opt/libpng/lib/libpng16.16.dylib\"; \
+                 break; \
+             fi; \
+         done; \
+         if [ -n \"\$ft_lib\" ]; then \
              rm -f '${APP_CONTENTS}/Frameworks/wine/lib/wine/x86_64-unix/libfreetype.6.dylib' '${APP_CONTENTS}/Frameworks/wine/lib/wine/x86_64-unix/libfreetype.dylib' '${APP_CONTENTS}/Frameworks/wine/lib/wine/x86_64-unix/libpng16.16.dylib'; \
-             cp -f '/usr/local/opt/freetype/lib/libfreetype.6.dylib' '${APP_CONTENTS}/Frameworks/wine/lib/wine/x86_64-unix/libfreetype.6.dylib'; \
-             cp -f '/usr/local/opt/libpng/lib/libpng16.16.dylib' '${APP_CONTENTS}/Frameworks/wine/lib/wine/x86_64-unix/libpng16.16.dylib'; \
+             cp -f \"\$ft_lib\" '${APP_CONTENTS}/Frameworks/wine/lib/wine/x86_64-unix/libfreetype.6.dylib'; \
+             cp -f \"\$png_lib\" '${APP_CONTENTS}/Frameworks/wine/lib/wine/x86_64-unix/libpng16.16.dylib'; \
              chmod 755 '${APP_CONTENTS}/Frameworks/wine/lib/wine/x86_64-unix/libfreetype.6.dylib' '${APP_CONTENTS}/Frameworks/wine/lib/wine/x86_64-unix/libpng16.16.dylib'; \
-             install_name_tool -change /usr/local/opt/libpng/lib/libpng16.16.dylib @loader_path/libpng16.16.dylib '${APP_CONTENTS}/Frameworks/wine/lib/wine/x86_64-unix/libfreetype.6.dylib'; \
+             install_name_tool -change \"\$png_lib\" @loader_path/libpng16.16.dylib '${APP_CONTENTS}/Frameworks/wine/lib/wine/x86_64-unix/libfreetype.6.dylib'; \
              install_name_tool -id @loader_path/libfreetype.6.dylib '${APP_CONTENTS}/Frameworks/wine/lib/wine/x86_64-unix/libfreetype.6.dylib'; \
              install_name_tool -id @loader_path/libpng16.16.dylib '${APP_CONTENTS}/Frameworks/wine/lib/wine/x86_64-unix/libpng16.16.dylib'; \
              ln -sf libfreetype.6.dylib '${APP_CONTENTS}/Frameworks/wine/lib/wine/x86_64-unix/libfreetype.dylib'; \
@@ -165,4 +259,4 @@ add_custom_target(populate_manager_bundle ALL
     VERBATIM
 )
 
-add_dependencies(populate_manager_bundle muplar_prefix_manager wine_lib dxmt_lib mup busybox_bin)
+add_dependencies(populate_manager_bundle muplar_prefix_manager wine_lib dxmt_lib mup busybox_bin wawona_bin egl_gles_stubs_bin)

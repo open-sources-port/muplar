@@ -46,6 +46,7 @@ target_link_libraries(muplar_runtime_android
         muplar_runtime_elf
         muplar_runtime_jni
         muplar_runtime_apk
+        muplar_runtime_supervisor
     PRIVATE
         # ANGLE dylibs — loaded at runtime via the RPATH below.
         # We link them so the host process has libEGL/libGLESv2 symbols

@@ -183,8 +183,19 @@ static std::string env_key(const std::string& env)
     return eq == std::string::npos ? env : env.substr(0, eq);
 }
 
+static bool env_has_key(const std::vector<std::string>& env, const std::string& key)
+{
+    std::string prefix = key + "=";
+    for (const auto& entry : env) {
+        if (entry.rfind(prefix, 0) == 0) {
+            return true;
+        }
+    }
+    return false;
+}
+
 static std::vector<std::string> merge_environment(
-    const std::vector<std::string>& overrides)
+    const std::vector<std::string>& overrides, bool is_android)
 {
     std::vector<std::string> merged;
     std::vector<std::string> override_keys;
@@ -192,16 +203,63 @@ static std::vector<std::string> merge_environment(
     for (const std::string& entry : overrides)
         override_keys.push_back(env_key(entry));
 
+    // Whitelist of host environment variables that are safe/needed by the guest
+    static const std::vector<std::string> whitelist = {
+        "TERM",
+        "LANG",
+        "LC_ALL",
+        "LC_CTYPE",
+        "WAYLAND_DISPLAY",
+        "XDG_RUNTIME_DIR"
+    };
+
     for (size_t i = 0; environ && environ[i]; ++i) {
         std::string entry = environ[i];
         std::string key = env_key(entry);
-        if (std::find(override_keys.begin(), override_keys.end(), key) ==
-            override_keys.end()) {
-            merged.push_back(std::move(entry));
+        // Only inherit whitelisted environment variables
+        if (std::find(whitelist.begin(), whitelist.end(), key) != whitelist.end()) {
+            if (std::find(override_keys.begin(), override_keys.end(), key) ==
+                override_keys.end()) {
+                merged.push_back(std::move(entry));
+            }
         }
     }
 
     merged.insert(merged.end(), overrides.begin(), overrides.end());
+
+    // Synthesize guest defaults if missing
+    if (!env_has_key(merged, "PATH")) {
+        if (is_android) {
+            merged.push_back("PATH=/sbin:/system/sbin:/system/bin:/system/xbin");
+        } else {
+            merged.push_back("PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin");
+        }
+    }
+
+    if (!env_has_key(merged, "HOME")) {
+        if (is_android) {
+            merged.push_back("HOME=/data");
+        } else {
+            merged.push_back("HOME=/home/muplar");
+        }
+    }
+
+    if (!env_has_key(merged, "USER")) {
+        if (is_android) {
+            merged.push_back("USER=root");
+        } else {
+            merged.push_back("USER=muplar");
+        }
+    }
+
+    if (!env_has_key(merged, "SHELL")) {
+        if (is_android) {
+            merged.push_back("SHELL=/system/bin/sh");
+        } else {
+            merged.push_back("SHELL=/bin/sh");
+        }
+    }
+
     return merged;
 }
 
@@ -1134,11 +1192,15 @@ static uint64_t hvc6_handler(uint64_t call_nr, const uint64_t args[8], void* use
     uint64_t out = 0;
 
     if (call_nr >= 0x1000 && call_nr <= 0x1FFF) {
-        ctx->jni_onload->try_intercept(static_cast<uint32_t>(call_nr), args, &out);
+        if (ctx->jni_onload) {
+            ctx->jni_onload->try_intercept(static_cast<uint32_t>(call_nr), args, &out);
+        }
         return out;
     }
     if (call_nr >= 0x2000 && call_nr <= 0x2FFF) {
-        ctx->art->try_dispatch(static_cast<uint32_t>(call_nr), args, &out);
+        if (ctx->art) {
+            ctx->art->try_dispatch(static_cast<uint32_t>(call_nr), args, &out);
+        }
         return out;
     }
 
@@ -1287,7 +1349,7 @@ int GuestRunner::run(const GuestRunnerConfig& cfg)
     const char** guest_envp = nullptr;
     bool use_explicit_envp = !cfg.inherit_host_env;
     if (cfg.inherit_host_env) {
-        guest_env_storage = merge_environment(cfg.env);
+        guest_env_storage = merge_environment(cfg.env, cfg.is_android);
         use_explicit_envp = !guest_env_storage.empty();
     } else {
         guest_env_storage = cfg.env;
@@ -1346,7 +1408,8 @@ int GuestRunner::run(const GuestRunnerConfig& cfg)
         ? "muplar"
         : cfg.package_name;
 
-    if (is_android_run) {
+    bool init_art = is_android_run || cfg.host_window;
+    if (init_art) {
         // Do not place Muplar user-mode tables/stubs in elfuse shim_data. Recent
         // elfuse maps shim_data as EL1-only, so guest EL0 cannot read JNI tables or
         // execute HVC stubs there. Keep Muplar runtime state in a normal
@@ -1360,22 +1423,26 @@ int GuestRunner::run(const GuestRunnerConfig& cfg)
         activity_gpa               = muplar_arena_gpa + 0x032000;
         synthetic_arg_gpa          = muplar_arena_gpa + 0x033000;
 
-        opt_jni_env.emplace();
-        opt_jni_env->set_app_context(package_name, cfg.package_code_path);
-        activity_object = opt_jni_env->register_object("android/app/NativeActivity");
+        if (is_android_run) {
+            opt_jni_env.emplace();
+            opt_jni_env->set_app_context(package_name, cfg.package_code_path);
+            activity_object = opt_jni_env->register_object("android/app/NativeActivity");
 
-        opt_jni_bridge.emplace(&g, &*opt_jni_env, jni_table_gpa, jni_stubs_gpa);
-        opt_jni_bridge->install();
+            opt_jni_bridge.emplace(&g, &*opt_jni_env, jni_table_gpa, jni_stubs_gpa);
+            opt_jni_bridge->install();
 
-        opt_jni_onload.emplace(&g, &*opt_jni_bridge, &*opt_jni_env, java_vm_gpa);
-        opt_jni_onload->install();
+            opt_jni_onload.emplace(&g, &*opt_jni_bridge, &*opt_jni_env, java_vm_gpa);
+            opt_jni_onload->install();
+        }
 
         opt_art.emplace(&g, android_stubs_gpa, cfg.host_window);
-        opt_art->set_asset_root(cfg.apk_assets_dir);
+        if (is_android_run) {
+            opt_art->set_asset_root(cfg.apk_assets_dir);
+        }
         opt_art->install();
 
         // ── Register HVC #6 hook ──────────────────────────────────────────────────
-        ctx.emplace(MuplarCtx{ &*opt_jni_onload, &*opt_art });
+        ctx.emplace(MuplarCtx{ is_android_run ? &*opt_jni_onload : nullptr, &*opt_art });
         g.hvc6_handler  = hvc6_handler;
         g.hvc6_userdata = &*ctx;
     }

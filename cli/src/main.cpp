@@ -26,6 +26,8 @@
 #include <unistd.h>
 
 #include "android_aarch64_runtime.h"
+#include "linux_aarch64_runtime.h"
+#include "linux_x86_64_runtime.h"
 #include "platform_runtime.h"
 #include "prefix.h"
 
@@ -36,6 +38,9 @@ extern "C" {
 #ifdef MUPLAR_HAS_WINE
 #include "wine_runtime.h"
 #endif
+
+static constexpr const char* kRosettadTranslatorPath =
+    "/Library/Apple/usr/libexec/oah/RosettaLinux/rosettad";
 
 static void print_usage(const char* prog)
 {
@@ -63,10 +68,36 @@ static void print_usage(const char* prog)
               << " [--root PATH] [--replace]\n"
               << "       " << prog << " prefix delete NAME|PATH --yes\n";
     std::cerr << "       " << prog
-              << " instance start NAME [--daemon] [--wine-bin PATH] <exe.exe> [args...]\n"
+              << " instance start NAME [--daemon] [--wine-bin PATH] <program> [args...]\n"
               << "       " << prog << " instance stop  NAME [--force]\n"
               << "       " << prog << " instance status NAME\n"
               << "       " << prog << " instance list\n";
+}
+
+static int handle_rosettad_translate_command(int argc, char** argv)
+{
+    if (argc < 5) {
+        std::cerr << "Usage: " << argv[0]
+                  << " rosettad translate <input> <output>\n";
+        return 1;
+    }
+
+    muplar::runtime::PlatformLaunchConfig launch_cfg;
+    launch_cfg.input_path = kRosettadTranslatorPath;
+    launch_cfg.quiet = true;
+    launch_cfg.linux_guest = true;
+    launch_cfg.timeout_sec = 60;
+    launch_cfg.guest_args.push_back("translate");
+    launch_cfg.guest_args.push_back(argv[3]);
+    launch_cfg.guest_args.push_back(argv[4]);
+
+    try {
+        muplar::runtime::android::AndroidAarch64Runtime runtime;
+        return runtime.run(launch_cfg);
+    } catch (const std::exception& e) {
+        std::cerr << "rosettad translate failed: " << e.what() << "\n";
+        return 1;
+    }
 }
 
 static std::string prefix_kind_string(
@@ -408,6 +439,57 @@ static int handle_prefix_command(int argc, char** argv)
     }
 }
 
+static int run_platform_runtime(
+    const muplar::runtime::PlatformLaunchConfig& cfg)
+{
+    namespace prefix = muplar::runtime::prefix;
+
+    if (!cfg.active_prefix) {
+        muplar::runtime::android::AndroidAarch64Runtime runtime;
+        return runtime.run(cfg);
+    }
+
+    const auto& layout = *cfg.active_prefix;
+    switch (layout.kind) {
+    case prefix::PrefixKind::Android: {
+        if (layout.arch != prefix::GuestArch::Aarch64) {
+            std::cerr << "Android runtime supports ARM64 only; got arch="
+                      << prefix::to_string(layout.arch) << "\n";
+            return 1;
+        }
+        muplar::runtime::android::AndroidAarch64Runtime runtime;
+        return runtime.run(cfg);
+    }
+    case prefix::PrefixKind::Linux:
+        if (layout.arch == prefix::GuestArch::Aarch64) {
+            muplar::runtime::linux_aarch64::LinuxAarch64Runtime runtime;
+            return runtime.run(cfg);
+        }
+        if (layout.arch == prefix::GuestArch::X86_64) {
+            muplar::runtime::linux_x86_64::LinuxX86_64Runtime runtime;
+            return runtime.run(cfg);
+        }
+        std::cerr << "Unsupported linux arch: "
+                  << prefix::to_string(layout.arch) << "\n";
+        return 1;
+    case prefix::PrefixKind::Wine:
+#ifdef MUPLAR_HAS_WINE
+    {
+        muplar::runtime::wine::WineRuntime runtime({});
+        return runtime.run(cfg);
+    }
+#else
+        std::cerr << "Wine support was not built into this binary.\n"
+                  << "Rebuild with -DMUPLAR_ENABLE_WINE=ON.\n";
+        return 1;
+#endif
+    }
+
+    std::cerr << "Unsupported prefix kind: "
+              << prefix::to_string(layout.kind) << "\n";
+    return 1;
+}
+
 // ==========================================================================
 // instance sub-command: start / stop / status / list
 // ==========================================================================
@@ -548,23 +630,18 @@ static int handle_instance_command(int argc, char** argv)
     if (sub == "start") {
         if (argc < 5) {
             std::cerr << "Usage: mup instance start NAME [--daemon] "
-                         "[--wine-bin PATH] <exe.exe> [args...]\n";
+                         "[--wine-bin PATH] <program> [args...]\n";
             return 2;
         }
 
-#ifndef MUPLAR_HAS_WINE
-        std::cerr << "instance start: Wine support was not built into this binary.\n"
-                  << "Rebuild with -DMUPLAR_ENABLE_WINE=ON.\n";
-        return 1;
-#else
         std::string prefix_name = argv[3];
         bool daemon_mode        = false;
         std::filesystem::path wine_bin;
-        std::string exe_path;
-        std::vector<std::string> exe_args;
+        std::string program_path;
+        std::vector<std::string> program_args;
 
         int i = 4;
-        // Parse optional flags before the exe path.
+        // Parse optional flags before the program path.
         while (i < argc && argv[i][0] == '-') {
             std::string flag = argv[i];
             if (flag == "--daemon" || flag == "-d") {
@@ -582,49 +659,67 @@ static int handle_instance_command(int argc, char** argv)
             }
         }
         if (i >= argc) {
-            std::cerr << "instance start: missing <exe.exe> argument\n";
+            std::cerr << "instance start: missing <program> argument\n";
             return 2;
         }
-        exe_path = argv[i++];
+        program_path = argv[i++];
         for (; i < argc; ++i)
-            exe_args.push_back(argv[i]);
+            program_args.push_back(argv[i]);
 
         try {
             auto layout = prefix::open_prefix(prefix_name, {}, false);
 
-            if (layout.kind != prefix::PrefixKind::Wine) {
-                std::cerr << "instance start: prefix '" << layout.name
-                          << "' is kind=" << prefix::to_string(layout.kind)
-                          << "; only 'wine' prefixes can be started this way.\n";
-                return 1;
-            }
             if (prefix::query_prefix_state(layout) == prefix::PrefixState::Running) {
                 pid_t existing = prefix::read_prefix_pid(layout);
                 std::cerr << "instance start: prefix '" << layout.name
                           << "' is already running (pid=" << existing << ").\n"
-                          << "Use 'mup instance stop" << layout.name << "' first.\n";
+                          << "Use 'mup instance stop " << layout.name << "' first.\n";
                 return 1;
             }
 
             muplar::runtime::PlatformLaunchConfig cfg;
-            cfg.input_path   = exe_path;
-            cfg.guest_args   = exe_args;
+            cfg.input_path   = program_path;
+            cfg.guest_args   = program_args;
             cfg.verbose      = true;
+            cfg.timeout_sec  = 0;
             cfg.active_prefix = layout;
             if (!layout.runtime_sysroot.empty())
                 cfg.sysroot = layout.runtime_sysroot.string();
+            else if (layout.kind == prefix::PrefixKind::Android ||
+                     layout.kind == prefix::PrefixKind::Linux)
+                cfg.sysroot = layout.rootfs.string();
 
+#ifdef MUPLAR_HAS_WINE
             muplar::runtime::wine::WineLaunchOptions opts;
             opts.wine_bin = wine_bin;
             opts.daemon   = daemon_mode;
 
-            muplar::runtime::wine::WineRuntime runtime(opts);
-            return runtime.run(cfg);
+            if (layout.kind == prefix::PrefixKind::Wine) {
+                muplar::runtime::wine::WineRuntime runtime(opts);
+                return runtime.run(cfg);
+            }
+#else
+            if (layout.kind == prefix::PrefixKind::Wine) {
+                std::cerr << "instance start: Wine support was not built into this binary.\n"
+                          << "Rebuild with -DMUPLAR_ENABLE_WINE=ON.\n";
+                return 1;
+            }
+#endif
+
+            if (!wine_bin.empty()) {
+                std::cerr << "instance start: --wine-bin is only valid for wine prefixes.\n";
+                return 2;
+            }
+            if (daemon_mode) {
+                std::cerr << "instance start: --daemon is only valid for wine prefixes for now.\n";
+                return 2;
+            }
+
+            return run_platform_runtime(cfg);
         } catch (const std::exception& e) {
             std::cerr << "instance start error: " << e.what() << "\n";
             return 1;
         }
-#endif // MUPLAR_HAS_WINE
     }
 
     std::cerr << "Unknown instance command: " << sub << "\n";
@@ -638,7 +733,7 @@ int main(int argc, char** argv)
     int fork_child_fd = -1;
     int vfork_notify_fd = -1;
     bool verbose = false;
-    int timeout_sec = 10;
+    int timeout_sec = 0;
 
     for (int i = 1; i < argc; ++i) {
         std::string arg = argv[i];
@@ -673,6 +768,11 @@ int main(int argc, char** argv)
         std::cout << "Muplar CLI (mup)\n";
         print_usage(argv[0]);
         return 1;
+    }
+
+    if (argc >= 3 && std::string(argv[1]) == "rosettad" &&
+        std::string(argv[2]) == "translate") {
+        return handle_rosettad_translate_command(argc, argv);
     }
 
     bool quiet_requested = false;
@@ -841,8 +941,7 @@ int main(int argc, char** argv)
     }
 
     try {
-        muplar::runtime::android::AndroidAarch64Runtime runtime;
-        return runtime.run(launch_cfg);
+        return run_platform_runtime(launch_cfg);
     } catch (const std::exception& e) {
         std::cerr << "Fatal: " << e.what() << "\n";
         return 1;

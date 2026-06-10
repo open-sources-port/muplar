@@ -2,13 +2,16 @@
 
 #include <algorithm>
 #include <cctype>
+#include <cstdlib>
 #include <exception>
 #include <filesystem>
+#include <fstream>
 #include <iostream>
 #include <sstream>
 #include <stdexcept>
 #include <string>
 #include <vector>
+#include <unistd.h>
 
 #include "apk_envelope.h"
 #include "art_bootstrap.h"
@@ -20,6 +23,58 @@
 
 namespace muplar::runtime::android {
 namespace {
+
+class PrefixPidRegistration {
+public:
+    explicit PrefixPidRegistration(
+        const std::optional<prefix::PrefixLayout>& active_prefix)
+    {
+        if (!active_prefix ||
+            active_prefix->kind == prefix::PrefixKind::Wine) {
+            return;
+        }
+
+        layout_ = active_prefix;
+        pid_ = getpid();
+
+        std::filesystem::path run_dir = layout_->root / "run";
+        std::error_code ec;
+        std::filesystem::create_directories(run_dir, ec);
+        if (ec) {
+            std::cerr << "[Prefix] warning: cannot create run directory "
+                      << run_dir << ": " << ec.message() << "\n";
+            layout_.reset();
+            return;
+        }
+
+        std::ofstream out(prefix::pid_file_path(*layout_), std::ios::trunc);
+        if (!out) {
+            std::cerr << "[Prefix] warning: cannot write PID file "
+                      << prefix::pid_file_path(*layout_) << "\n";
+            layout_.reset();
+            return;
+        }
+        out << pid_ << "\n";
+    }
+
+    ~PrefixPidRegistration()
+    {
+        if (!layout_)
+            return;
+        if (prefix::read_prefix_pid(*layout_) != pid_)
+            return;
+
+        std::error_code ec;
+        std::filesystem::remove(prefix::pid_file_path(*layout_), ec);
+    }
+
+    PrefixPidRegistration(const PrefixPidRegistration&) = delete;
+    PrefixPidRegistration& operator=(const PrefixPidRegistration&) = delete;
+
+private:
+    std::optional<prefix::PrefixLayout> layout_;
+    pid_t pid_ = 0;
+};
 
 std::string lower_ext(const std::string& path)
 {
@@ -41,6 +96,97 @@ void copy_jni_call_config(const RuntimeJniCallConfig& from,
     to.receiver_static = from.receiver_static;
 }
 
+void set_guest_env(std::vector<std::string>& env,
+                   const std::string& key,
+                   const std::string& value)
+{
+    std::string prefix = key + "=";
+    for (std::string& entry : env) {
+        if (entry.rfind(prefix, 0) == 0) {
+            entry = prefix + value;
+            return;
+        }
+    }
+    env.push_back(prefix + value);
+}
+
+bool guest_env_has_key(const std::vector<std::string>& env,
+                       const std::string& key)
+{
+    const std::string prefix = key + "=";
+    for (const std::string& entry : env) {
+        if (entry.rfind(prefix, 0) == 0)
+            return true;
+    }
+    return false;
+}
+
+void set_guest_env_if_missing(std::vector<std::string>& env,
+                              const std::string& key,
+                              const std::string& value)
+{
+    if (!value.empty() && !guest_env_has_key(env, key))
+        env.push_back(key + "=" + value);
+}
+
+void pass_host_env_if_set(std::vector<std::string>& env, const char* name)
+{
+    const char* value = std::getenv(name);
+    if (value && value[0])
+        set_guest_env(env, name, value);
+}
+
+std::string default_wawona_runtime_dir()
+{
+    return "/tmp/wawona-" +
+           std::to_string(static_cast<unsigned long>(getuid()));
+}
+
+void ensure_linux_guest_x11_socket_dir(const prefix::PrefixLayout& active_prefix)
+{
+    if (active_prefix.kind != prefix::PrefixKind::Linux)
+        return;
+
+    std::error_code ec;
+    std::filesystem::path x11_dir = active_prefix.rootfs / "tmp" / ".X11-unix";
+    if (std::filesystem::is_symlink(x11_dir, ec))
+        std::filesystem::remove(x11_dir, ec);
+    if (!std::filesystem::exists(x11_dir, ec))
+        std::filesystem::create_directories(x11_dir, ec);
+}
+
+void pass_linux_display_environment(std::vector<std::string>& env)
+{
+    // Keep prefix launches isolated, but allow Linux Wayland clients to find
+    // the host Wawona compositor. X11 is intentionally guest-owned: the UI
+    // starts guest Xwayland inside the rootfs for X11 apps such as xterm.
+    static constexpr const char* kDisplayEnv[] = {
+        "WAYLAND_DISPLAY",
+        "XDG_RUNTIME_DIR",
+        "DBUS_SESSION_BUS_ADDRESS",
+        "XDG_SESSION_TYPE",
+        "GDK_BACKEND",
+        "QT_QPA_PLATFORM",
+        "SDL_VIDEODRIVER",
+        "CLUTTER_BACKEND",
+        "EGL_PLATFORM",
+        "LIBGL_ALWAYS_INDIRECT",
+    };
+
+    for (const char* name : kDisplayEnv)
+        pass_host_env_if_set(env, name);
+
+    set_guest_env_if_missing(env, "XDG_RUNTIME_DIR",
+                             default_wawona_runtime_dir());
+    set_guest_env_if_missing(env, "WAYLAND_DISPLAY", "wayland-0");
+    set_guest_env_if_missing(env, "XDG_SESSION_TYPE", "wayland");
+    set_guest_env_if_missing(env, "GDK_BACKEND", "wayland,x11");
+    set_guest_env_if_missing(env, "QT_QPA_PLATFORM", "wayland;xcb");
+    set_guest_env_if_missing(env, "SDL_VIDEODRIVER", "wayland");
+    set_guest_env_if_missing(env, "CLUTTER_BACKEND", "wayland");
+    set_guest_env_if_missing(env, "EGL_PLATFORM", "wayland");
+}
+
 std::vector<std::string> default_guest_environment(
     const prefix::PrefixLayout& active_prefix)
 {
@@ -57,17 +203,21 @@ std::vector<std::string> default_guest_environment(
             "USER=shell",
             "TERM=xterm-256color",
         };
-    case prefix::PrefixKind::Linux:
-        return {
+    case prefix::PrefixKind::Linux: {
+        std::string home_dir = "/home/muplar";
+        std::vector<std::string> env = {
             "PATH=/bin:/usr/bin:/sbin:/usr/sbin",
-            "HOME=/home/muplar",
+            "HOME=" + home_dir,
             "LOGNAME=muplar",
-            "PWD=/home/muplar",
+            "PWD=" + home_dir,
             "SHELL=/bin/sh",
             "TMPDIR=/tmp",
             "USER=muplar",
             "TERM=xterm-256color",
         };
+        pass_linux_display_environment(env);
+        return env;
+    }
     case prefix::PrefixKind::Wine:
         return {
             "PATH=/bin:/usr/bin",
@@ -271,11 +421,18 @@ int handle_java_apk_launch(const PlatformLaunchConfig& launch_cfg,
 
 int AndroidAarch64Runtime::run(const PlatformLaunchConfig& config)
 {
+    PrefixPidRegistration pid_registration(config.active_prefix);
+
     elf::GuestRunnerConfig guest_cfg;
     guest_cfg.elf_path = config.input_path;
     guest_cfg.sysroot = config.sysroot;
-    guest_cfg.is_android = !config.active_prefix || (config.active_prefix->kind == prefix::PrefixKind::Android) || config.apk_mode || lower_ext(config.input_path) == ".apk";
+    guest_cfg.is_android =
+        !config.linux_guest &&
+        (!config.active_prefix ||
+         config.active_prefix->kind == prefix::PrefixKind::Android ||
+         config.apk_mode || lower_ext(config.input_path) == ".apk");
     if (config.active_prefix) {
+        ensure_linux_guest_x11_socket_dir(*config.active_prefix);
         guest_cfg.inherit_host_env = false;
         guest_cfg.env = default_guest_environment(*config.active_prefix);
         guest_cfg.host_cwd = default_host_cwd(*config.active_prefix).string();

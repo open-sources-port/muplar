@@ -24,6 +24,7 @@ target_link_libraries(muplar_runtime_jni
     PUBLIC
         muplar_runtime_memory
         muplar_runtime_elf
+        muplar_runtime_supervisor
 )
 
 # ── Compiler flags ────────────────────────────────────────────────────────────

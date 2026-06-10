@@ -112,6 +112,21 @@ On macOS, the native desktop manager is available as an AppKit bundle:
 tools/run-instance-manager.sh
 ```
 
+Linux instances can be provisioned from a distro rootfs tarball. Ubuntu Base
+24.04 and Alpine minirootfs have built-in download helpers; other distros can be
+imported from a local tarball:
+
+```bash
+tools/provision-linux-rootfs.sh --prefix ubuntu-arm64 --distro ubuntu --arch aarch64 --download
+tools/provision-linux-rootfs.sh --prefix alpine-x64 --distro alpine --arch x86_64 --download
+tools/provision-linux-rootfs.sh --prefix debian-arm64 --distro debian --arch aarch64 --from-tar ~/rootfs/debian-arm64.tar.xz
+```
+
+Pass `--root PATH` to place the instance outside the default Muplar home, and
+`--replace-rootfs` when intentionally replacing an existing instance rootfs.
+Wayland-native Linux apps should target Muplar's Wayland path first; X11-only
+apps will need an XWayland/X11 compatibility layer later.
+
 When `--prefix` is set, APK extraction caches are written under the prefix and
 `prefix.toml` records the intended runtime tuple. The visible instance list is
 managed by `~/.muplar/instances.json`, so prefixes can live outside

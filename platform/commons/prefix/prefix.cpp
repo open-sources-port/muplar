@@ -1,12 +1,16 @@
 #include "prefix.h"
+#include "distro_profile.h"
 
 #include <cctype>
 #include <cstdlib>
+#include <cstring>
 #include <fstream>
 #include <sstream>
 #include <stdexcept>
+#include <sys/wait.h>
 #include <sys/types.h>
 #include <signal.h>
+#include <unistd.h>
 
 namespace muplar::runtime::prefix {
 namespace {
@@ -31,27 +35,27 @@ static std::filesystem::path get_executable_path()
 static std::filesystem::path find_guest_sh()
 {
     auto exec_dir = get_executable_path();
-    
+
     // Check if guest_sh is in the same directory (CLI)
     auto candidate = exec_dir / "guest_sh";
     std::error_code ec;
     if (std::filesystem::exists(candidate, ec)) {
         return candidate;
     }
-    
+
     // Check if it's next to the app bundle (MacOS app -> Contents/MacOS -> Contents -> App -> parent)
     auto parent_dir = exec_dir.parent_path().parent_path().parent_path();
     candidate = parent_dir / "guest_sh";
     if (std::filesystem::exists(candidate, ec)) {
         return candidate;
     }
-    
+
     // Check if it's inside the bundle frameworks (MacOS app bundle -> Contents/Frameworks/guest_sh)
     candidate = exec_dir.parent_path().parent_path() / "Frameworks" / "guest_sh";
     if (std::filesystem::exists(candidate, ec)) {
         return candidate;
     }
-    
+
     return {};
 }
 
@@ -59,27 +63,61 @@ static std::filesystem::path find_guest_busybox(GuestArch arch)
 {
     auto exec_dir = get_executable_path();
     std::string filename = (arch == GuestArch::Aarch64) ? "busybox_aarch64" : "busybox_x86_64";
-    
+
     // Check if the binary is in the same directory (CLI/build bin)
     auto candidate = exec_dir / filename;
     std::error_code ec;
     if (std::filesystem::exists(candidate, ec)) {
         return candidate;
     }
-    
+
     // Check if it's next to the app bundle
     auto parent_dir = exec_dir.parent_path().parent_path().parent_path();
     candidate = parent_dir / filename;
     if (std::filesystem::exists(candidate, ec)) {
         return candidate;
     }
-    
+
     // Check if it's inside the bundle frameworks (MacOS app bundle -> Contents/Frameworks/...)
     candidate = exec_dir.parent_path().parent_path() / "Frameworks" / filename;
     if (std::filesystem::exists(candidate, ec)) {
         return candidate;
     }
-    
+
+    return {};
+}
+
+static std::filesystem::path find_guest_stub(const std::string& filename, GuestArch arch)
+{
+    auto exec_dir = get_executable_path();
+    std::string arch_str = (arch == GuestArch::Aarch64) ? "aarch64" : "x86_64";
+
+    // Check if the binary is in the same directory (CLI/build bin) under arch folder
+    auto candidate = exec_dir / arch_str / filename;
+    std::error_code ec;
+    if (std::filesystem::exists(candidate, ec)) {
+        return candidate;
+    }
+
+    // Check if it's next to the app bundle under arch folder
+    auto parent_dir = exec_dir.parent_path().parent_path().parent_path();
+    candidate = parent_dir / arch_str / filename;
+    if (std::filesystem::exists(candidate, ec)) {
+        return candidate;
+    }
+
+    // Check if it's inside the bundle frameworks under arch folder
+    candidate = exec_dir.parent_path().parent_path() / "Frameworks" / arch_str / filename;
+    if (std::filesystem::exists(candidate, ec)) {
+        return candidate;
+    }
+
+    // Fallback to legacy path for compatibility
+    candidate = exec_dir.parent_path().parent_path() / "Frameworks" / filename;
+    if (std::filesystem::exists(candidate, ec)) {
+        return candidate;
+    }
+
     return {};
 }
 
@@ -112,6 +150,31 @@ static void copy_file_if_changed(const std::filesystem::path& source,
     std::filesystem::copy_file(source, destination,
                                std::filesystem::copy_options::overwrite_existing,
                                ec);
+}
+
+static void write_text_file_if_missing(const std::filesystem::path& path,
+                                       const std::string& content)
+{
+    std::error_code ec;
+    if (std::filesystem::exists(path, ec))
+        return;
+
+    std::filesystem::create_directories(path.parent_path(), ec);
+    std::ofstream out(path, std::ios::trunc);
+    if (out)
+        out << content;
+}
+
+static std::string join_strings(const std::vector<std::string>& values,
+                                const char* separator)
+{
+    std::string out;
+    for (size_t i = 0; i < values.size(); ++i) {
+        if (i != 0)
+            out += separator;
+        out += values[i];
+    }
+    return out;
 }
 
 static constexpr const char* kBusyboxApplets[] = {
@@ -190,6 +253,67 @@ static void ensure_relative_symlink(const std::filesystem::path& link_path,
     }
 
     std::filesystem::create_symlink(target, link_path, ec);
+}
+
+static void expose_host_socket_path(const std::filesystem::path& rootfs,
+                                    const std::filesystem::path& host_socket,
+                                    bool allow_missing = false)
+{
+    if (!host_socket.is_absolute())
+        return;
+
+    std::error_code ec;
+    if (!allow_missing && !std::filesystem::exists(host_socket, ec))
+        return;
+
+    std::filesystem::path link_path = rootfs / host_socket.relative_path();
+    std::filesystem::path target = std::filesystem::relative(
+        host_socket, link_path.parent_path(), ec);
+    if (ec || target.empty())
+        target = host_socket;
+    ensure_relative_symlink(link_path, target.string().c_str());
+}
+
+static std::filesystem::path default_wawona_runtime_dir()
+{
+    return std::filesystem::path("/tmp") /
+           ("wawona-" + std::to_string(static_cast<unsigned long>(getuid())));
+}
+
+static void expose_host_display_sockets(const std::filesystem::path& rootfs)
+{
+    const char* wayland_display = std::getenv("WAYLAND_DISPLAY");
+    if (!wayland_display || !wayland_display[0]) {
+        expose_host_socket_path(rootfs,
+                                default_wawona_runtime_dir() / "wayland-0",
+                                true);
+        return;
+    }
+
+    std::filesystem::path wayland_path = wayland_display;
+    if (wayland_path.is_absolute()) {
+        expose_host_socket_path(rootfs, wayland_path);
+        return;
+    }
+
+    const char* runtime_dir = std::getenv("XDG_RUNTIME_DIR");
+    if (runtime_dir && runtime_dir[0])
+        expose_host_socket_path(rootfs,
+                                std::filesystem::path(runtime_dir) / wayland_path);
+    else
+        expose_host_socket_path(rootfs,
+                                default_wawona_runtime_dir() / wayland_path,
+                                true);
+}
+
+static void ensure_guest_x11_socket_dir(const std::filesystem::path& rootfs)
+{
+    std::error_code ec;
+    std::filesystem::path x11_dir = rootfs / "tmp" / ".X11-unix";
+    if (std::filesystem::is_symlink(x11_dir, ec))
+        std::filesystem::remove(x11_dir, ec);
+    if (!std::filesystem::exists(x11_dir, ec))
+        std::filesystem::create_directories(x11_dir, ec);
 }
 
 static void install_busybox_applets(const std::filesystem::path& dir,
@@ -594,6 +718,291 @@ private:
     size_t pos_ = 0;
 };
 
+#if !defined(__APPLE__)
+extern char **environ;
+#else
+#include <crt_externs.h>
+static char **GetProcessEnvironment() {
+    return *_NSGetEnviron();
+}
+#define environ GetProcessEnvironment()
+#endif
+
+static std::filesystem::path find_on_path(const std::string& name)
+{
+    const char* path_env = std::getenv("PATH");
+    if (!path_env)
+        return {};
+    std::istringstream ss(path_env);
+    std::string dir;
+    while (std::getline(ss, dir, ':')) {
+        std::filesystem::path candidate = std::filesystem::path(dir) / name;
+        if (std::filesystem::is_regular_file(candidate)) {
+            std::error_code ec;
+            auto status = std::filesystem::status(candidate, ec);
+            if (!ec && (status.permissions() & std::filesystem::perms::owner_exec) !=
+                           std::filesystem::perms::none)
+                return candidate;
+        }
+    }
+    return {};
+}
+
+static std::filesystem::path resolve_wineboot(const PrefixLayout& layout)
+{
+    auto exec_dir = get_executable_path();
+    std::error_code ec;
+
+    // 1. Check embedded in app bundle Contents/Frameworks/wine/bin/wineboot
+    auto bundle_wineboot = exec_dir.parent_path() / "Frameworks" / "wine" / "bin" / "wineboot";
+    if (std::filesystem::exists(bundle_wineboot, ec))
+        return bundle_wineboot;
+
+    // 2. Check runtime_sysroot / bin / wineboot
+    if (!layout.runtime_sysroot.empty()) {
+        auto candidate = layout.runtime_sysroot / "bin" / "wineboot";
+        if (std::filesystem::exists(candidate, ec))
+            return candidate;
+    }
+
+    // 3. Check dev build relative
+    auto build_dir = exec_dir.parent_path().parent_path().parent_path().parent_path();
+    auto dev_wineboot = build_dir / "wine-prefix" / "bin" / "wineboot";
+    if (std::filesystem::exists(dev_wineboot, ec))
+        return dev_wineboot;
+
+    // 4. System PATH
+    auto from_path = find_on_path("wineboot");
+    if (!from_path.empty())
+        return from_path;
+
+    return {};
+}
+
+static std::filesystem::path resolve_wine_from_bin_dir(
+    const std::filesystem::path& bin_dir)
+{
+    std::error_code ec;
+    for (const char* name : {"wine64", "wine"}) {
+        auto candidate = bin_dir / name;
+        if (std::filesystem::exists(candidate, ec))
+            return candidate;
+    }
+    return {};
+}
+
+static int wait_for_child(pid_t pid, const char* label)
+{
+    int status = 0;
+    while (waitpid(pid, &status, 0) < 0) {
+        if (errno == EINTR)
+            continue;
+        std::fprintf(stderr, "[Wine] waitpid failed for %s: %s\n",
+                     label, std::strerror(errno));
+        return 1;
+    }
+
+    if (WIFEXITED(status))
+        return WEXITSTATUS(status);
+    if (WIFSIGNALED(status)) {
+        std::fprintf(stderr, "[Wine] %s killed by signal %d\n",
+                     label, WTERMSIG(status));
+        return 128 + WTERMSIG(status);
+    }
+    return 1;
+}
+
+static std::filesystem::path ensure_wine_mono_msi_cached()
+{
+    static constexpr const char* kWineMonoVersion = "11.1.0";
+    std::filesystem::path cache_dir =
+        muplar_home() / "cache" / "wine-mono" / kWineMonoVersion;
+    std::filesystem::path msi =
+        cache_dir / ("wine-mono-" + std::string(kWineMonoVersion) + "-x86.msi");
+
+    std::error_code ec;
+    if (std::filesystem::exists(msi, ec)) {
+        ec.clear();
+        auto size = std::filesystem::file_size(msi, ec);
+        if (!ec && size > 0)
+            return msi;
+    }
+
+    std::filesystem::create_directories(cache_dir, ec);
+    if (ec) {
+        std::fprintf(stderr, "[Wine] cannot create Wine Mono cache dir %s: %s\n",
+                     cache_dir.c_str(), ec.message().c_str());
+        return {};
+    }
+
+    std::filesystem::path curl = find_on_path("curl");
+    if (curl.empty())
+        curl = "/usr/bin/curl";
+    if (!std::filesystem::exists(curl, ec)) {
+        std::fprintf(stderr, "[Wine] curl not found, skipping Wine Mono download\n");
+        return {};
+    }
+
+    std::string url =
+        "https://dl.winehq.org/wine/wine-mono/" +
+        std::string(kWineMonoVersion) + "/wine-mono-" +
+        std::string(kWineMonoVersion) + "-x86.msi";
+    std::filesystem::path tmp = msi;
+    tmp += ".tmp";
+
+    pid_t pid = fork();
+    if (pid < 0) {
+        std::fprintf(stderr, "[Wine] fork() failed for Wine Mono download: %s\n",
+                     std::strerror(errno));
+        return {};
+    }
+    if (pid == 0) {
+        std::string curl_str = curl.string();
+        std::string tmp_str = tmp.string();
+        char* argv[] = {
+            const_cast<char*>(curl_str.c_str()),
+            const_cast<char*>("-fL"),
+            const_cast<char*>("--retry"),
+            const_cast<char*>("3"),
+            const_cast<char*>("-o"),
+            const_cast<char*>(tmp_str.c_str()),
+            const_cast<char*>(url.c_str()),
+            nullptr
+        };
+        execve(curl_str.c_str(), argv, environ);
+        std::fprintf(stderr, "[Wine] execve curl failed: %s\n", std::strerror(errno));
+        _exit(127);
+    }
+
+    int rc = wait_for_child(pid, "Wine Mono download");
+    if (rc != 0) {
+        std::filesystem::remove(tmp, ec);
+        std::fprintf(stderr, "[Wine] Wine Mono download failed with code %d\n", rc);
+        return {};
+    }
+
+    std::filesystem::rename(tmp, msi, ec);
+    if (ec) {
+        std::fprintf(stderr, "[Wine] cannot move Wine Mono MSI into cache: %s\n",
+                     ec.message().c_str());
+        return {};
+    }
+    return msi;
+}
+
+static void install_wine_mono(const PrefixLayout& layout,
+                              const std::filesystem::path& wine_bin_dir)
+{
+    std::filesystem::path msi = ensure_wine_mono_msi_cached();
+    if (msi.empty())
+        return;
+
+    std::filesystem::path wine = resolve_wine_from_bin_dir(wine_bin_dir);
+    if (wine.empty()) {
+        wine = find_on_path("wine64");
+        if (wine.empty())
+            wine = find_on_path("wine");
+    }
+    if (wine.empty()) {
+        std::fprintf(stderr, "[Wine] wine binary not found, skipping Wine Mono install\n");
+        return;
+    }
+
+    pid_t pid = fork();
+    if (pid < 0) {
+        std::fprintf(stderr, "[Wine] fork() failed for Wine Mono install: %s\n",
+                     std::strerror(errno));
+        return;
+    }
+
+    if (pid == 0) {
+        setenv("WINEPREFIX", layout.rootfs.string().c_str(), 1);
+        setenv("WINEDEBUG", "-all", 1);
+
+        std::filesystem::path wine_root = wine.parent_path().parent_path();
+        std::filesystem::path wine_lib_dir =
+            wine_root / "lib" / "wine" / "x86_64-windows";
+        if (std::filesystem::is_directory(wine_lib_dir))
+            setenv("WINEDLLPATH", wine_lib_dir.string().c_str(), 1);
+
+        std::filesystem::path wine_lib = wine_root / "lib";
+        if (std::filesystem::is_directory(wine_lib)) {
+            setenv("DYLD_FALLBACK_LIBRARY_PATH",
+                   (wine_lib.string() + ":/usr/local/lib:/opt/homebrew/lib").c_str(),
+                   1);
+        }
+
+        std::string wine_str = wine.string();
+        std::string msi_str = msi.string();
+        char* argv[] = {
+            const_cast<char*>(wine_str.c_str()),
+            const_cast<char*>("msiexec"),
+            const_cast<char*>("/i"),
+            const_cast<char*>(msi_str.c_str()),
+            const_cast<char*>("/quiet"),
+            nullptr
+        };
+        execve(wine_str.c_str(), argv, environ);
+        std::fprintf(stderr, "[Wine] execve wine msiexec failed: %s\n",
+                     std::strerror(errno));
+        _exit(127);
+    }
+
+    int rc = wait_for_child(pid, "Wine Mono install");
+    if (rc != 0) {
+        std::fprintf(stderr, "[Wine] Wine Mono install exited with code %d\n", rc);
+    }
+}
+
+static void run_wineboot_init(const PrefixLayout& layout)
+{
+    std::filesystem::path wineboot = resolve_wineboot(layout);
+    if (wineboot.empty()) {
+        std::fprintf(stderr, "[Wine] wineboot binary not found, skipping auto-init\n");
+        return;
+    }
+
+    pid_t pid = fork();
+    if (pid < 0) {
+        std::fprintf(stderr, "[Wine] fork() failed for wineboot init: %s\n", std::strerror(errno));
+        return;
+    }
+
+    if (pid == 0) {
+        setenv("WINEPREFIX", layout.rootfs.string().c_str(), 1);
+        setenv("WINEDEBUG", "-all", 1);
+
+        std::filesystem::path wine_lib_dir = wineboot.parent_path().parent_path() / "lib" / "wine" / "x86_64-windows";
+        if (std::filesystem::is_directory(wine_lib_dir)) {
+            setenv("WINEDLLPATH", wine_lib_dir.string().c_str(), 1);
+        }
+
+        std::filesystem::path wine_lib = wineboot.parent_path().parent_path() / "lib";
+        if (std::filesystem::is_directory(wine_lib)) {
+            setenv("DYLD_FALLBACK_LIBRARY_PATH", (wine_lib.string() + ":/usr/local/lib:/opt/homebrew/lib").c_str(), 1);
+        }
+
+        std::string wineboot_str = wineboot.string();
+        char* argv[] = {
+            const_cast<char*>(wineboot_str.c_str()),
+            const_cast<char*>("--init"),
+            nullptr
+        };
+
+        execve(wineboot_str.c_str(), argv, environ);
+        std::fprintf(stderr, "[Wine] execve wineboot failed: %s\n", std::strerror(errno));
+        _exit(127);
+    }
+
+    int rc = wait_for_child(pid, "wineboot init");
+    if (rc != 0) {
+        std::fprintf(stderr, "[Wine] wineboot init exited with code %d\n", rc);
+        return;
+    }
+
+    install_wine_mono(layout, wineboot.parent_path());
+}
+
 void ensure_layout_dirs(const PrefixLayout& layout)
 {
     std::filesystem::create_directories(layout.rootfs / "tmp");
@@ -633,10 +1042,77 @@ void ensure_layout_dirs(const PrefixLayout& layout)
         std::filesystem::create_directories(layout.rootfs / "etc");
         std::filesystem::create_directories(layout.rootfs / "home" / "muplar");
         std::filesystem::create_directories(layout.rootfs / "var");
+        {
+            auto profile =
+                linux_common::distro_profile(layout.distro.empty() ? "ubuntu"
+                                                                   : layout.distro);
+            write_text_file_if_missing(layout.rootfs / "etc" / "os-release",
+                                       linux_common::os_release_content(profile));
+            write_text_file_if_missing(layout.rootfs / "etc" / "hostname",
+                                       layout.name + "\n");
+            write_text_file_if_missing(
+                layout.rootfs / "etc" / "profile",
+                "export HOME=${HOME:-/home/muplar}\n"
+                "export USER=${USER:-muplar}\n"
+                "export LOGNAME=${LOGNAME:-muplar}\n"
+                "export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin\n");
+            write_text_file_if_missing(
+                layout.rootfs / "etc" / "muplar-default-packages",
+                "# Distro default packages Muplar expects when this rootfs is provisioned.\n"
+                "terminal=" + join_strings(profile.terminal_packages, ",") + "\n");
+        }
+
+        // Sync host home directories
+        {
+            const char* host_home = std::getenv("HOME");
+            if (host_home && host_home[0]) {
+                std::filesystem::path home_path = host_home;
+                std::error_code ec;
+                std::filesystem::path host_desktop = home_path / "Desktop";
+                std::filesystem::path host_downloads = home_path / "Downloads";
+                std::filesystem::path host_documents = home_path / "Documents";
+                std::filesystem::path guest_home = layout.rootfs / "home" / "muplar";
+
+                if (std::filesystem::exists(host_desktop, ec)) {
+                    ensure_relative_symlink(guest_home / "Desktop", host_desktop.string().c_str());
+                }
+                if (std::filesystem::exists(host_downloads, ec)) {
+                    ensure_relative_symlink(guest_home / "Downloads", host_downloads.string().c_str());
+                    ensure_relative_symlink(guest_home / "Download", host_downloads.string().c_str());
+                }
+                if (std::filesystem::exists(host_documents, ec)) {
+                    ensure_relative_symlink(guest_home / "Documents", host_documents.string().c_str());
+                }
+            }
+        }
+        // Inject foot terminal config so it doesn't attempt a 512MB memfd
+        // mmap inside elfuse. On Linux, foot uses a large scrollable SHM pool
+        // (max-shm-pool-size-mb=512) when fallocate(PUNCH_HOLE) succeeds.
+        // Inside elfuse on macOS, fallocate returns 0 (success) but the
+        // subsequent mmap(512MB) fails with EFAULT → SIGABRT → exit 134.
+        // Capping the pool to 4MB keeps foot within limits elfuse can handle.
+        {
+            std::filesystem::path foot_config_dir =
+                layout.rootfs / "home" / "muplar" / ".config" / "foot";
+            std::error_code ec;
+            std::filesystem::create_directories(foot_config_dir, ec);
+            write_text_file_if_missing(
+                foot_config_dir / "foot.ini",
+                "[main]\n"
+                "font=DejaVu Sans Mono:size=11\n"
+                "shell=/bin/bash\n"
+                "\n"
+                "[tweak]\n"
+                "max-shm-pool-size-mb=16\n"
+                "font-monospace-warn=no\n");
+        }
+
         std::filesystem::create_directories(layout.rootfs / "bin");
         std::filesystem::create_directories(layout.rootfs / "usr" / "bin");
         std::filesystem::create_directories(layout.rootfs / "sbin");
         std::filesystem::create_directories(layout.rootfs / "usr" / "sbin");
+        ensure_guest_x11_socket_dir(layout.rootfs);
+        expose_host_display_sockets(layout.rootfs);
         {
             std::error_code ec;
             auto bb_path = find_guest_busybox(layout.arch);
@@ -653,6 +1129,23 @@ void ensure_layout_dirs(const PrefixLayout& layout)
                 if (!sh_path.empty()) {
                     copy_file_if_changed(sh_path, layout.rootfs / "bin" / "sh", ec);
                     copy_file_if_changed(sh_path, layout.rootfs / "bin" / "bash", ec);
+                }
+            }
+
+            // Expose libEGL.so and libGLESv2.so stubs
+            {
+                std::filesystem::create_directories(layout.rootfs / "usr" / "lib");
+                auto egl_path = find_guest_stub("libEGL.so", layout.arch);
+                if (!egl_path.empty()) {
+                    auto dest = layout.rootfs / "usr" / "lib" / "libEGL.so";
+                    copy_file_if_changed(egl_path, dest, ec);
+                    ensure_relative_symlink(layout.rootfs / "usr" / "lib" / "libEGL.so.1", "libEGL.so");
+                }
+                auto gles_path = find_guest_stub("libGLESv2.so", layout.arch);
+                if (!gles_path.empty()) {
+                    auto dest = layout.rootfs / "usr" / "lib" / "libGLESv2.so";
+                    copy_file_if_changed(gles_path, dest, ec);
+                    ensure_relative_symlink(layout.rootfs / "usr" / "lib" / "libGLESv2.so.2", "libGLESv2.so");
                 }
             }
         }
@@ -911,6 +1404,9 @@ PrefixLayout load_prefix_at_root(const std::filesystem::path& root,
         ensure_layout_dirs(layout);
         write_prefix_toml(layout);
         register_instance(layout);
+        if (layout.kind == PrefixKind::Wine) {
+            run_wineboot_init(layout);
+        }
     } else {
         if (!std::filesystem::is_directory(layout.root)) {
             throw std::runtime_error("prefix path is not a directory: " +

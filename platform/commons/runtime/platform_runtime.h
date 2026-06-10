@@ -26,9 +26,10 @@ struct PlatformLaunchConfig {
     std::string sysroot;
     bool verbose = false;
     bool quiet = false;
-    int timeout_sec = 10;
+    int timeout_sec = 0;
 
     std::optional<prefix::PrefixLayout> active_prefix;
+    bool linux_guest = false;
 
     bool apk_mode = false;
     std::optional<std::string> apk_lib_name;

@@ -16,8 +16,21 @@ if ! command -v "$CMAKE_BIN" >/dev/null 2>&1; then
   exit 1
 fi
 
+NINJA_BIN="${NINJA_BIN:-ninja}"
+if ! command -v "$NINJA_BIN" >/dev/null 2>&1; then
+  if [ -x /opt/homebrew/bin/ninja ]; then
+    NINJA_BIN=/opt/homebrew/bin/ninja
+  elif [ -x /usr/local/bin/ninja ]; then
+    NINJA_BIN=/usr/local/bin/ninja
+  fi
+fi
+
 if [ ! -f "$ROOT_DIR/build/CMakeCache.txt" ]; then
-  "$CMAKE_BIN" -S "$ROOT_DIR" -B "$ROOT_DIR/build" -G Ninja
+  CMAKE_ARGS=(-S "$ROOT_DIR" -B "$ROOT_DIR/build" -G Ninja)
+  if command -v "$NINJA_BIN" >/dev/null 2>&1; then
+    CMAKE_ARGS+=(-DCMAKE_MAKE_PROGRAM="$NINJA_BIN")
+  fi
+  "$CMAKE_BIN" "${CMAKE_ARGS[@]}"
 else
   "$CMAKE_BIN" -S "$ROOT_DIR" -B "$ROOT_DIR/build"
 fi

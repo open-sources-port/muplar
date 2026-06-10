@@ -25,3 +25,4 @@ arch -x86_64 /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebr
 
 arch -x86_64 /usr/local/bin/brew install bison flex pkg-config mingw-w64 freetype gettext gnutls zlib bzip2 libpng freetype pkg-config
 arch -x86_64 /usr/local/bin/brew install sdl2 meson llvm
+arch -x86_64 /usr/local/bin/brew install vulkan-headers vulkan-loader molten-vk vulkan-tools

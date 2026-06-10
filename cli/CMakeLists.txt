@@ -16,8 +16,11 @@ target_link_libraries(mup
     muplar_runtime_elf
     muplar_runtime_jni
     muplar_runtime_android
+    muplar_runtime_linux_aarch64
+    muplar_runtime_linux_x64
     muplar_runtime_apk
     muplar_runtime_prefix
+    muplar_runtime_supervisor
 )
 
 if(MUPLAR_HAS_WINE)
@@ -32,6 +35,8 @@ target_include_directories(mup PUBLIC
     ${CMAKE_SOURCE_DIR}/platform/android-aarch64/elf
     ${CMAKE_SOURCE_DIR}/platform/android-aarch64/jni
     ${CMAKE_SOURCE_DIR}/platform/android-aarch64/apk
+    ${CMAKE_SOURCE_DIR}/platform/linux-aarch64
+    ${CMAKE_SOURCE_DIR}/platform/linux-x64
     ${CMAKE_SOURCE_DIR}/third_party/angle-include
     ${CMAKE_SOURCE_DIR}/platform/windows-x64
 )

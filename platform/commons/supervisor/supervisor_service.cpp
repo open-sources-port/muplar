@@ -1,0 +1,744 @@
+// platform/commons/supervisor/supervisor_service.cpp
+//
+// SupervisorService, WawonaGuard, WineServerGuard implementation.
+//
+// kqueue EVFILT_PROC + NOTE_EXIT gives us instant notification when a child
+// exits — no polling, no waitpid loop. The monitor thread blocks on kevent()
+// until the watched pid exits, then applies the restart policy and re-spawns.
+
+#include "supervisor_service.h"
+
+#include <algorithm>
+#include <cerrno>
+#include <chrono>
+#include <cstdio>
+#include <cstdlib>
+#include <cstring>
+#include <filesystem>
+#include <fstream>
+#include <sstream>
+#include <stdexcept>
+#include <thread>
+
+#include <fcntl.h>
+#include <signal.h>
+#include <sys/event.h>   // kqueue, kevent, EVFILT_PROC, NOTE_EXIT
+#include <sys/socket.h>
+#include <sys/stat.h>
+#include <sys/types.h>
+#include <sys/un.h>
+#include <sys/wait.h>
+#include <unistd.h>
+
+#ifdef __APPLE__
+#  include <crt_externs.h>
+#  include <mach-o/dyld.h>
+   static char** get_environ() { return *_NSGetEnviron(); }
+#else
+   extern char** environ;
+   static char** get_environ() { return environ; }
+#endif
+
+namespace muplar::supervisor {
+
+using namespace std::chrono;
+using namespace std::chrono_literals;
+namespace fs = std::filesystem;
+namespace prefix = runtime::prefix;
+
+// ---------------------------------------------------------------------------
+// Internal helpers
+// ---------------------------------------------------------------------------
+
+static fs::path get_executable_dir()
+{
+    char buf[4096] = {};
+#ifdef __APPLE__
+    uint32_t size = sizeof(buf);
+    if (_NSGetExecutablePath(buf, &size) != 0)
+        return {};
+#else
+    ssize_t n = readlink("/proc/self/exe", buf, sizeof(buf) - 1);
+    if (n <= 0) return {};
+    buf[n] = '\0';
+#endif
+    return fs::path(buf).parent_path();
+}
+
+// Locate the wawona binary: try next to mup, then build dir, then PATH.
+static fs::path resolve_wawona_bin()
+{
+    auto exec_dir = get_executable_dir();
+    std::error_code ec;
+
+    // 1. Next to mup binary (production layout)
+    auto candidate = exec_dir / "wawona";
+    if (fs::is_regular_file(candidate, ec)) return candidate;
+
+    // 2. App bundle Contents/MacOS/../Frameworks/wawona
+    candidate = exec_dir.parent_path() / "Frameworks" / "wawona";
+    if (fs::is_regular_file(candidate, ec)) return candidate;
+
+    // 3. build/bin/wawona (dev layout: mup lives in build/bin/)
+    candidate = exec_dir / "wawona";
+    if (fs::is_regular_file(candidate, ec)) return candidate;
+
+    // 4. Relative to mup going up to project root: <root>/build/bin/wawona
+    candidate = exec_dir.parent_path().parent_path() / "build" / "bin" / "wawona";
+    if (fs::is_regular_file(candidate, ec)) return candidate;
+
+    // 5. PATH
+    const char* path_env = std::getenv("PATH");
+    if (path_env) {
+        std::istringstream ss(path_env);
+        std::string dir;
+        while (std::getline(ss, dir, ':')) {
+            auto p = fs::path(dir) / "wawona";
+            if (fs::is_regular_file(p, ec)) return p;
+        }
+    }
+    return {};
+}
+
+// Block on kqueue until pid exits or stop_fd becomes readable.
+// Returns the exit status (from waitpid) on normal exit.
+// Returns -1 if stop_fd fired (stop requested).
+static int kqueue_wait_pid(pid_t pid, int stop_fd)
+{
+    int kq = kqueue();
+    if (kq < 0) {
+        std::fprintf(stderr, "[Supervisor] kqueue() failed: %s\n", strerror(errno));
+        // Fall back to polling
+        while (true) {
+            int status = 0;
+            pid_t r = waitpid(pid, &status, WNOHANG);
+            if (r == pid) return status;
+            if (r < 0 && errno != EINTR) return 0;
+
+            // Check stop_fd
+            fd_set fds;
+            FD_ZERO(&fds);
+            FD_SET(stop_fd, &fds);
+            struct timeval tv = {0, 100000}; // 100ms
+            if (select(stop_fd + 1, &fds, nullptr, nullptr, &tv) > 0)
+                return -1;
+        }
+    }
+
+    struct kevent changes[2];
+    int nchanges = 0;
+
+    // Watch pid for exit
+    EV_SET(&changes[nchanges++], (uintptr_t)pid, EVFILT_PROC,
+           EV_ADD | EV_ONESHOT, NOTE_EXIT, 0, nullptr);
+
+    // Watch stop_fd for readability
+    EV_SET(&changes[nchanges++], stop_fd, EVFILT_READ,
+           EV_ADD | EV_ONESHOT, 0, 0, nullptr);
+
+    kevent(kq, changes, nchanges, nullptr, 0, nullptr);
+
+    int result = -1;
+    while (true) {
+        struct kevent event;
+        int n = kevent(kq, nullptr, 0, &event, 1, nullptr);
+        if (n < 0) {
+            if (errno == EINTR) continue;
+            break;
+        }
+        if (n == 0) continue;
+
+        if (event.filter == EVFILT_PROC && (uintptr_t)pid == event.ident) {
+            // Process exited — reap it
+            int status = 0;
+            waitpid(pid, &status, 0);
+            result = status;
+            break;
+        }
+        if (event.filter == EVFILT_READ && (int)event.ident == stop_fd) {
+            // Stop requested
+            result = -1;
+            break;
+        }
+    }
+
+    close(kq);
+    return result;
+}
+
+// Check if a Unix socket path is live (connect succeeds).
+static bool socket_is_live(const fs::path& path)
+{
+    int fd = socket(AF_UNIX, SOCK_STREAM, 0);
+    if (fd < 0) return false;
+
+    struct sockaddr_un addr{};
+    addr.sun_family = AF_UNIX;
+    auto path_str = path.string();
+    if (path_str.size() >= sizeof(addr.sun_path)) {
+        close(fd);
+        return false;
+    }
+    std::strncpy(addr.sun_path, path_str.c_str(), sizeof(addr.sun_path) - 1);
+
+    bool ok = (connect(fd, reinterpret_cast<struct sockaddr*>(&addr),
+                       sizeof(addr)) == 0);
+    close(fd);
+    return ok;
+}
+
+// Poll for a socket path to become live.
+static bool poll_for_socket(const fs::path& path, int timeout_ms)
+{
+    auto deadline = steady_clock::now() + milliseconds(timeout_ms);
+    while (steady_clock::now() < deadline) {
+        if (socket_is_live(path)) return true;
+        std::this_thread::sleep_for(50ms);
+    }
+    return socket_is_live(path);
+}
+
+// Create a self-pipe pair used to wake the kqueue monitor thread on stop().
+static bool make_pipe(int fds[2])
+{
+    if (pipe(fds) < 0) return false;
+    fcntl(fds[0], F_SETFL, O_NONBLOCK);
+    fcntl(fds[1], F_SETFL, O_NONBLOCK);
+    return true;
+}
+
+// ---------------------------------------------------------------------------
+// WawonaGuard
+// ---------------------------------------------------------------------------
+
+fs::path WawonaGuard::wayland_socket_path()
+{
+    auto uid = static_cast<unsigned long>(getuid());
+    return fs::path("/tmp") / ("wawona-" + std::to_string(uid)) / "wayland-0";
+}
+
+WawonaGuard::WawonaGuard(RestartPolicy policy)
+    : policy_(std::move(policy))
+    , current_delay_ms_(policy_.initial_delay_ms)
+{}
+
+WawonaGuard::~WawonaGuard()
+{
+    stop();
+}
+
+pid_t WawonaGuard::spawn()
+{
+    fs::path wawona = resolve_wawona_bin();
+    if (wawona.empty()) {
+        std::fprintf(stderr, "[WawonaGuard] wawona binary not found\n");
+        return -1;
+    }
+
+    // Ensure the runtime dir exists before wawona tries to create the socket
+    auto socket_dir = wayland_socket_path().parent_path();
+    auto socket_path = wayland_socket_path();
+    std::error_code ec;
+    fs::create_directories(socket_dir, ec);
+    if (fs::exists(socket_path, ec) && !socket_is_live(socket_path)) {
+        fs::remove(socket_path, ec);
+        fs::remove(socket_path.string() + ".lock", ec);
+    }
+
+    pid_t pid = fork();
+    if (pid < 0) {
+        std::fprintf(stderr, "[WawonaGuard] fork() failed: %s\n", strerror(errno));
+        return -1;
+    }
+    if (pid == 0) {
+        // Child: exec wawona
+        std::string socket_dir_str = socket_dir.string();
+        std::string socket_name = socket_path.filename().string();
+        setenv("XDG_RUNTIME_DIR", socket_dir_str.c_str(), 1);
+        setenv("WAYLAND_DISPLAY", socket_name.c_str(), 1);
+
+        std::string wawona_str = wawona.string();
+        char* argv[] = { const_cast<char*>(wawona_str.c_str()), nullptr };
+        execve(wawona_str.c_str(), argv, get_environ());
+        std::fprintf(stderr, "[WawonaGuard] execve failed: %s\n", strerror(errno));
+        _exit(127);
+    }
+    std::fprintf(stderr, "[WawonaGuard] started pid=%d path=%s\n",
+                 (int)pid, wawona.c_str());
+    return pid;
+}
+
+void WawonaGuard::start()
+{
+    if (monitor_thread_.joinable()) return; // already started
+
+    stop_requested_.store(false);
+    monitor_thread_ = std::thread([this] { monitor_loop(); });
+}
+
+void WawonaGuard::stop()
+{
+    stop_requested_.store(true);
+
+    pid_t pid = pid_.load();
+    if (pid > 0) {
+        kill(pid, SIGTERM);
+        // Give it 3s to exit gracefully
+        for (int i = 0; i < 30; ++i) {
+            std::this_thread::sleep_for(100ms);
+            if (kill(pid, 0) != 0) break;
+        }
+        if (kill(pid, 0) == 0) {
+            std::fprintf(stderr, "[WawonaGuard] escalating to SIGKILL pid=%d\n", (int)pid);
+            kill(pid, SIGKILL);
+        }
+        waitpid(pid, nullptr, 0);
+        pid_.store(0);
+    }
+
+    if (monitor_thread_.joinable())
+        monitor_thread_.join();
+}
+
+bool WawonaGuard::is_running() const
+{
+    pid_t pid = pid_.load();
+    return pid > 0 && kill(pid, 0) == 0;
+}
+
+bool WawonaGuard::wait_for_socket(int timeout_ms) const
+{
+    return poll_for_socket(wayland_socket_path(), timeout_ms);
+}
+
+void WawonaGuard::apply_backoff()
+{
+    if (current_delay_ms_ <= 0) {
+        current_delay_ms_ = policy_.initial_delay_ms > 0 ? policy_.initial_delay_ms : 0;
+        return;
+    }
+    current_delay_ms_ = std::min(
+        static_cast<int>(current_delay_ms_ * policy_.backoff_factor),
+        policy_.max_delay_ms);
+}
+
+void WawonaGuard::monitor_loop()
+{
+    int stop_pipe[2] = {-1, -1};
+    make_pipe(stop_pipe);
+
+    while (!stop_requested_.load()) {
+        // Evict old entries outside the crash window
+        if (policy_.max_crashes_in_window > 0) {
+            auto cutoff = steady_clock::now() - seconds(policy_.crash_window_sec);
+            crash_times_.erase(
+                std::remove_if(crash_times_.begin(), crash_times_.end(),
+                    [&](auto t) { return t < cutoff; }),
+                crash_times_.end());
+
+            if ((int)crash_times_.size() >= policy_.max_crashes_in_window) {
+                std::fprintf(stderr,
+                    "[WawonaGuard] crash rate too high (%zu crashes in %ds), "
+                    "stopping restarts\n",
+                    crash_times_.size(), policy_.crash_window_sec);
+                break;
+            }
+        }
+
+        // Apply backoff delay before (re)spawning
+        if (current_delay_ms_ > 0 && !crash_times_.empty()) {
+            std::this_thread::sleep_for(milliseconds(current_delay_ms_));
+            if (stop_requested_.load()) break;
+        }
+
+        while (!stop_requested_.load() && socket_is_live(wayland_socket_path()))
+            std::this_thread::sleep_for(1s);
+        if (stop_requested_.load()) break;
+
+        pid_t pid = spawn();
+        if (pid <= 0) {
+            std::this_thread::sleep_for(2s);
+            continue;
+        }
+        pid_.store(pid);
+        if (on_start_) on_start_(pid);
+
+        if (!poll_for_socket(wayland_socket_path(), 5000)) {
+            std::fprintf(stderr,
+                         "[WawonaGuard] pid=%d did not create Wayland socket %s; "
+                         "terminating\n",
+                         (int)pid, wayland_socket_path().c_str());
+            kill(pid, SIGTERM);
+            int status = kqueue_wait_pid(pid, stop_pipe[0]);
+            pid_.store(0);
+            if (status == -1) break;
+
+            crash_times_.push_back(steady_clock::now());
+            apply_backoff();
+            if (on_crash_) on_crash_(status);
+            continue;
+        }
+
+        // Wait for exit via kqueue
+        int status = kqueue_wait_pid(pid, stop_pipe[0]);
+        pid_.store(0);
+
+        if (status == -1) break; // stop requested
+
+        int exit_code = WIFEXITED(status) ? WEXITSTATUS(status) : -1;
+        std::fprintf(stderr, "[WawonaGuard] exited (status=%d), will restart\n",
+                     exit_code);
+
+        crash_times_.push_back(steady_clock::now());
+        apply_backoff();
+        if (on_crash_) on_crash_(status);
+    }
+
+    if (stop_pipe[0] >= 0) close(stop_pipe[0]);
+    if (stop_pipe[1] >= 0) close(stop_pipe[1]);
+    std::fprintf(stderr, "[WawonaGuard] monitor thread exiting\n");
+}
+
+// ---------------------------------------------------------------------------
+// WineServerGuard
+// ---------------------------------------------------------------------------
+
+WineServerGuard::WineServerGuard(prefix::PrefixLayout layout, RestartPolicy policy)
+    : layout_(std::move(layout))
+    , policy_(std::move(policy))
+    , current_delay_ms_(policy_.initial_delay_ms)
+{}
+
+WineServerGuard::~WineServerGuard()
+{
+    stop();
+}
+
+fs::path WineServerGuard::wineserver_socket_path() const
+{
+    // Wine derives its server socket from device+inode of WINEPREFIX:
+    //   /tmp/.wine-<uid>/server-<dev_hex>-<ino_hex>
+    struct stat st{};
+    if (stat(layout_.rootfs.string().c_str(), &st) != 0)
+        return {};
+
+    char buf[256];
+    std::snprintf(buf, sizeof(buf), "/tmp/.wine-%u/server-%llx-%llx",
+                  static_cast<unsigned>(getuid()),
+                  static_cast<unsigned long long>(st.st_dev),
+                  static_cast<unsigned long long>(st.st_ino));
+    return buf;
+}
+
+fs::path WineServerGuard::resolve_wineserver_bin() const
+{
+    // Try next to wine binary: find wine first, then look for wineserver sibling
+    auto exec_dir = get_executable_dir();
+    std::error_code ec;
+
+    auto try_dir = [&](const fs::path& dir) -> fs::path {
+        for (const char* name : {"wineserver64", "wineserver"}) {
+            auto candidate = dir / name;
+            if (fs::is_regular_file(candidate, ec)) return candidate;
+        }
+        return {};
+    };
+
+    // 1. runtime_sysroot / bin
+    if (!layout_.runtime_sysroot.empty()) {
+        auto found = try_dir(layout_.runtime_sysroot / "bin");
+        if (!found.empty()) return found;
+    }
+
+    // 2. Bundle Frameworks/wine/bin
+    auto bundle_dir = exec_dir.parent_path() / "Frameworks" / "wine" / "bin";
+    auto found = try_dir(bundle_dir);
+    if (!found.empty()) return found;
+
+    // 3. build/wine-prefix/bin
+    auto build_dir = exec_dir.parent_path().parent_path() / "wine-prefix" / "bin";
+    found = try_dir(build_dir);
+    if (!found.empty()) return found;
+
+    // 4. PATH
+    const char* path_env = std::getenv("PATH");
+    if (path_env) {
+        std::istringstream ss(path_env);
+        std::string d;
+        while (std::getline(ss, d, ':')) {
+            found = try_dir(d);
+            if (!found.empty()) return found;
+        }
+    }
+    return {};
+}
+
+pid_t WineServerGuard::spawn()
+{
+    fs::path wineserver = resolve_wineserver_bin();
+    if (wineserver.empty()) {
+        std::fprintf(stderr, "[WineServerGuard:%s] wineserver binary not found\n",
+                     layout_.name.c_str());
+        return -1;
+    }
+
+    // Ensure wineserver socket directory exists
+    auto sock_dir = fs::path("/tmp") / (".wine-" + std::to_string(getuid()));
+    std::error_code ec;
+    fs::create_directories(sock_dir, ec);
+
+    pid_t pid = fork();
+    if (pid < 0) {
+        std::fprintf(stderr, "[WineServerGuard:%s] fork() failed: %s\n",
+                     layout_.name.c_str(), strerror(errno));
+        return -1;
+    }
+    if (pid == 0) {
+        // Set WINEPREFIX before exec
+        setenv("WINEPREFIX", layout_.rootfs.string().c_str(), 1);
+        setenv("WINEDEBUG", "-all", 1);
+
+        // Set up library paths same as WineRuntime
+        auto wine_lib = wineserver.parent_path().parent_path() / "lib";
+        if (fs::is_directory(wine_lib, ec)) {
+            setenv("DYLD_FALLBACK_LIBRARY_PATH",
+                   (wine_lib.string() + ":/usr/local/lib:/opt/homebrew/lib").c_str(), 1);
+        }
+
+        std::string ws_str = wineserver.string();
+        // -f: stay in the foreground so we can monitor it
+        char* argv[] = {
+            const_cast<char*>(ws_str.c_str()),
+            const_cast<char*>("-f"),
+            nullptr
+        };
+        execve(ws_str.c_str(), argv, get_environ());
+        std::fprintf(stderr, "[WineServerGuard] execve failed: %s\n", strerror(errno));
+        _exit(127);
+    }
+
+    std::fprintf(stderr, "[WineServerGuard:%s] started wineserver pid=%d\n",
+                 layout_.name.c_str(), (int)pid);
+    return pid;
+}
+
+void WineServerGuard::start()
+{
+    if (monitor_thread_.joinable()) return;
+    stop_requested_.store(false);
+    monitor_thread_ = std::thread([this] { monitor_loop(); });
+}
+
+void WineServerGuard::stop()
+{
+    stop_requested_.store(true);
+
+    pid_t pid = pid_.load();
+    if (pid > 0) {
+        kill(pid, SIGTERM);
+        for (int i = 0; i < 30; ++i) {
+            std::this_thread::sleep_for(100ms);
+            if (kill(pid, 0) != 0) break;
+        }
+        if (kill(pid, 0) == 0) kill(pid, SIGKILL);
+        waitpid(pid, nullptr, 0);
+        pid_.store(0);
+    }
+
+    if (monitor_thread_.joinable())
+        monitor_thread_.join();
+}
+
+bool WineServerGuard::is_running() const
+{
+    pid_t pid = pid_.load();
+    return pid > 0 && kill(pid, 0) == 0;
+}
+
+bool WineServerGuard::wait_for_socket(int timeout_ms) const
+{
+    auto sock = wineserver_socket_path();
+    if (sock.empty()) return false;
+    return poll_for_socket(sock, timeout_ms);
+}
+
+void WineServerGuard::monitor_loop()
+{
+    int stop_pipe[2] = {-1, -1};
+    make_pipe(stop_pipe);
+
+    while (!stop_requested_.load()) {
+        if (policy_.max_crashes_in_window > 0) {
+            auto cutoff = steady_clock::now() - seconds(policy_.crash_window_sec);
+            crash_times_.erase(
+                std::remove_if(crash_times_.begin(), crash_times_.end(),
+                    [&](auto t) { return t < cutoff; }),
+                crash_times_.end());
+            if ((int)crash_times_.size() >= policy_.max_crashes_in_window) {
+                std::fprintf(stderr,
+                    "[WineServerGuard:%s] crash rate too high, stopping\n",
+                    layout_.name.c_str());
+                break;
+            }
+        }
+
+        if (current_delay_ms_ > 0 && !crash_times_.empty()) {
+            std::this_thread::sleep_for(milliseconds(current_delay_ms_));
+            if (stop_requested_.load()) break;
+        }
+
+        pid_t pid = spawn();
+        if (pid <= 0) {
+            std::this_thread::sleep_for(2s);
+            continue;
+        }
+        pid_.store(pid);
+        if (on_start_) on_start_(pid);
+
+        int status = kqueue_wait_pid(pid, stop_pipe[0]);
+        pid_.store(0);
+
+        if (status == -1) break;
+
+        int exit_code = WIFEXITED(status) ? WEXITSTATUS(status) : -1;
+        std::fprintf(stderr, "[WineServerGuard:%s] wineserver exited (code=%d), restarting\n",
+                     layout_.name.c_str(), exit_code);
+
+        crash_times_.push_back(steady_clock::now());
+        // Backoff: 0 → 1s → 2s → 4s → 8s cap
+        current_delay_ms_ = current_delay_ms_ <= 0
+            ? 1000
+            : std::min(static_cast<int>(current_delay_ms_ * policy_.backoff_factor),
+                       policy_.max_delay_ms);
+        if (on_crash_) on_crash_(status);
+    }
+
+    if (stop_pipe[0] >= 0) close(stop_pipe[0]);
+    if (stop_pipe[1] >= 0) close(stop_pipe[1]);
+    std::fprintf(stderr, "[WineServerGuard:%s] monitor thread exiting\n",
+                 layout_.name.c_str());
+}
+
+// ---------------------------------------------------------------------------
+// SupervisorService
+// ---------------------------------------------------------------------------
+
+SupervisorService::SupervisorService()
+    : wawona_guard_(std::make_unique<WawonaGuard>())
+{}
+
+SupervisorService::~SupervisorService()
+{
+    stop();
+}
+
+void SupervisorService::start(int poll_interval_ms)
+{
+    if (running_.exchange(true)) return;
+
+    // 1. Start Wawona
+    wawona_guard_->start();
+
+    // 2. Start WineServerGuards for all existing Wine prefixes
+    sync_wine_guards();
+
+    // 3. Background poll for new/removed prefixes
+    poll_thread_ = std::thread([this, poll_interval_ms] {
+        poll_loop(poll_interval_ms);
+    });
+}
+
+void SupervisorService::stop()
+{
+    if (!running_.exchange(false)) return;
+
+    if (poll_thread_.joinable())
+        poll_thread_.join();
+
+    // Stop all wine guards
+    {
+        std::lock_guard<std::mutex> lk(guards_mu_);
+        for (auto& [name, guard] : wine_guards_)
+            guard->stop();
+        wine_guards_.clear();
+    }
+
+    wawona_guard_->stop();
+}
+
+void SupervisorService::on_prefix_created(const prefix::PrefixLayout& layout)
+{
+    if (layout.kind != prefix::PrefixKind::Wine) return;
+
+    std::lock_guard<std::mutex> lk(guards_mu_);
+    if (wine_guards_.count(layout.name)) return; // already guarded
+
+    auto guard = std::make_unique<WineServerGuard>(layout);
+    guard->start();
+    wine_guards_[layout.name] = std::move(guard);
+    std::fprintf(stderr, "[SupervisorService] started WineServerGuard for '%s'\n",
+                 layout.name.c_str());
+}
+
+void SupervisorService::on_prefix_deleted(const std::string& prefix_name)
+{
+    std::lock_guard<std::mutex> lk(guards_mu_);
+    auto it = wine_guards_.find(prefix_name);
+    if (it == wine_guards_.end()) return;
+
+    it->second->stop();
+    wine_guards_.erase(it);
+    std::fprintf(stderr, "[SupervisorService] stopped WineServerGuard for '%s'\n",
+                 prefix_name.c_str());
+}
+
+WineServerGuard* SupervisorService::wine_server(const std::string& prefix_name)
+{
+    std::lock_guard<std::mutex> lk(guards_mu_);
+    auto it = wine_guards_.find(prefix_name);
+    return it != wine_guards_.end() ? it->second.get() : nullptr;
+}
+
+void SupervisorService::sync_wine_guards()
+{
+    auto all_prefixes = prefix::list_prefixes();
+    std::lock_guard<std::mutex> lk(guards_mu_);
+
+    // Add guards for new Wine prefixes
+    for (const auto& p : all_prefixes) {
+        if (p.kind != prefix::PrefixKind::Wine) continue;
+        if (wine_guards_.count(p.name)) continue;
+
+        auto guard = std::make_unique<WineServerGuard>(p);
+        guard->start();
+        wine_guards_[p.name] = std::move(guard);
+        std::fprintf(stderr, "[SupervisorService] started WineServerGuard for '%s'\n",
+                     p.name.c_str());
+    }
+
+    // Remove guards for deleted prefixes
+    std::vector<std::string> to_remove;
+    for (const auto& [name, _] : wine_guards_) {
+        const std::string guard_name = name;
+        bool still_exists = std::any_of(all_prefixes.begin(), all_prefixes.end(),
+            [&](const auto& p) { return p.name == guard_name; });
+        if (!still_exists) to_remove.push_back(name);
+    }
+    for (const auto& name : to_remove) {
+        wine_guards_[name]->stop();
+        wine_guards_.erase(name);
+        std::fprintf(stderr, "[SupervisorService] removed WineServerGuard for '%s'\n",
+                     name.c_str());
+    }
+}
+
+void SupervisorService::poll_loop(int interval_ms)
+{
+    while (running_.load()) {
+        std::this_thread::sleep_for(milliseconds(interval_ms));
+        if (!running_.load()) break;
+        sync_wine_guards();
+    }
+}
+
+} // namespace muplar::supervisor

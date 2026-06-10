@@ -22,3 +22,8 @@ file ${binary_output}
 binary_output=build/bin/simple_app_with_print
 $compiler_android_clang -static -Wl,-z,max-page-size=4096 tests/assets/elf/simple_app_with_print.c -o ${binary_output}
 file ${binary_output}
+
+binary_output=build/bin/test_mt_fork_exec
+$compiler_android_clang -static -pthread -Wl,-z,max-page-size=4096 tests/assets/elf/test_mt_fork_exec.c -o ${binary_output}
+file ${binary_output}
+

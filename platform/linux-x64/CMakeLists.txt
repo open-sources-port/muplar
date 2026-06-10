@@ -1,8 +1,20 @@
-add_library(muplar_runtime_linux_x64 INTERFACE)
+add_library(muplar_runtime_linux_x64 STATIC
+    linux_x86_64_runtime.cpp
+)
+
+target_include_directories(muplar_runtime_linux_x64
+    PUBLIC
+        ${CMAKE_CURRENT_SOURCE_DIR}
+        ${CMAKE_SOURCE_DIR}/platform/commons/runtime
+        ${CMAKE_SOURCE_DIR}/platform/commons/prefix
+        ${CMAKE_SOURCE_DIR}/platform/android-aarch64/android
+)
 
 target_link_libraries(muplar_runtime_linux_x64
-    INTERFACE
+    PUBLIC
         muplar_runtime_linux_common
         muplar_runtime_memory
         muplar_runtime_prefix
+        muplar_runtime_android
+        muplar_runtime_supervisor
 )

@@ -119,7 +119,8 @@ build_busybox() {
     
     # 3. Compile
     echo "Running make for ${arch}..."
-    make CC="$cc" AR="$AR" NM="$NM" RANLIB="$RANLIB" STRIP="$STRIP" HOSTCC="clang" LDFLAGS="-static" -j"$(sysctl -n hw.ncpu)"
+    local jobs="${BUSYBOX_JOBS:-1}"
+    make CC="$cc" AR="$AR" NM="$NM" RANLIB="$RANLIB" STRIP="$STRIP" HOSTCC="clang" LDFLAGS="-static" -j"$jobs"
 
     # 4. Copy binary
     if [ -f "busybox" ]; then
@@ -132,8 +133,21 @@ build_busybox() {
     fi
 }
 
-# Build both targets
-build_busybox "aarch64" "$CC_ARM64" "$BUILD_DIR_ARM64"
-build_busybox "x86_64" "$CC_X86_64" "$BUILD_DIR_X86_64"
+# Build both targets — skip if the output binary already exists.
+# Pass BUSYBOX_FORCE=1 to force a rebuild regardless.
+for arch_cc in "aarch64:$CC_ARM64:$BUILD_DIR_ARM64" "x86_64:$CC_X86_64:$BUILD_DIR_X86_64"; do
+    arch="${arch_cc%%:*}"
+    rest="${arch_cc#*:}"
+    cc="${rest%%:*}"
+    build_dir="${rest#*:}"
+    output_bin="${BUILD_DIR}/bin/busybox_${arch}"
+
+    if [ -z "$BUSYBOX_FORCE" ] && [ -x "$output_bin" ]; then
+        echo "=== Skipping BusyBox ${arch}: already built at ${output_bin} ==="
+        echo "    (set BUSYBOX_FORCE=1 to force a rebuild)"
+    else
+        build_busybox "$arch" "$cc" "$build_dir"
+    fi
+done
 
 echo "=== BusyBox build completed successfully ==="

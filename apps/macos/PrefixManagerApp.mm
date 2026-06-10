@@ -5,15 +5,21 @@
 #include <exception>
 #include <filesystem>
 #include <fstream>
+#include <memory>
 #include <string>
 #include <vector>
+#include <dispatch/dispatch.h>
 #include <signal.h>
 #include <sys/types.h>
 #include <sys/stat.h>
+#include <unistd.h>
 
 #include "prefix.h"
+#include "distro_profile.h"
+#include "supervisor_service.h"
 
 namespace prefix = muplar::runtime::prefix;
+namespace supervisor = muplar::supervisor;
 
 static NSString* NSStringFromStdString(const std::string& value)
 {
@@ -23,6 +29,78 @@ static NSString* NSStringFromStdString(const std::string& value)
 static NSString* NSStringFromPath(const std::filesystem::path& path)
 {
     return path.empty() ? @"-" : NSStringFromStdString(path.string());
+}
+
+static NSString* ShellSingleQuote(NSString* value)
+{
+    NSString* safeValue = value ?: @"";
+    NSString* escaped =
+        [safeValue stringByReplacingOccurrencesOfString:@"'"
+                                             withString:@"'\\''"];
+    return [NSString stringWithFormat:@"'%@'", escaped];
+}
+
+static NSString* HostDisplayEnvironmentExportScript()
+{
+    NSDictionary<NSString*, NSString*>* env =
+        NSProcessInfo.processInfo.environment;
+    NSArray<NSString*>* names = @[
+        @"WAYLAND_DISPLAY",
+        @"XDG_RUNTIME_DIR",
+        @"DBUS_SESSION_BUS_ADDRESS",
+        @"XDG_SESSION_TYPE",
+        @"GDK_BACKEND",
+        @"QT_QPA_PLATFORM",
+        @"SDL_VIDEODRIVER",
+        @"CLUTTER_BACKEND",
+        @"EGL_PLATFORM",
+        @"LIBGL_ALWAYS_INDIRECT",
+    ];
+
+    NSMutableString* script = [NSMutableString string];
+    for (NSString* name in names) {
+        NSString* value = env[name];
+        if (value.length == 0)
+            continue;
+        [script appendFormat:@"export %@=%@\n",
+                             name,
+                             ShellSingleQuote(value)];
+    }
+    return script;
+}
+
+static NSString* DefaultWawonaRuntimeDir()
+{
+    return [NSString stringWithFormat:@"/tmp/wawona-%lu",
+                                      static_cast<unsigned long>(getuid())];
+}
+
+static NSString* DefaultWawonaDisplayName()
+{
+    return @"wayland-0";
+}
+
+static void ApplyDefaultLinuxDisplayEnvironment(
+    NSMutableDictionary<NSString*, NSString*>* env)
+{
+    if ((env[@"XDG_RUNTIME_DIR"] ?: @"").length == 0)
+        env[@"XDG_RUNTIME_DIR"] = DefaultWawonaRuntimeDir();
+    if ((env[@"WAYLAND_DISPLAY"] ?: @"").length == 0)
+        env[@"WAYLAND_DISPLAY"] = DefaultWawonaDisplayName();
+    [env removeObjectForKey:@"DISPLAY"];
+    [env removeObjectForKey:@"XAUTHORITY"];
+    if ((env[@"XDG_SESSION_TYPE"] ?: @"").length == 0)
+        env[@"XDG_SESSION_TYPE"] = @"wayland";
+    if ((env[@"GDK_BACKEND"] ?: @"").length == 0)
+        env[@"GDK_BACKEND"] = @"wayland,x11";
+    if ((env[@"QT_QPA_PLATFORM"] ?: @"").length == 0)
+        env[@"QT_QPA_PLATFORM"] = @"wayland;xcb";
+    if ((env[@"SDL_VIDEODRIVER"] ?: @"").length == 0)
+        env[@"SDL_VIDEODRIVER"] = @"wayland";
+    if ((env[@"CLUTTER_BACKEND"] ?: @"").length == 0)
+        env[@"CLUTTER_BACKEND"] = @"wayland";
+    if ((env[@"EGL_PLATFORM"] ?: @"").length == 0)
+        env[@"EGL_PLATFORM"] = @"wayland";
 }
 
 static std::string StdStringFromNSString(NSString* value)
@@ -58,7 +136,7 @@ static NSString* FindWorkspaceRoot()
     for (int i = 0; i < 5; ++i) {
         path = [path stringByDeletingLastPathComponent];
         if (path.length <= 1) break;
-        
+
         NSString* cmakeFile = [path stringByAppendingPathComponent:@"CMakeLists.txt"];
         NSString* sysrootFolder = [path stringByAppendingPathComponent:@"build/sysroot"];
         if ([[NSFileManager defaultManager] fileExistsAtPath:cmakeFile] ||
@@ -72,18 +150,18 @@ static NSString* FindWorkspaceRoot()
 static NSString* ResolveWorkspaceRelativePath(NSString* path)
 {
     if (!path || path.length == 0) return path;
-    
+
     BOOL isDistorted = NO;
     if ([path isEqualToString:@"/build/sysroot"] || [path hasPrefix:@"/build/sysroot/"]) {
         if (![[NSFileManager defaultManager] fileExistsAtPath:path]) {
             isDistorted = YES;
         }
     }
-    
+
     if ([path isAbsolutePath] && !isDistorted) {
         return path;
     }
-    
+
     NSString* workspaceRoot = FindWorkspaceRoot();
     if (!workspaceRoot) {
         NSString* parentDir = [[NSBundle mainBundle] bundlePath].stringByDeletingLastPathComponent;
@@ -92,12 +170,12 @@ static NSString* ResolveWorkspaceRelativePath(NSString* path)
         }
         return [[parentDir stringByAppendingPathComponent:path] stringByStandardizingPath];
     }
-    
+
     if (isDistorted) {
         NSString* rel = [path substringFromIndex:1];
         return [[workspaceRoot stringByAppendingPathComponent:rel] stringByStandardizingPath];
     }
-    
+
     return [[workspaceRoot stringByAppendingPathComponent:path] stringByStandardizingPath];
 }
 
@@ -307,26 +385,26 @@ static NSString* ParseLnkFile(const std::filesystem::path& lnkPath)
 {
     std::ifstream f(lnkPath, std::ios::binary);
     if (!f) return nil;
-    
+
     char header[76];
     if (!f.read(header, 76)) return nil;
-    
+
     if (*(uint32_t*)header != 0x0000004C) return nil;
-    
+
     uint32_t flags = *(uint32_t*)(header + 20);
-    
+
     if (flags & 0x01) { // HasLinkTargetIDList
         uint16_t idListSize = 0;
         if (!f.read((char*)&idListSize, 2)) return nil;
         f.seekg(idListSize, std::ios::cur);
     }
-    
+
     NSString* localPath = nil;
     if (flags & 0x02) { // HasLinkInfo
         uint32_t linkInfoSize = 0;
         std::streampos linkInfoStart = f.tellg();
         if (!f.read((char*)&linkInfoSize, 4)) return nil;
-        
+
         if (linkInfoSize >= 28) {
             std::vector<char> buf(linkInfoSize);
             *(uint32_t*)buf.data() = linkInfoSize;
@@ -339,15 +417,15 @@ static NSString* ParseLnkFile(const std::filesystem::path& lnkPath)
         }
         f.seekg(linkInfoStart + (std::streamoff)linkInfoSize);
     }
-    
+
     if (localPath) return localPath;
-    
+
     if (flags & 0x04) ReadLnkString(f, flags);
     if (flags & 0x08) {
         NSString* relPath = ReadLnkString(f, flags);
         if (relPath) return relPath;
     }
-    
+
     return nil;
 }
 
@@ -357,28 +435,41 @@ static NSString* ParseLnkFile(const std::filesystem::path& lnkPath)
 - (void)configureArchPopup:(NSPopUpButton*)archPopup forType:(NSString*)type;
 - (std::filesystem::path)activeSysrootForPrefix:(const prefix::PrefixLayout*)selected;
 - (void)writeLaunchLogHeaderForPrefix:(prefix::PrefixLayout*)selected appName:(NSString*)appName;
+- (BOOL)guestExecutableExists:(NSString*)guestPath prefix:(prefix::PrefixLayout*)selected;
+- (BOOL)guestXwaylandAvailableInPrefix:(prefix::PrefixLayout*)selected;
+- (NSString*)guestXwaylandPathForPrefix:(prefix::PrefixLayout*)selected;
+- (BOOL)isLinuxShellShortcut:(MuplarAppShortcut*)app;
+- (void)recycleWawonaAfterLinuxCrashIfIdle;
+- (NSArray<NSString*>*)wrapGuestArgumentsForX11IfNeeded:(NSArray<NSString*>*)guestArguments
+                                                 prefix:(prefix::PrefixLayout*)selected
+                                           errorMessage:(NSString**)errorMessage;
+- (NSWindow*)beginBusySheetWithTitle:(NSString*)title message:(NSString*)message;
+- (void)endBusySheet:(NSWindow*)sheet;
 @end
 
 @implementation PrefixManagerAppDelegate {
     NSWindow* _window;
     NSTableView* _tableView;
     NSTextField* _statusLabel;
-    
+
     NSView* _detailContainer;
     NSTextField* _noSelectionLabel;
     NSTextField* _detailHeaderTitle;
     NSTextField* _detailHeaderInfo;
     NSTextField* _detailHeaderLocation;
-    
+
     NSButton* _cloneButton;
     NSButton* _deleteButton;
     NSButton* _openRootButton;
     NSButton* _addAppButton;
-    
+
     NSTableView* _appsTableView;
     NSMutableArray<MuplarAppShortcut*>* _appsList;
     NSMutableDictionary<NSString*, NSTask*>* _runningTasks;
     NSMutableSet<NSString*>* _launchingAppPaths;
+    NSTask* _wawonaTask;
+    std::unique_ptr<supervisor::SupervisorService> _supervisor;
+    dispatch_source_t _termSignalSource;
 
     NSTextField* _autoNameField;
     NSPopUpButton* _autoNameKindPopup;
@@ -397,14 +488,32 @@ static NSString* ParseLnkFile(const std::filesystem::path& lnkPath)
         _appsList = [NSMutableArray array];
         _runningTasks = [NSMutableDictionary dictionary];
         _launchingAppPaths = [NSMutableSet set];
+        _supervisor = std::make_unique<supervisor::SupervisorService>();
     }
     return self;
+}
+
+- (void)installTerminationSignalHandler
+{
+    if (_termSignalSource)
+        return;
+
+    signal(SIGTERM, SIG_IGN);
+    _termSignalSource =
+        dispatch_source_create(DISPATCH_SOURCE_TYPE_SIGNAL,
+                               SIGTERM,
+                               0,
+                               dispatch_get_main_queue());
+    dispatch_source_set_event_handler(_termSignalSource, ^{
+        [NSApp terminate:nil];
+    });
+    dispatch_resume(_termSignalSource);
 }
 
 - (std::filesystem::path)activeSysrootForPrefix:(const prefix::PrefixLayout*)selected
 {
     if (!selected) return {};
-    
+
     std::filesystem::path sysroot = selected->runtime_sysroot;
     if (!sysroot.empty()) {
         NSString* sysrootStr = NSStringFromPath(sysroot);
@@ -418,14 +527,173 @@ static NSString* ParseLnkFile(const std::filesystem::path& lnkPath)
     return selected->rootfs;
 }
 
+- (NSWindow*)beginBusySheetWithTitle:(NSString*)title message:(NSString*)message
+{
+    NSPanel* panel = [[NSPanel alloc] initWithContentRect:NSMakeRect(0, 0, 420, 132)
+                                                styleMask:NSWindowStyleMaskTitled
+                                                  backing:NSBackingStoreBuffered
+                                                    defer:NO];
+    panel.title = title ?: @"Working";
+    panel.releasedWhenClosed = NO;
+
+    NSView* content = [[NSView alloc] initWithFrame:NSMakeRect(0, 0, 420, 132)];
+    panel.contentView = content;
+
+    NSProgressIndicator* spinner = [[NSProgressIndicator alloc] init];
+    spinner.style = NSProgressIndicatorStyleSpinning;
+    spinner.controlSize = NSControlSizeRegular;
+    spinner.displayedWhenStopped = YES;
+    spinner.translatesAutoresizingMaskIntoConstraints = NO;
+    [spinner startAnimation:nil];
+    [content addSubview:spinner];
+
+    NSTextField* titleLabel = [NSTextField labelWithString:title ?: @"Working"];
+    titleLabel.font = [NSFont systemFontOfSize:16 weight:NSFontWeightSemibold];
+    titleLabel.translatesAutoresizingMaskIntoConstraints = NO;
+    [content addSubview:titleLabel];
+
+    NSTextField* messageLabel = [NSTextField wrappingLabelWithString:message ?: @""];
+    messageLabel.textColor = NSColor.secondaryLabelColor;
+    messageLabel.font = [NSFont systemFontOfSize:12];
+    messageLabel.translatesAutoresizingMaskIntoConstraints = NO;
+    [content addSubview:messageLabel];
+
+    [NSLayoutConstraint activateConstraints:@[
+        [spinner.leadingAnchor constraintEqualToAnchor:content.leadingAnchor constant:24.0],
+        [spinner.centerYAnchor constraintEqualToAnchor:content.centerYAnchor],
+        [spinner.widthAnchor constraintEqualToConstant:28.0],
+        [spinner.heightAnchor constraintEqualToConstant:28.0],
+
+        [titleLabel.leadingAnchor constraintEqualToAnchor:spinner.trailingAnchor constant:18.0],
+        [titleLabel.trailingAnchor constraintEqualToAnchor:content.trailingAnchor constant:-24.0],
+        [titleLabel.topAnchor constraintEqualToAnchor:content.topAnchor constant:30.0],
+
+        [messageLabel.leadingAnchor constraintEqualToAnchor:titleLabel.leadingAnchor],
+        [messageLabel.trailingAnchor constraintEqualToAnchor:titleLabel.trailingAnchor],
+        [messageLabel.topAnchor constraintEqualToAnchor:titleLabel.bottomAnchor constant:8.0],
+    ]];
+
+    [_window beginSheet:panel completionHandler:nil];
+    return panel;
+}
+
+- (void)endBusySheet:(NSWindow*)sheet
+{
+    if (!sheet)
+        return;
+    [_window endSheet:sheet];
+    [sheet orderOut:nil];
+}
+
 - (void)applicationDidFinishLaunching:(NSNotification*)notification
 {
     (void)notification;
     [NSApp setActivationPolicy:NSApplicationActivationPolicyRegular];
+    [self installTerminationSignalHandler];
+    if (_supervisor)
+        _supervisor->start();
     [self buildWindow];
     [self reloadPrefixes:nil];
     [_window makeKeyAndOrderFront:nil];
     [NSApp activateIgnoringOtherApps:YES];
+
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1500 * NSEC_PER_MSEC)),
+                   dispatch_get_main_queue(), ^{
+        [self reloadPrefixes:nil];
+    });
+}
+
+- (NSApplicationTerminateReply)applicationShouldTerminate:(NSApplication *)sender
+{
+    (void)sender;
+    static BOOL alreadyStopping = NO;
+    if (alreadyStopping) {
+        return NSTerminateNow;
+    }
+
+    alreadyStopping = YES;
+
+    // Kill all running app tasks first so they don't hold up supervisor shutdown
+    NSDictionary<NSString*, NSTask*>* tasksCopy = [_runningTasks copy];
+    for (NSString* key in tasksCopy) {
+        NSTask* task = tasksCopy[key];
+        if (task.isRunning) {
+            [task terminate];
+        }
+    }
+    [_runningTasks removeAllObjects];
+
+    // Create a standalone progress window if the main window isn't available
+    NSWindow* busyWindow = nil;
+    if (_window && [_window isVisible]) {
+        busyWindow = [self beginBusySheetWithTitle:@"Exiting"
+                                           message:@"Shutting down background services..."];
+    } else {
+        // Create a floating panel to show exit progress
+        busyWindow = [[NSPanel alloc] initWithContentRect:NSMakeRect(0, 0, 360, 100)
+                                                styleMask:NSWindowStyleMaskTitled | NSWindowStyleMaskHUDWindow
+                                                  backing:NSBackingStoreBuffered
+                                                    defer:NO];
+        busyWindow.title = @"Exiting";
+        busyWindow.releasedWhenClosed = NO;
+        NSView* content = busyWindow.contentView;
+
+        NSProgressIndicator* spinner = [[NSProgressIndicator alloc] init];
+        spinner.style = NSProgressIndicatorStyleSpinning;
+        spinner.controlSize = NSControlSizeRegular;
+        spinner.translatesAutoresizingMaskIntoConstraints = NO;
+        [spinner startAnimation:nil];
+        [content addSubview:spinner];
+
+        NSTextField* label = [NSTextField labelWithString:@"Shutting down background services..."];
+        label.font = [NSFont systemFontOfSize:13];
+        label.textColor = NSColor.secondaryLabelColor;
+        label.translatesAutoresizingMaskIntoConstraints = NO;
+        [content addSubview:label];
+
+        [NSLayoutConstraint activateConstraints:@[
+            [spinner.leadingAnchor constraintEqualToAnchor:content.leadingAnchor constant:20],
+            [spinner.centerYAnchor constraintEqualToAnchor:content.centerYAnchor],
+            [spinner.widthAnchor constraintEqualToConstant:24],
+            [spinner.heightAnchor constraintEqualToConstant:24],
+            [label.leadingAnchor constraintEqualToAnchor:spinner.trailingAnchor constant:14],
+            [label.trailingAnchor constraintEqualToAnchor:content.trailingAnchor constant:-20],
+            [label.centerYAnchor constraintEqualToAnchor:content.centerYAnchor],
+        ]];
+        [busyWindow center];
+        [busyWindow makeKeyAndOrderFront:nil];
+    }
+
+    __weak PrefixManagerAppDelegate* weakSelf = self;
+    dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
+        PrefixManagerAppDelegate* strongSelf = weakSelf;
+        if (strongSelf && strongSelf->_supervisor) {
+            strongSelf->_supervisor->stop();
+        }
+
+        dispatch_async(dispatch_get_main_queue(), ^{
+            PrefixManagerAppDelegate* strongSelf2 = weakSelf;
+            if (strongSelf2 && strongSelf2->_window && [strongSelf2->_window isVisible]) {
+                [strongSelf2 endBusySheet:busyWindow];
+            } else {
+                [busyWindow orderOut:nil];
+            }
+            [NSApp replyToApplicationShouldTerminate:YES];
+        });
+    });
+
+    return NSTerminateLater;
+}
+
+- (void)applicationWillTerminate:(NSNotification*)notification
+{
+    (void)notification;
+    if (_termSignalSource) {
+        dispatch_source_cancel(_termSignalSource);
+        _termSignalSource = nil;
+    }
+    // Note: _supervisor->stop() is already called in applicationShouldTerminate:
+    // Do NOT call it again here to avoid blocking the main thread.
 }
 
 - (BOOL)applicationShouldTerminateAfterLastWindowClosed:(NSApplication*)sender
@@ -1043,56 +1311,56 @@ static NSString* MapLinuxIconToSFSymbol(NSString* icon)
         if (!cell) {
             cell = [[NSTableCellView alloc] initWithFrame:NSMakeRect(0, 0, 230, 48)];
             cell.identifier = @"instance";
-            
+
             NSImageView* imageView = [[NSImageView alloc] init];
             imageView.translatesAutoresizingMaskIntoConstraints = NO;
             imageView.imageScaling = NSImageScaleProportionallyUpOrDown;
             cell.imageView = imageView;
             [cell addSubview:imageView];
-            
+
             NSStackView* textStack = [[NSStackView alloc] init];
             textStack.orientation = NSUserInterfaceLayoutOrientationVertical;
             textStack.alignment = NSLayoutAttributeLeading;
             textStack.spacing = 2.0;
             textStack.translatesAutoresizingMaskIntoConstraints = NO;
             [cell addSubview:textStack];
-            
+
             NSTextField* titleLabel = [NSTextField labelWithString:@""];
             titleLabel.translatesAutoresizingMaskIntoConstraints = NO;
             titleLabel.font = [NSFont systemFontOfSize:13 weight:NSFontWeightSemibold];
             titleLabel.lineBreakMode = NSLineBreakByTruncatingTail;
             cell.textField = titleLabel;
             [textStack addArrangedSubview:titleLabel];
-            
+
             NSTextField* subtitleLabel = [NSTextField labelWithString:@""];
             subtitleLabel.translatesAutoresizingMaskIntoConstraints = NO;
             subtitleLabel.font = [NSFont systemFontOfSize:11];
             subtitleLabel.lineBreakMode = NSLineBreakByTruncatingTail;
             subtitleLabel.tag = 100;
             [textStack addArrangedSubview:subtitleLabel];
-            
+
             [NSLayoutConstraint activateConstraints:@[
                 [imageView.leadingAnchor constraintEqualToAnchor:cell.leadingAnchor constant:6],
                 [imageView.centerYAnchor constraintEqualToAnchor:cell.centerYAnchor],
                 [imageView.widthAnchor constraintEqualToConstant:28.0],
                 [imageView.heightAnchor constraintEqualToConstant:28.0],
-                
+
                 [textStack.leadingAnchor constraintEqualToAnchor:imageView.trailingAnchor constant:10],
                 [textStack.trailingAnchor constraintEqualToAnchor:cell.trailingAnchor constant:-6],
                 [textStack.centerYAnchor constraintEqualToAnchor:cell.centerYAnchor],
             ]];
         }
-        
+
         const auto& item = _prefixes[static_cast<size_t>(row)];
         cell.imageView.image = InstancePreviewImage(item);
         cell.textField.stringValue = NSStringFromStdString(item.name);
-        
+
         NSTextField* subtitleLabel = [cell viewWithTag:100];
         if (subtitleLabel) {
             auto state = prefix::query_prefix_state(item);
             NSString* statusStr = (state == prefix::PrefixState::Running) ? @"Running" : @"Stopped";
             NSString* osStr = RuntimeDisplayName(item);
-            
+
             NSMutableAttributedString* attrStr = [[NSMutableAttributedString alloc] initWithString:[NSString stringWithFormat:@"%@  •  %@", osStr, statusStr]];
             NSRange statusRange = [attrStr.string rangeOfString:statusStr];
             if (statusRange.location != NSNotFound) {
@@ -1109,17 +1377,17 @@ static NSString* MapLinuxIconToSFSymbol(NSString* icon)
                                     range:statusRange];
                 }
             }
-            
+
             NSRange baseRange = NSMakeRange(0, attrStr.length);
             if (statusRange.location != NSNotFound) {
                 [attrStr addAttribute:NSForegroundColorAttributeName value:[NSColor secondaryLabelColor] range:NSMakeRange(0, statusRange.location)];
             } else {
                 [attrStr addAttribute:NSForegroundColorAttributeName value:[NSColor secondaryLabelColor] range:baseRange];
             }
-            
+
             subtitleLabel.attributedStringValue = attrStr;
         }
-        
+
         return cell;
     }
 
@@ -1233,32 +1501,32 @@ static NSString* MapLinuxIconToSFSymbol(NSString* icon)
             if (!cell) {
                 cell = [[NSTableCellView alloc] initWithFrame:NSMakeRect(0, 0, 100, 44)];
                 cell.identifier = @"status";
-                
+
                 NSTextField* text = [NSTextField labelWithString:@""];
                 text.font = [NSFont systemFontOfSize:12 weight:NSFontWeightMedium];
                 text.translatesAutoresizingMaskIntoConstraints = NO;
                 text.lineBreakMode = NSLineBreakByTruncatingTail;
                 cell.textField = text;
                 [cell addSubview:text];
-                
+
                 NSProgressIndicator* spinner = [[NSProgressIndicator alloc] init];
                 spinner.style = NSProgressIndicatorStyleSpinning;
                 spinner.controlSize = NSControlSizeSmall;
                 spinner.displayedWhenStopped = NO;
                 spinner.translatesAutoresizingMaskIntoConstraints = NO;
                 [cell addSubview:spinner];
-                
+
                 [NSLayoutConstraint activateConstraints:@[
                     [text.leadingAnchor constraintEqualToAnchor:cell.leadingAnchor constant:8],
                     [text.centerYAnchor constraintEqualToAnchor:cell.centerYAnchor],
-                    
+
                     [spinner.leadingAnchor constraintEqualToAnchor:text.trailingAnchor constant:6],
                     [spinner.centerYAnchor constraintEqualToAnchor:cell.centerYAnchor],
                     [spinner.widthAnchor constraintEqualToConstant:14.0],
                     [spinner.heightAnchor constraintEqualToConstant:14.0],
                 ]];
             }
-            
+
             NSString* status = [self statusForApp:app];
             NSProgressIndicator* spinner = nil;
             for (NSView* subview in cell.subviews) {
@@ -1267,7 +1535,7 @@ static NSString* MapLinuxIconToSFSymbol(NSString* icon)
                     break;
                 }
             }
-            
+
             if ([status isEqualToString:@"Launching..."]) {
                 cell.textField.stringValue = @"Launching";
                 cell.textField.textColor = [NSColor systemOrangeColor];
@@ -1437,7 +1705,7 @@ static NSString* MapLinuxIconToSFSymbol(NSString* icon)
     NSTextField* nameField = [NSTextField textFieldWithString:@"android"];
     NSTextField* locationField = [NSTextField textFieldWithString:@""];
     NSPopUpButton* kindPopup = [[NSPopUpButton alloc] init];
-    [kindPopup addItemsWithTitles:@[@"Android", @"Linux", @"Wine (Windows)"]];
+    [kindPopup addItemsWithTitles:@[@"Android", @"Linux", @"Windows"]];
     NSPopUpButton* archPopup = [[NSPopUpButton alloc] init];
     [archPopup addItemsWithTitles:@[@"ARM64", @"x64"]];
     NSPopUpButton* distroPopup = [[NSPopUpButton alloc] init];
@@ -1474,43 +1742,107 @@ static NSString* MapLinuxIconToSFSymbol(NSString* icon)
         return;
     }
 
-    try {
-        std::string kind = StdStringFromNSString(kindPopup.titleOfSelectedItem.lowercaseString);
-        if (kind.find("wine") != std::string::npos || kind.find("windows") != std::string::npos)
-            kind = "wine";
-        else if (kind == "android" || kind == "linux") {
-            // already correct, lowercased
-            std::transform(kind.begin(), kind.end(), kind.begin(), ::tolower);
-        }
-        std::string distro = "";
-        if (kind == "linux") {
-            distro = StdStringFromNSString(distroPopup.titleOfSelectedItem.lowercaseString);
-        }
-        std::string location = StdStringFromNSString(locationField.stringValue);
-        std::filesystem::path targetRoot = location.empty()
-            ? prefix::resolve_prefix_root(name)
-            : ChildPathForName(location, name);
-        if (PathExists(targetRoot)) {
+    std::string kind = StdStringFromNSString(kindPopup.titleOfSelectedItem.lowercaseString);
+    if (kind.find("wine") != std::string::npos || kind.find("windows") != std::string::npos)
+        kind = "wine";
+    else if (kind == "android" || kind == "linux") {
+        std::transform(kind.begin(), kind.end(), kind.begin(), ::tolower);
+    }
+    std::string distro = "";
+    if (kind == "linux") {
+        distro = StdStringFromNSString(distroPopup.titleOfSelectedItem.lowercaseString);
+    }
+    std::string location = StdStringFromNSString(locationField.stringValue);
+    NSString* resolvedSysroot = ResolveWorkspaceRelativePath(sysrootField.stringValue);
+    NSString* internalArch = InternalArchFromUI(archPopup.titleOfSelectedItem);
+    std::filesystem::path targetRoot = location.empty()
+        ? prefix::resolve_prefix_root(name)
+        : ChildPathForName(location, name);
+    if (PathExists(targetRoot)) {
+        [self showError:
+            [NSString stringWithFormat:@"Instance location already exists: %@",
+                                       NSStringFromPath(targetRoot)]];
+        return;
+    }
+
+    if (kind == "linux") {
+        NSString* selectedDistro = distroPopup.titleOfSelectedItem.lowercaseString;
+        if (![selectedDistro isEqualToString:@"ubuntu"] &&
+            ![selectedDistro isEqualToString:@"alpine"]) {
             [self showError:
-                [NSString stringWithFormat:@"Instance location already exists: %@",
-                                           NSStringFromPath(targetRoot)]];
+                @"Automatic Linux rootfs download currently supports Ubuntu and Alpine. Use tools/provision-linux-rootfs.sh --from-tar for this distro."];
             return;
         }
-        prefix::open_prefix_at_root(
-            name,
-            targetRoot,
-            StdStringFromNSString(ResolveWorkspaceRelativePath(sysrootField.stringValue)),
-            true,
-            prefix::parse_prefix_kind(kind),
-            prefix::parse_guest_arch(
-                StdStringFromNSString(
-                    InternalArchFromUI(archPopup.titleOfSelectedItem))),
-            "elfuse",
-            distro);
-        [self reloadPrefixesSelectingName:name];
-    } catch (const std::exception& e) {
-        [self showError:NSStringFromStdString(e.what())];
     }
+
+    NSString* instanceName = [nameField.stringValue copy];
+    NSString* distroTitle = [distroPopup.titleOfSelectedItem copy];
+    NSString* targetRootString = NSStringFromPath(targetRoot);
+    NSString* sysrootString = [resolvedSysroot copy];
+    NSString* archString = [internalArch copy];
+    NSString* busyMessage = nil;
+    if (kind == "wine") {
+        busyMessage = @"Preparing the Windows prefix and updating its configuration. This can take a little while.";
+    } else if (kind == "linux") {
+        busyMessage = @"Downloading or preparing the Linux rootfs. The instance will appear when setup finishes.";
+    } else {
+        busyMessage = @"Preparing the Android instance rootfs.";
+    }
+    NSWindow* busySheet =
+        [self beginBusySheetWithTitle:[NSString stringWithFormat:@"Creating %@", instanceName]
+                               message:busyMessage];
+    _statusLabel.stringValue =
+        [NSString stringWithFormat:@"Creating %@...", instanceName];
+
+    dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
+        __block BOOL ok = YES;
+        __block NSString* errorMessage = nil;
+        __block prefix::PrefixLayout createdLayout;
+        __block BOOL hasCreatedLayout = NO;
+
+        @autoreleasepool {
+            try {
+                if (kind == "linux") {
+                    NSString* provisionError = nil;
+                    ok = [self provisionLinuxInstanceName:instanceName
+                                                   distro:distroTitle
+                                                     arch:archString
+                                               targetRoot:targetRootString
+                                                  sysroot:sysrootString
+                                             errorMessage:&provisionError];
+                    if (!ok) {
+                        errorMessage = provisionError ?: @"Linux provisioning failed.";
+                    }
+                } else {
+                    createdLayout = prefix::open_prefix_at_root(
+                        name,
+                        targetRoot,
+                        StdStringFromNSString(sysrootString),
+                        true,
+                        prefix::parse_prefix_kind(kind),
+                        prefix::parse_guest_arch(StdStringFromNSString(archString)),
+                        "elfuse",
+                        distro);
+                    hasCreatedLayout = YES;
+                }
+            } catch (const std::exception& e) {
+                ok = NO;
+                errorMessage = NSStringFromStdString(e.what());
+            }
+        }
+
+        dispatch_async(dispatch_get_main_queue(), ^{
+            [self endBusySheet:busySheet];
+            if (!ok) {
+                self->_statusLabel.stringValue = @"Creation failed";
+                [self showError:errorMessage ?: @"Instance creation failed."];
+                return;
+            }
+            if (hasCreatedLayout && self->_supervisor)
+                self->_supervisor->on_prefix_created(createdLayout);
+            [self reloadPrefixesSelectingName:name];
+        });
+    });
 }
 
 - (void)clonePrefix:(id)sender
@@ -1569,9 +1901,44 @@ static NSString* MapLinuxIconToSFSymbol(NSString* icon)
                                            NSStringFromPath(targetRoot)]];
             return;
         }
-        prefix::clone_prefix_to_root(sourceRoot, newName, targetRoot,
-                                     replaceExisting);
-        [self reloadPrefixesSelectingName:newName];
+
+        NSString* instanceName = [nameField.stringValue copy];
+        NSWindow* busySheet =
+            [self beginBusySheetWithTitle:[NSString stringWithFormat:@"Cloning %@", instanceName]
+                                   message:@"Copying the instance root and registering the cloned environment."];
+        _statusLabel.stringValue =
+            [NSString stringWithFormat:@"Cloning %@...", instanceName];
+
+        dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
+            __block BOOL ok = YES;
+            __block NSString* errorMessage = nil;
+            __block prefix::PrefixLayout clonedLayout;
+            __block BOOL hasClonedLayout = NO;
+
+            @autoreleasepool {
+                try {
+                    clonedLayout =
+                        prefix::clone_prefix_to_root(sourceRoot, newName,
+                                                     targetRoot, replaceExisting);
+                    hasClonedLayout = YES;
+                } catch (const std::exception& e) {
+                    ok = NO;
+                    errorMessage = NSStringFromStdString(e.what());
+                }
+            }
+
+            dispatch_async(dispatch_get_main_queue(), ^{
+                [self endBusySheet:busySheet];
+                if (!ok) {
+                    self->_statusLabel.stringValue = @"Clone failed";
+                    [self showError:errorMessage ?: @"Instance clone failed."];
+                    return;
+                }
+                if (hasClonedLayout && self->_supervisor)
+                    self->_supervisor->on_prefix_created(clonedLayout);
+                [self reloadPrefixesSelectingName:newName];
+            });
+        });
     } catch (const std::exception& e) {
         [self showError:NSStringFromStdString(e.what())];
     }
@@ -1598,6 +1965,8 @@ static NSString* MapLinuxIconToSFSymbol(NSString* icon)
         return;
 
     try {
+        if (_supervisor)
+            _supervisor->on_prefix_deleted(selectedName);
         prefix::delete_prefix(selectedRoot);
         [self reloadPrefixes:nil];
     } catch (const std::exception& e) {
@@ -1625,7 +1994,7 @@ static NSString* MapLinuxIconToSFSymbol(NSString* icon)
     NSString* bundleWine = [[[frameworksPath stringByAppendingPathComponent:@"wine"]
                                              stringByAppendingPathComponent:@"bin"]
                                              stringByAppendingPathComponent:@"wine"];
-    NSLog(@"[wine] checking bundle: %@", bundleWine);
+    NSLog(@"[Windows] checking bundle: %@", bundleWine);
     if ([[NSFileManager defaultManager] isExecutableFileAtPath:bundleWine])
         return bundleWine;
 
@@ -1634,7 +2003,7 @@ static NSString* MapLinuxIconToSFSymbol(NSString* icon)
         NSString* sysrootStr = NSStringFromPath(layout.runtime_sysroot);
         NSString* resolvedStr = ResolveWorkspaceRelativePath(sysrootStr);
         std::filesystem::path c = std::filesystem::path(resolvedStr.UTF8String) / "bin" / "wine";
-        NSLog(@"[wine] checking sysroot: %s", c.c_str());
+        NSLog(@"[Windows] checking sysroot: %s", c.c_str());
         if (std::filesystem::is_regular_file(c))
             return NSStringFromStdString(c.string());
     }
@@ -1647,7 +2016,7 @@ static NSString* MapLinuxIconToSFSymbol(NSString* icon)
                                           stringByAppendingPathComponent:@"bin"]
                                           stringByAppendingPathComponent:@"wine"]
                                           stringByStandardizingPath];
-    NSLog(@"[wine] checking dev build: %@", devCandidate);
+    NSLog(@"[Windows] checking dev build: %@", devCandidate);
     if ([[NSFileManager defaultManager] isExecutableFileAtPath:devCandidate])
         return devCandidate;
 
@@ -1666,13 +2035,13 @@ static NSString* MapLinuxIconToSFSymbol(NSString* icon)
                                                  encoding:NSUTF8StringEncoding];
         result = [result stringByTrimmingCharactersInSet:
                       [NSCharacterSet whitespaceAndNewlineCharacterSet]];
-        NSLog(@"[wine] which: %@", result);
+        NSLog(@"[Windows] which: %@", result);
         if (result.length > 0 &&
             [[NSFileManager defaultManager] isExecutableFileAtPath:result])
             return result;
     } @catch (...) {}
 
-    NSLog(@"[wine] not found. bundle=%@", [[NSBundle mainBundle] bundlePath]);
+    NSLog(@"[Windows] not found. bundle=%@", [[NSBundle mainBundle] bundlePath]);
     return nil;
 }
 
@@ -1709,13 +2078,13 @@ static NSString* MapLinuxIconToSFSymbol(NSString* icon)
     if (selected && selected->kind == prefix::PrefixKind::Wine) {
         normalizedPath = [path stringByReplacingOccurrencesOfString:@"/" withString:@"\\"];
     }
-    
+
     for (MuplarAppShortcut* existing in _appsList) {
         if ([existing.path caseInsensitiveCompare:normalizedPath] == NSOrderedSame) {
             return;
         }
     }
-    
+
     MuplarAppShortcut* app = [[MuplarAppShortcut alloc] init];
     app.name = name;
     app.path = normalizedPath;
@@ -1730,25 +2099,34 @@ static NSString* MapLinuxIconToSFSymbol(NSString* icon)
 {
     NSString* path = [NSStringFromPath(selected->root) stringByAppendingPathComponent:@"muplar_apps.json"];
     if (![[NSFileManager defaultManager] fileExistsAtPath:path]) return;
-    
+
     NSData* data = [NSData dataWithContentsOfFile:path];
     if (!data) return;
-    
+
     NSError* error = nil;
     NSArray* list = [NSJSONSerialization JSONObjectWithData:data options:0 error:&error];
     if (error || ![list isKindOfClass:NSArray.class]) return;
-    
+
     for (NSDictionary* dict in list) {
         if ([dict isKindOfClass:NSDictionary.class]) {
             NSString* name = dict[@"name"];
             NSString* relPath = dict[@"path"];
             if (name && relPath) {
                 if (selected->kind == prefix::PrefixKind::Wine) {
-                    NSString* winPath = [@"C:\\" stringByAppendingString:[relPath stringByReplacingOccurrencesOfString:@"/" withString:@"\\"]];
-                    NSString* unixPath = [[NSStringFromPath(selected->rootfs) stringByAppendingPathComponent:@"drive_c"] stringByAppendingPathComponent:relPath];
+                    NSString* winPath;
+                    NSString* unixPath;
+                    if ([relPath hasPrefix:@"/"]) {
+                        // Absolute host path (outside drive_c) — Wine maps host FS under Z:
+                        unixPath = relPath;
+                        winPath = [@"Z:" stringByAppendingString: [relPath stringByReplacingOccurrencesOfString:@"/" withString:@"\\"]];
+                    } else {
+                        // Relative path inside drive_c
+                        winPath = [@"C:\\" stringByAppendingString: [relPath stringByReplacingOccurrencesOfString:@"/" withString:@"\\"]];
+                        unixPath = [[NSStringFromPath(selected->rootfs) stringByAppendingPathComponent:@"drive_c"] stringByAppendingPathComponent:relPath];
+                    }
                     [self addShortcutWithName:name path:winPath unixPath:unixPath isManual:YES isLnk:NO];
                 } else {
-                    NSString* fullPath = [NSStringFromPath(selected->rootfs) stringByAppendingPathComponent:relPath];
+                    NSString* fullPath = [NSStringFromPath([self activeSysrootForPrefix:selected]) stringByAppendingPathComponent:relPath];
                     [self addShortcutWithName:name path:fullPath unixPath:fullPath isManual:YES isLnk:NO];
                 }
             }
@@ -1760,29 +2138,36 @@ static NSString* MapLinuxIconToSFSymbol(NSString* icon)
 {
     NSString* jsonPath = [NSStringFromPath(selected->root) stringByAppendingPathComponent:@"muplar_apps.json"];
     NSMutableArray* list = [NSMutableArray array];
-    
+
     for (MuplarAppShortcut* app in _appsList) {
         if (app.isManual) {
             NSString* relPath = app.path;
             if (selected->kind == prefix::PrefixKind::Wine) {
+                // strip C:\ and convert to forward slashes
                 if ([relPath hasPrefix:@"C:\\"] || [relPath hasPrefix:@"c:\\"]) {
                     relPath = [relPath substringFromIndex:3];
                 }
                 relPath = [relPath stringByReplacingOccurrencesOfString:@"\\" withString:@"/"];
             } else {
-                NSString* rootfs = NSStringFromPath(selected->rootfs);
-                if ([relPath hasPrefix:rootfs]) {
-                    relPath = [relPath substringFromIndex:rootfs.length];
-                    if ([relPath hasPrefix:@"/"]) relPath = [relPath substringFromIndex:1];
+                // Strip whichever sysroot prefix is present — rootfs or runtime_sysroot
+                NSArray<NSString*>* bases = @[
+                    NSStringFromPath([self activeSysrootForPrefix:selected]).stringByStandardizingPath,
+                    NSStringFromPath(selected->rootfs).stringByStandardizingPath,
+                ];
+                NSString* stdPath = relPath.stringByStandardizingPath;
+                for (NSString* base in bases) {
+                    if ([stdPath hasPrefix:base]) {
+                        relPath = [stdPath substringFromIndex:base.length];
+                        if ([relPath hasPrefix:@"/"]) 
+                            relPath = [relPath substringFromIndex:1];
+                        break;
+                    }
                 }
             }
-            [list addObject:@{
-                @"name": app.name,
-                @"path": relPath
-            }];
+            [list addObject:@{@"name": app.name, @"path": relPath}];
         }
     }
-    
+
     NSError* error = nil;
     NSData* data = [NSJSONSerialization dataWithJSONObject:list options:NSJSONWritingPrettyPrinted error:&error];
     if (data && !error) {
@@ -1794,7 +2179,7 @@ static NSString* MapLinuxIconToSFSymbol(NSString* icon)
 {
     prefix::PrefixLayout* selected = [self selectedPrefix];
     if (!selected) return;
-    
+
     [_appsList removeObject:app];
     [self saveManualApps:selected];
     [_appsTableView reloadData];
@@ -1812,6 +2197,7 @@ static NSString* MapLinuxIconToSFSymbol(NSString* icon)
     [self addShortcutWithName:@"Command Prompt" path:@"cmd" unixPath:@"" isManual:NO isLnk:NO];
     [self addShortcutWithName:@"Control Panel" path:@"control" unixPath:@"" isManual:NO isLnk:NO];
     [self addShortcutWithName:@"Task Manager" path:@"taskmgr" unixPath:@"" isManual:NO isLnk:NO];
+    [self addShortcutWithName:@"Uninstaller" path:@"uninstaller" unixPath:@"" isManual:NO isLnk:NO];
 
     [self loadManualApps:selected];
 
@@ -1839,11 +2225,11 @@ static NSString* MapLinuxIconToSFSymbol(NSString* icon)
     NSError* error = nil;
     NSString* content = [NSString stringWithContentsOfFile:desktopPath encoding:NSUTF8StringEncoding error:&error];
     if (error || !content) return nil;
-    
+
     NSString* name = nil;
     NSString* execLine = nil;
     NSString* icon = nil;
-    
+
     NSArray* lines = [content componentsSeparatedByString:@"\n"];
     for (NSString* line in lines) {
         NSString* trimmed = [line stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
@@ -1858,9 +2244,9 @@ static NSString* MapLinuxIconToSFSymbol(NSString* icon)
             icon = [trimmed substringFromIndex:5];
         }
     }
-    
+
     if (!execLine) return nil;
-    
+
     NSString* rawExec = nil;
     if ([execLine hasPrefix:@"\""]) {
         NSRange nextQuote = [execLine rangeOfString:@"\"" options:0 range:NSMakeRange(1, execLine.length - 1)];
@@ -1873,17 +2259,17 @@ static NSString* MapLinuxIconToSFSymbol(NSString* icon)
             rawExec = [execLine substringWithRange:NSMakeRange(1, nextQuote.location - 1)];
         }
     }
-    
+
     if (!rawExec) {
         NSArray* tokens = [execLine componentsSeparatedByString:@" "];
         if (tokens.count > 0) {
             rawExec = tokens[0];
         }
     }
-    
+
     if (!rawExec) return nil;
     rawExec = [rawExec stringByTrimmingCharactersInSet:[NSCharacterSet characterSetWithCharactersInString:@"\"'"]];
-    
+
     NSString* hostPath = nil;
     if ([rawExec hasPrefix:@"/"]) {
         hostPath = [rootfs stringByAppendingPathComponent:rawExec];
@@ -1900,11 +2286,11 @@ static NSString* MapLinuxIconToSFSymbol(NSString* icon)
     if (!hostPath) {
         hostPath = [[rootfs stringByAppendingPathComponent:@"usr/bin"] stringByAppendingPathComponent:rawExec];
     }
-    
+
     if (!name) {
         name = [[desktopPath lastPathComponent] stringByDeletingPathExtension];
     }
-    
+
     return @{
         @"name": name,
         @"path": hostPath,
@@ -1912,44 +2298,110 @@ static NSString* MapLinuxIconToSFSymbol(NSString* icon)
     };
 }
 
+- (NSString*)linuxTerminalDisplayNameForGuestPath:(NSString*)guestPath
+{
+    NSString* name = guestPath.lastPathComponent.lowercaseString;
+    if ([name isEqualToString:@"gnome-terminal"])
+        return @"GNOME Terminal";
+    if ([name isEqualToString:@"kgx"])
+        return @"Console";
+    if ([name isEqualToString:@"x-terminal-emulator"])
+        return @"Terminal";
+    if ([name isEqualToString:@"xterm"])
+        return @"xterm";
+    if ([name isEqualToString:@"uxterm"])
+        return @"UXTerm";
+    if ([name isEqualToString:@"foot"])
+        return @"foot";
+    if ([name isEqualToString:@"alacritty"])
+        return @"Alacritty";
+    if ([name isEqualToString:@"kitty"])
+        return @"Kitty";
+    if ([name isEqualToString:@"konsole"])
+        return @"Konsole";
+    if ([name isEqualToString:@"xfce4-terminal"])
+        return @"Xfce Terminal";
+    if ([name isEqualToString:@"lxterminal"])
+        return @"LXTerminal";
+    if ([name isEqualToString:@"qterminal"])
+        return @"QTerminal";
+    if ([name isEqualToString:@"mate-terminal"])
+        return @"MATE Terminal";
+    if ([name isEqualToString:@"weston-terminal"])
+        return @"Weston Terminal";
+    return guestPath.lastPathComponent;
+}
+
+- (void)addLinuxTerminalShortcutIfPresent:(NSString*)guestPath
+                                   prefix:(prefix::PrefixLayout*)selected
+{
+    if ([self linuxTerminalRequiresX11:guestPath] &&
+        ![self guestXwaylandAvailableInPrefix:selected])
+        return;
+
+    std::filesystem::path activeSysroot = [self activeSysrootForPrefix:selected];
+    std::filesystem::path hostPath = HostPathForGuestPath(activeSysroot, guestPath);
+    std::error_code ec;
+    if (!std::filesystem::exists(hostPath, ec) && !std::filesystem::is_symlink(hostPath, ec))
+        return;
+
+    [self addShortcutWithName:[self linuxTerminalDisplayNameForGuestPath:guestPath]
+                         path:NSStringFromPath(hostPath)
+                     unixPath:NSStringFromPath(hostPath)
+                     iconName:@"terminal"
+                     isManual:NO
+                        isLnk:NO];
+}
+
+- (BOOL)linuxTerminalRequiresX11:(NSString*)guestPath
+{
+    NSString* name = guestPath.lastPathComponent.lowercaseString;
+    return [name isEqualToString:@"xterm"] ||
+           [name isEqualToString:@"uxterm"] ||
+           [name isEqualToString:@"x-terminal-emulator"] ||
+           [name isEqualToString:@"lxterminal"];
+}
+
+- (void)scanLinuxTerminalApps:(prefix::PrefixLayout*)selected
+{
+    auto profile = muplar::runtime::linux_common::distro_profile(
+        selected ? selected->distro : std::string());
+
+    NSMutableSet<NSString*>* seen = [NSMutableSet set];
+    auto addCandidate = ^(NSString* guestPath) {
+        if (guestPath.length == 0 || [seen containsObject:guestPath])
+            return;
+        [seen addObject:guestPath];
+        [self addLinuxTerminalShortcutIfPresent:guestPath prefix:selected];
+    };
+
+    for (const auto& path : profile.terminal_paths)
+        addCandidate(NSStringFromStdString(path));
+
+    NSArray<NSString*>* genericFallbacks = @[
+        @"/usr/bin/xterm", @"/bin/xterm",
+        @"/usr/bin/uxterm", @"/bin/uxterm",
+        @"/usr/bin/kgx",
+        @"/usr/bin/gnome-terminal",
+        @"/usr/bin/foot", @"/usr/local/bin/foot",
+        @"/usr/bin/alacritty", @"/usr/local/bin/alacritty",
+        @"/usr/bin/kitty", @"/usr/local/bin/kitty",
+        @"/usr/bin/konsole",
+        @"/usr/bin/xfce4-terminal",
+        @"/usr/bin/lxterminal",
+        @"/usr/bin/qterminal",
+        @"/usr/bin/mate-terminal",
+        @"/usr/bin/weston-terminal"
+    ];
+    for (NSString* guestPath in genericFallbacks)
+        addCandidate(guestPath);
+}
+
 - (void)scanLinuxApps:(prefix::PrefixLayout*)selected
 {
     std::filesystem::path activeSysroot = [self activeSysrootForPrefix:selected];
     NSString* sysrootStr = NSStringFromPath(activeSysroot);
-    
-    NSArray* shellCandidates = @[
-        @"/bin/sh", @"/usr/bin/sh",
-        @"/bin/bash", @"/usr/bin/bash",
-        @"/bin/zsh", @"/usr/bin/zsh",
-        @"/bin/dash", @"/usr/bin/dash"
-    ];
-    NSMutableSet<NSString*>* addedShellNames = [NSMutableSet set];
-    for (NSString* guestShell in shellCandidates) {
-        std::filesystem::path hostShell = HostPathForGuestPath(activeSysroot, guestShell);
-        std::error_code ec;
-        if (!std::filesystem::exists(hostShell, ec) && !std::filesystem::is_symlink(hostShell, ec))
-            continue;
-
-        NSString* shellName = [guestShell lastPathComponent];
-        if ([addedShellNames containsObject:shellName])
-            continue;
-        [addedShellNames addObject:shellName];
-
-        [self addShortcutWithName:[NSString stringWithFormat:@"Terminal (%@)", shellName]
-                             path:guestShell
-                         unixPath:NSStringFromPath(hostShell)
-                         isManual:NO
-                            isLnk:NO];
-    }
-
-    if (addedShellNames.count == 0) {
-        NSString* fallbackShell = @"/bin/sh";
-        [self addShortcutWithName:@"Terminal (sh)"
-                             path:fallbackShell
-                         unixPath:NSStringFromPath(HostPathForGuestPath(activeSysroot, fallbackShell))
-                         isManual:NO
-                            isLnk:NO];
-    }
+    [self scanLinuxTerminalApps:selected];
 
     NSArray* appDirs = @[
         @"usr/share/applications",
@@ -1964,8 +2416,17 @@ static NSString* MapLinuxIconToSFSymbol(NSString* icon)
                     NSString* desktopPath = NSStringFromPath(entry.path());
                     NSDictionary* info = [self parseDesktopFile:desktopPath rootfs:sysrootStr];
                     if (info) {
+                        NSString* appPath = info[@"path"];
+                        if ([self linuxTerminalRequiresX11:appPath] &&
+                            ![self guestXwaylandAvailableInPrefix:selected])
+                            continue;
+                        if ([appPath.lastPathComponent.lowercaseString isEqualToString:@"footclient"])
+                            continue;
+                        if (![[NSFileManager defaultManager] fileExistsAtPath:appPath])
+                            continue;
+
                         [self addShortcutWithName:info[@"name"]
-                                             path:info[@"path"]
+                                             path:appPath
                                          unixPath:desktopPath
                                          iconName:info[@"icon"]
                                          isManual:NO
@@ -1975,7 +2436,7 @@ static NSString* MapLinuxIconToSFSymbol(NSString* icon)
             }
         }
     }
-    
+
     [self loadManualApps:selected];
 }
 
@@ -1993,12 +2454,12 @@ static NSString* MapLinuxIconToSFSymbol(NSString* icon)
         if (entry.is_regular_file()) {
             std::string ext = entry.path().extension().string();
             std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower);
-            
+
             if (ext == ".lnk") {
                 NSString* unixPath = NSStringFromPath(entry.path());
                 NSString* targetPath = [self resolveLnkTarget:entry.path()];
                 NSString* name = [NSStringFromPath(entry.path().stem()) stringByDeletingPathExtension];
-                
+
                 if (targetPath && targetPath.length > 0) {
                     [self addShortcutWithName:name path:targetPath unixPath:unixPath isManual:NO isLnk:YES];
                 }
@@ -2059,36 +2520,56 @@ static NSString* MapLinuxIconToSFSymbol(NSString* icon)
     (void)sender;
     prefix::PrefixLayout* selected = [self selectedPrefix];
     if (!selected) return;
-    
+
     NSOpenPanel* panel = [NSOpenPanel openPanel];
     panel.canChooseFiles = YES;
     panel.canChooseDirectories = NO;
     panel.allowsMultipleSelection = NO;
     panel.prompt = @"Add";
-    
-    if (selected->kind == prefix::PrefixKind::Wine) {
-        panel.allowedFileTypes = @[@"exe"];
-        panel.title = @"Select Windows Executable (.exe)";
-        NSString* driveC = [NSStringFromPath(selected->rootfs) stringByAppendingPathComponent:@"drive_c"];
-        panel.directoryURL = [NSURL fileURLWithPath:driveC];
-    } else if (selected->kind == prefix::PrefixKind::Linux) {
-        panel.allowedFileTypes = nil;
-        panel.title = @"Select Linux Binary";
-        panel.directoryURL = [NSURL fileURLWithPath:NSStringFromPath(selected->rootfs)];
+
+    if (@available(macOS 11.0, *)) {
+        if (selected->kind == prefix::PrefixKind::Wine) {
+            panel.allowedContentTypes = @[[UTType typeWithFilenameExtension:@"exe"]];
+            panel.title = @"Select Windows Executable (.exe)";
+            NSString* driveC = [NSStringFromPath(selected->rootfs) stringByAppendingPathComponent:@"drive_c"];
+            panel.directoryURL = [NSURL fileURLWithPath:driveC];
+        } else if (selected->kind == prefix::PrefixKind::Linux) {
+            panel.allowedContentTypes = @[];
+            panel.title = @"Select Linux Binary";
+            panel.directoryURL = [NSURL fileURLWithPath:NSStringFromPath(selected->rootfs)];
+        } else {
+            panel.allowedContentTypes = @[[UTType typeWithFilenameExtension:@"apk"]];
+            panel.title = @"Select Android Package (.apk)";
+            panel.directoryURL = [NSURL fileURLWithPath:NSStringFromPath(selected->root)];
+        }
     } else {
-        panel.allowedFileTypes = @[@"apk"];
-        panel.title = @"Select Android Package (.apk)";
-        panel.directoryURL = [NSURL fileURLWithPath:NSStringFromPath(selected->root)];
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wdeprecated-declarations"
+        if (selected->kind == prefix::PrefixKind::Wine) {
+            panel.allowedFileTypes = @[@"exe"];
+            panel.title = @"Select Windows Executable (.exe)";
+            NSString* driveC = [NSStringFromPath(selected->rootfs) stringByAppendingPathComponent:@"drive_c"];
+            panel.directoryURL = [NSURL fileURLWithPath:driveC];
+        } else if (selected->kind == prefix::PrefixKind::Linux) {
+            panel.allowedFileTypes = nil;
+            panel.title = @"Select Linux Binary";
+            panel.directoryURL = [NSURL fileURLWithPath:NSStringFromPath(selected->rootfs)];
+        } else {
+            panel.allowedFileTypes = @[@"apk"];
+            panel.title = @"Select Android Package (.apk)";
+            panel.directoryURL = [NSURL fileURLWithPath:NSStringFromPath(selected->root)];
+        }
+#pragma clang diagnostic pop
     }
-    
+
     if ([panel runModal] == NSModalResponseOK && panel.URL) {
         NSString* unixPath = panel.URL.path;
         if (selected->kind == prefix::PrefixKind::Wine) {
-            NSString* driveC = [NSStringFromPath(selected->rootfs) stringByAppendingPathComponent:@"drive_c"];
-            if (![unixPath hasPrefix:driveC]) {
-                [self showError:@"Executable must be inside the instance C: drive."];
-                return;
-            }
+            // NSString* driveC = [NSStringFromPath(selected->rootfs) stringByAppendingPathComponent:@"drive_c"];
+            // if (![unixPath hasPrefix:driveC]) {
+            //     [self showError:@"Executable must be inside the instance C: drive."];
+            //     return;
+            // }
         } else {
             NSString* rootfs = NSStringFromPath(selected->rootfs);
             if (![unixPath hasPrefix:rootfs]) {
@@ -2096,27 +2577,29 @@ static NSString* MapLinuxIconToSFSymbol(NSString* icon)
                 return;
             }
         }
-        
+
         NSAlert* alert = [[NSAlert alloc] init];
         alert.messageText = @"Add Application";
         alert.informativeText = @"Enter a friendly name for this application shortcut:";
         [alert addButtonWithTitle:@"OK"];
         [alert addButtonWithTitle:@"Cancel"];
-        
+
         NSString* defaultName = [[unixPath lastPathComponent] stringByDeletingPathExtension];
         NSTextField* input = [NSTextField textFieldWithString:defaultName];
         alert.accessoryView = [self dialogAccessoryWithGrid:[NSGridView gridViewWithViews:@[@[[self label:@"Name"], input]]] width:300 height:24];
         alert.window.initialFirstResponder = input;
-        
+
         if ([alert runModal] == NSAlertFirstButtonReturn) {
             NSString* name = input.stringValue;
             if (name.length == 0) name = defaultName;
-            
+
             if (selected->kind == prefix::PrefixKind::Wine) {
                 NSString* winPath = [self unixToWindowsPath:unixPath forPrefix:selected];
                 [self addShortcutWithName:name path:winPath unixPath:unixPath isManual:YES isLnk:NO];
             } else {
-                [self addShortcutWithName:name path:unixPath unixPath:unixPath isManual:YES isLnk:NO];
+                // Standardize so saveManualApps can reliably strip the sysroot prefix
+                NSString* canonical = unixPath.stringByStandardizingPath;
+                [self addShortcutWithName:name path:canonical unixPath:canonical isManual:YES isLnk:NO];
             }
             [self saveManualApps:selected];
             [_appsTableView reloadData];
@@ -2159,18 +2642,270 @@ static NSString* MapLinuxIconToSFSymbol(NSString* icon)
     return nil;
 }
 
+- (NSString*)wawonaBinPath
+{
+    NSString* bundleWawona = [[[NSBundle mainBundle] privateFrameworksPath]
+        stringByAppendingPathComponent:@"wawona"];
+    if ([[NSFileManager defaultManager] isExecutableFileAtPath:bundleWawona])
+        return bundleWawona;
+
+    NSString* parentDir = [[NSBundle mainBundle] bundlePath].stringByDeletingLastPathComponent;
+    NSString* siblingWawona = [parentDir stringByAppendingPathComponent:@"wawona"];
+    if ([[NSFileManager defaultManager] isExecutableFileAtPath:siblingWawona])
+        return siblingWawona;
+
+    NSString* workspaceRoot = FindWorkspaceRoot();
+    if (workspaceRoot) {
+        NSString* devWawona = [[workspaceRoot stringByAppendingPathComponent:@"build/bin"]
+            stringByAppendingPathComponent:@"wawona"];
+        if ([[NSFileManager defaultManager] isExecutableFileAtPath:devWawona])
+            return devWawona;
+    }
+    return nil;
+}
+
+- (NSString*)angleLibraryDir
+{
+    NSString* bundleAngle = [[[NSBundle mainBundle] privateFrameworksPath]
+        stringByAppendingPathComponent:@"angle"];
+    if ([[NSFileManager defaultManager] fileExistsAtPath:bundleAngle])
+        return bundleAngle;
+
+    NSString* workspaceRoot = FindWorkspaceRoot();
+    if (workspaceRoot) {
+        NSString* devAngle = [workspaceRoot
+            stringByAppendingPathComponent:@"third_party/angle-bin"];
+        if ([[NSFileManager defaultManager] fileExistsAtPath:devAngle])
+            return devAngle;
+    }
+    return nil;
+}
+
+- (BOOL)waitForWawonaSocket
+{
+    NSString* socketPath = [DefaultWawonaRuntimeDir()
+        stringByAppendingPathComponent:DefaultWawonaDisplayName()];
+    for (int i = 0; i < 20; ++i) {
+        if ([[NSFileManager defaultManager] fileExistsAtPath:socketPath])
+            return YES;
+        usleep(100000);
+    }
+    return [[NSFileManager defaultManager] fileExistsAtPath:socketPath];
+}
+
+- (BOOL)ensureWawonaForLinuxPrefix:(prefix::PrefixLayout*)selected
+                      errorMessage:(NSString**)errorMessage
+{
+    (void)selected;
+    if (!_supervisor)
+        _supervisor = std::make_unique<supervisor::SupervisorService>();
+    if (!_supervisor->is_running())
+        _supervisor->start();
+
+    BOOL wawonaReady = _supervisor->wawona().wait_for_socket(5000);
+    if (!wawonaReady) {
+        if (errorMessage)
+            *errorMessage = @"Wawona compositor did not create a Wayland socket. The bundled Wawona binary may be a stub build.";
+        return NO;
+    }
+
+    return YES;
+}
+
+- (NSString*)linuxProvisionerScriptPath
+{
+    NSString* resourceScript = [[[[NSBundle mainBundle] resourcePath]
+                                    stringByAppendingPathComponent:@"tools"]
+                                    stringByAppendingPathComponent:@"provision-linux-rootfs.sh"];
+    if ([[NSFileManager defaultManager] isExecutableFileAtPath:resourceScript]) {
+        return resourceScript;
+    }
+
+    NSString* workspaceRoot = FindWorkspaceRoot();
+    if (workspaceRoot) {
+        NSString* devScript = [[workspaceRoot stringByAppendingPathComponent:@"tools"]
+                                  stringByAppendingPathComponent:@"provision-linux-rootfs.sh"];
+        if ([[NSFileManager defaultManager] isExecutableFileAtPath:devScript]) {
+            return devScript;
+        }
+    }
+    return nil;
+}
+
+- (NSString*)linuxRootfsCachePath
+{
+    NSString* home = NSHomeDirectory();
+    return [[[home stringByAppendingPathComponent:@".muplar"]
+              stringByAppendingPathComponent:@"cache"]
+              stringByAppendingPathComponent:@"linux-rootfs"];
+}
+
+- (NSString*)shortTaskOutputFromData:(NSData*)data
+{
+    NSString* output = [[NSString alloc] initWithData:data
+                                             encoding:NSUTF8StringEncoding];
+    if (output.length == 0)
+        return @"";
+    output = [output stringByTrimmingCharactersInSet:
+                    [NSCharacterSet whitespaceAndNewlineCharacterSet]];
+    static const NSUInteger kMaxLength = 6000;
+    if (output.length > kMaxLength) {
+        output = [@"...\n" stringByAppendingString:
+            [output substringFromIndex:output.length - kMaxLength]];
+    }
+    return output;
+}
+
+- (void)writeProvisionLog:(NSString*)output targetRoot:(NSString*)targetRoot
+{
+    if (output.length == 0 || targetRoot.length == 0)
+        return;
+
+    NSString* logDir = [targetRoot stringByAppendingPathComponent:@"logs"];
+    [[NSFileManager defaultManager] createDirectoryAtPath:logDir
+                              withIntermediateDirectories:YES
+                                               attributes:nil
+                                                    error:nil];
+    NSString* logPath = [logDir stringByAppendingPathComponent:@"provision-linux-rootfs.log"];
+    [output writeToFile:logPath
+             atomically:YES
+               encoding:NSUTF8StringEncoding
+                  error:nil];
+}
+
+- (BOOL)provisionLinuxInstanceName:(NSString*)name
+                            distro:(NSString*)distro
+                              arch:(NSString*)arch
+                        targetRoot:(NSString*)targetRoot
+                           sysroot:(NSString*)sysroot
+                      errorMessage:(NSString**)errorMessage
+{
+    NSString* script = [self linuxProvisionerScriptPath];
+    if (!script) {
+        if (errorMessage)
+            *errorMessage = @"Linux rootfs provisioner was not found in the app bundle.";
+        return NO;
+    }
+
+    NSString* mupBin = [self mupBinPath];
+    if (!mupBin) {
+        if (errorMessage)
+            *errorMessage = @"mup binary not found. Build the app bundle first.";
+        return NO;
+    }
+
+    NSMutableArray<NSString*>* args = [NSMutableArray arrayWithArray:@[
+        script,
+        @"--prefix", name,
+        @"--distro", distro.lowercaseString,
+        @"--arch", arch,
+        @"--root", targetRoot,
+        @"--download"
+    ]];
+    if (sysroot.length > 0) {
+        [args addObjectsFromArray:@[@"--sysroot", sysroot]];
+    }
+
+    NSMutableDictionary<NSString*, NSString*>* env =
+        [NSProcessInfo.processInfo.environment mutableCopy];
+    env[@"MUP"] = mupBin;
+    env[@"MUPLAR_ROOTFS_CACHE"] = [self linuxRootfsCachePath];
+    NSString* existingPath = env[@"PATH"] ?: @"";
+    NSString* finderSafePath = @"/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin";
+    env[@"PATH"] = existingPath.length > 0
+        ? [finderSafePath stringByAppendingFormat:@":%@", existingPath]
+        : finderSafePath;
+
+    NSTask* task = [[NSTask alloc] init];
+    task.launchPath = @"/bin/bash";
+    task.arguments = args;
+    task.environment = env;
+
+    NSString* tempLog = [NSTemporaryDirectory()
+        stringByAppendingPathComponent:
+            [NSString stringWithFormat:@"muplar-provision-%@.log",
+                                       [[NSUUID UUID] UUIDString]]];
+    [[NSFileManager defaultManager] createFileAtPath:tempLog
+                                            contents:nil
+                                          attributes:nil];
+    NSFileHandle* logHandle = [NSFileHandle fileHandleForWritingAtPath:tempLog];
+    if (!logHandle) {
+        if (errorMessage)
+            *errorMessage = @"Unable to create a temporary provisioner log file.";
+        return NO;
+    }
+    task.standardOutput = logHandle;
+    task.standardError = logHandle;
+
+    @try {
+        [task launch];
+        [task waitUntilExit];
+    } @catch (NSException* ex) {
+        [logHandle closeFile];
+        [[NSFileManager defaultManager] removeItemAtPath:tempLog error:nil];
+        if (errorMessage)
+            *errorMessage = [NSString stringWithFormat:@"Failed to start Linux provisioner: %@", ex.reason];
+        return NO;
+    }
+
+    [logHandle closeFile];
+    NSData* data = [NSData dataWithContentsOfFile:tempLog];
+    [[NSFileManager defaultManager] removeItemAtPath:tempLog error:nil];
+    NSString* output = [self shortTaskOutputFromData:data];
+    [self writeProvisionLog:output targetRoot:targetRoot];
+
+    if (task.terminationStatus != 0) {
+        if (errorMessage) {
+            *errorMessage = [NSString stringWithFormat:
+                @"Linux provisioning failed with exit code %d.%@%@",
+                task.terminationStatus,
+                output.length > 0 ? @"\n\n" : @"",
+                output.length > 0 ? output : @""];
+        }
+        return NO;
+    }
+    return YES;
+}
+
 - (BOOL)isTerminalShortcut:(MuplarAppShortcut*)app
 {
     NSString* lowerName = app.name.lowercaseString;
     NSString* lowerPath = app.path.lowercaseString;
-    return [lowerName containsString:@"terminal"] || 
+    return [lowerName containsString:@"terminal"] ||
+           [lowerName containsString:@"console"] ||
+           [lowerName isEqualToString:@"xterm"] ||
+           [lowerName isEqualToString:@"uxterm"] ||
            [lowerName containsString:@"command prompt"] ||
            [lowerPath isEqualToString:@"cmd"] ||
+           [lowerPath hasSuffix:@"/x-terminal-emulator"] ||
+           [lowerPath hasSuffix:@"/xterm"] ||
+           [lowerPath hasSuffix:@"/uxterm"] ||
+           [lowerPath hasSuffix:@"/kgx"] ||
+           [lowerPath hasSuffix:@"/foot"] ||
+           [lowerPath hasSuffix:@"/alacritty"] ||
+           [lowerPath hasSuffix:@"/kitty"] ||
+           [lowerPath hasSuffix:@"/konsole"] ||
            [lowerPath hasSuffix:@"/bash"] ||
            [lowerPath hasSuffix:@"/sh"] ||
            [lowerPath hasSuffix:@"/zsh"] ||
            [lowerPath hasSuffix:@"/dash"] ||
            [lowerPath hasSuffix:@"\\cmd.exe"];
+}
+
+- (BOOL)isLinuxShellShortcut:(MuplarAppShortcut*)app
+{
+    NSString* lowerName = app.name.lowercaseString;
+    NSString* lowerPath = app.path.lowercaseString;
+    return [lowerName isEqualToString:@"sh"] ||
+           [lowerName isEqualToString:@"bash"] ||
+           [lowerName isEqualToString:@"zsh"] ||
+           [lowerName isEqualToString:@"dash"] ||
+           [lowerName isEqualToString:@"fish"] ||
+           [lowerPath hasSuffix:@"/bash"] ||
+           [lowerPath hasSuffix:@"/sh"] ||
+           [lowerPath hasSuffix:@"/zsh"] ||
+           [lowerPath hasSuffix:@"/dash"] ||
+           [lowerPath hasSuffix:@"/fish"];
 }
 
 - (BOOL)isWineCommandPromptShortcut:(MuplarAppShortcut*)app
@@ -2187,20 +2922,20 @@ static NSString* MapLinuxIconToSFSymbol(NSString* icon)
 {
     NSString* logDir = NSStringFromPath(selected->logs_dir);
     [[NSFileManager defaultManager] createDirectoryAtPath:logDir withIntermediateDirectories:YES attributes:nil error:nil];
-    
+
     NSString* logPath = [logDir stringByAppendingPathComponent:@"muplar.log"];
     if (![[NSFileManager defaultManager] fileExistsAtPath:logPath]) {
         [[NSFileManager defaultManager] createFileAtPath:logPath contents:[NSData data] attributes:nil];
     }
-    
+
     NSFileHandle* logHandle = [NSFileHandle fileHandleForWritingAtPath:logPath];
     if (logHandle) {
         [logHandle seekToEndOfFile];
-        
+
         NSDateFormatter* formatter = [[NSDateFormatter alloc] init];
         formatter.dateFormat = @"yyyy-MM-dd HH:mm:ss";
         NSString* timestamp = [formatter stringFromDate:[NSDate date]];
-        
+
         NSString* header = [NSString stringWithFormat:@"\n=== [%@] Launching app: %@ ===\n", timestamp, appName];
         [logHandle writeData:[header dataUsingEncoding:NSUTF8StringEncoding]];
         [logHandle closeFile];
@@ -2209,38 +2944,64 @@ static NSString* MapLinuxIconToSFSymbol(NSString* icon)
 
 - (void)setupLoggingForTask:(NSTask*)task prefix:(prefix::PrefixLayout*)selected appName:(NSString*)appName
 {
+    // Write a header to the per-prefix log
     [self writeLaunchLogHeaderForPrefix:selected appName:appName];
-    
-    NSString* logDir = NSStringFromPath(selected->logs_dir);
-    NSString* logPath = [logDir stringByAppendingPathComponent:@"muplar.log"];
-    NSFileHandle* logHandle = [NSFileHandle fileHandleForWritingAtPath:logPath];
-    if (logHandle) {
-        [logHandle seekToEndOfFile];
-        task.standardOutput = logHandle;
-        task.standardError = logHandle;
-    } else {
-        task.standardOutput = [NSFileHandle fileHandleWithNullDevice];
-        task.standardError = [NSFileHandle fileHandleWithNullDevice];
+
+    // Direct task output to the global muplar.log so all output is centralized
+    NSString* home = NSHomeDirectory();
+    NSString* globalLogDir = [home stringByAppendingPathComponent:@".muplar"];
+    [[NSFileManager defaultManager] createDirectoryAtPath:globalLogDir withIntermediateDirectories:YES attributes:nil error:nil];
+    NSString* globalLogPath = [globalLogDir stringByAppendingPathComponent:@"muplar.log"];
+
+    if (![[NSFileManager defaultManager] fileExistsAtPath:globalLogPath]) {
+        [[NSFileManager defaultManager] createFileAtPath:globalLogPath contents:[NSData data] attributes:nil];
     }
+
+    NSFileHandle* globalHandle = [NSFileHandle fileHandleForWritingAtPath:globalLogPath];
+    if (globalHandle) {
+        [globalHandle seekToEndOfFile];
+
+        // Write a launch header to the global log too
+        NSDateFormatter* formatter = [[NSDateFormatter alloc] init];
+        formatter.dateFormat = @"yyyy-MM-dd HH:mm:ss";
+        NSString* timestamp = [formatter stringFromDate:[NSDate date]];
+        NSString* header = [NSString stringWithFormat:@"\n=== [%@] Launching app: %@ (prefix: %@) ===\n",
+                            timestamp, appName, NSStringFromStdString(selected->name)];
+        [globalHandle writeData:[header dataUsingEncoding:NSUTF8StringEncoding]];
+    }
+
+    // Use NSPipe to capture output and write to global log with flushing
+    NSPipe* pipe = [NSPipe pipe];
+    task.standardOutput = pipe;
+    task.standardError = pipe;
+
+    // Also write to the per-prefix log
+    NSString* prefixLogDir = NSStringFromPath(selected->logs_dir);
+    NSString* prefixLogPath = [prefixLogDir stringByAppendingPathComponent:@"muplar.log"];
+    NSFileHandle* prefixHandle = [NSFileHandle fileHandleForWritingAtPath:prefixLogPath];
+    if (prefixHandle) {
+        [prefixHandle seekToEndOfFile];
+    }
+
+    pipe.fileHandleForReading.readabilityHandler = ^(NSFileHandle* handle) {
+        NSData* data = [handle availableData];
+        if (data.length == 0) return;
+        if (globalHandle) {
+            @try { [globalHandle writeData:data]; } @catch (NSException* __unused e) {}
+        }
+        if (prefixHandle) {
+            @try { [prefixHandle writeData:data]; } @catch (NSException* __unused e) {}
+        }
+    };
 }
 
-- (NSString*)findGuestShellInPrefix:(prefix::PrefixLayout*)selected
+- (void)recycleWawonaAfterLinuxCrashIfIdle
 {
-    std::filesystem::path activeSysroot = [self activeSysrootForPrefix:selected];
-    NSArray* shellCandidates = @[
-        @"/bin/sh", @"/usr/bin/sh",
-        @"/bin/bash", @"/usr/bin/bash",
-        @"/bin/zsh", @"/usr/bin/zsh",
-        @"/bin/dash", @"/usr/bin/dash"
-    ];
-    for (NSString* guestPath in shellCandidates) {
-        std::filesystem::path hostPath = HostPathForGuestPath(activeSysroot, guestPath);
-        std::error_code ec;
-        if (std::filesystem::exists(hostPath, ec) || std::filesystem::is_symlink(hostPath, ec)) {
-            return guestPath;
-        }
-    }
-    return @"/bin/sh"; // Fallback
+    if (!_supervisor || _runningTasks.count != 0)
+        return;
+
+    _supervisor->wawona().stop();
+    _supervisor->wawona().start();
 }
 
 - (NSString*)guestPathFromHostPath:(NSString*)hostPath prefix:(prefix::PrefixLayout*)selected
@@ -2263,42 +3024,312 @@ static NSString* MapLinuxIconToSFSymbol(NSString* icon)
 {
     NSString* logDir = NSStringFromPath(selected->logs_dir);
     [[NSFileManager defaultManager] createDirectoryAtPath:logDir withIntermediateDirectories:YES attributes:nil error:nil];
-    
+
     NSMutableString* safeAppName = [app.name mutableCopy];
     NSRegularExpression* regex = [NSRegularExpression regularExpressionWithPattern:@"[^a-zA-Z0-9_-]" options:0 error:nil];
     [regex replaceMatchesInString:safeAppName options:0 range:NSMakeRange(0, safeAppName.length) withTemplate:@"_"];
     NSString* scriptName = [NSString stringWithFormat:@"launch_%@.command", safeAppName];
     NSString* scriptPath = [logDir stringByAppendingPathComponent:scriptName];
-    
+
     NSString* fileContent = [NSString stringWithFormat:
         @"#!/bin/sh\n"
+        @"%@"
         @"clear\n"
         @"%@\n",
+        HostDisplayEnvironmentExportScript(),
         commandString];
-        
+
     NSError* error = nil;
     [fileContent writeToFile:scriptPath atomically:YES encoding:NSUTF8StringEncoding error:&error];
     if (error) {
         [self showError:[NSString stringWithFormat:@"Failed to write launch script: %@", error.localizedDescription]];
         return;
     }
-    
+
     // chmod +x
     int rc = chmod(scriptPath.UTF8String, 0755);
     if (rc != 0) {
         [self showError:@"Failed to make launch script executable."];
         return;
     }
-    
-    // open -n -a Terminal
+
     NSTask* task = [[NSTask alloc] init];
     task.launchPath = @"/usr/bin/open";
     task.arguments = @[@"-n", @"-a", @"Terminal", scriptPath];
-    
+
     @try {
         [task launch];
     } @catch (NSException* exception) {
         [self showError:[NSString stringWithFormat:@"Failed to launch Terminal: %@", exception.reason]];
+    }
+}
+
+- (BOOL)guestExecutableExists:(NSString*)guestPath prefix:(prefix::PrefixLayout*)selected
+{
+    std::filesystem::path activeSysroot = [self activeSysrootForPrefix:selected];
+    std::filesystem::path hostPath = HostPathForGuestPath(activeSysroot, guestPath);
+    std::error_code ec;
+    return std::filesystem::exists(hostPath, ec) ||
+           std::filesystem::is_symlink(hostPath, ec);
+}
+
+- (NSString*)guestXwaylandPathForPrefix:(prefix::PrefixLayout*)selected
+{
+    NSArray<NSString*>* candidates = @[
+        @"/usr/bin/Xwayland",
+        @"/bin/Xwayland",
+        @"/usr/libexec/Xwayland",
+        @"/usr/lib/xorg/Xwayland"
+    ];
+    for (NSString* guestPath in candidates) {
+        if ([self guestExecutableExists:guestPath prefix:selected])
+            return guestPath;
+    }
+    return nil;
+}
+
+- (BOOL)guestXwaylandAvailableInPrefix:(prefix::PrefixLayout*)selected
+{
+    return [self guestXwaylandPathForPrefix:selected] != nil;
+}
+
+- (BOOL)guestArgumentsRequireX11:(NSArray<NSString*>*)guestArguments
+{
+    if (guestArguments.count == 0)
+        return NO;
+    return [self linuxTerminalRequiresX11:guestArguments[0]];
+}
+
+- (NSString*)guestShellPathForPrefix:(prefix::PrefixLayout*)selected
+{
+    for (NSString* guestPath in @[@"/bin/sh", @"/usr/bin/sh"]) {
+        if ([self guestExecutableExists:guestPath prefix:selected])
+            return guestPath;
+    }
+    return @"/bin/sh";
+}
+
+- (NSArray<NSString*>*)wrapGuestArgumentsForX11IfNeeded:(NSArray<NSString*>*)guestArguments
+                                                 prefix:(prefix::PrefixLayout*)selected
+                                           errorMessage:(NSString**)errorMessage
+{
+    if (![self guestArgumentsRequireX11:guestArguments])
+        return guestArguments;
+
+    NSString* xwaylandPath = [self guestXwaylandPathForPrefix:selected];
+    if (xwaylandPath.length == 0) {
+        if (errorMessage) {
+            *errorMessage =
+                @"This Linux app needs X11. Install Xwayland inside the instance rootfs, then refresh the app list.";
+        }
+        return nil;
+    }
+
+    NSMutableString* execLine = [NSMutableString stringWithString:@"exec"];
+    for (NSString* arg in guestArguments)
+        [execLine appendFormat:@" %@", ShellSingleQuote(arg)];
+
+    NSString* script = [NSString stringWithFormat:
+        @"if [ -z \"$XDG_RUNTIME_DIR\" ]; then export XDG_RUNTIME_DIR=%@; fi\n"
+        @"if [ -z \"$WAYLAND_DISPLAY\" ]; then export WAYLAND_DISPLAY=%@; fi\n"
+        @"export DISPLAY=${DISPLAY:-:77}\n"
+        @"mkdir -p /tmp/.X11-unix\n"
+        @"if [ ! -S /tmp/.X11-unix/X77 ]; then\n"
+        @"  %@ \"$DISPLAY\" -rootless -terminate -nolisten tcp >/tmp/muplar-xwayland.log 2>&1 &\n"
+        @"  for i in 1 2 3 4 5; do\n"
+        @"    [ -S /tmp/.X11-unix/X77 ] && break\n"
+        @"    sleep 1\n"
+        @"  done\n"
+        @"fi\n"
+        @"%@\n",
+        ShellSingleQuote(DefaultWawonaRuntimeDir()),
+        ShellSingleQuote(DefaultWawonaDisplayName()),
+        ShellSingleQuote(xwaylandPath),
+        execLine];
+
+    return @[[self guestShellPathForPrefix:selected], @"-lc", script];
+}
+
+- (NSString*)findGuestTerminalEmulatorInPrefix:(prefix::PrefixLayout*)selected
+{
+    auto profile = muplar::runtime::linux_common::distro_profile(
+        selected ? selected->distro : std::string());
+
+    NSMutableArray<NSString*>* candidates = [NSMutableArray array];
+    NSMutableSet<NSString*>* seen = [NSMutableSet set];
+    auto addCandidate = ^(NSString* guestPath) {
+        if (guestPath.length == 0 || [seen containsObject:guestPath])
+            return;
+        [seen addObject:guestPath];
+        [candidates addObject:guestPath];
+    };
+
+    for (const auto& path : profile.terminal_paths)
+        addCandidate(NSStringFromStdString(path));
+
+    NSArray<NSString*>* genericFallbacks = @[
+        @"/bin/xterm",
+        @"/usr/bin/uxterm", @"/bin/uxterm",
+        @"/usr/local/bin/foot",
+        @"/usr/local/bin/alacritty",
+        @"/usr/local/bin/kitty",
+        @"/usr/bin/xfce4-terminal",
+        @"/usr/bin/lxterminal",
+        @"/usr/bin/qterminal",
+        @"/usr/bin/mate-terminal",
+        @"/usr/bin/weston-terminal"
+    ];
+    for (NSString* guestPath in genericFallbacks)
+        addCandidate(guestPath);
+
+    for (NSString* guestPath in candidates) {
+        if ([self linuxTerminalRequiresX11:guestPath] &&
+            ![self guestXwaylandAvailableInPrefix:selected])
+            continue;
+        if ([self guestExecutableExists:guestPath prefix:selected])
+            return guestPath;
+    }
+    return nil;
+}
+
+- (NSString*)terminalInstallHintForPrefix:(prefix::PrefixLayout*)selected
+{
+    auto profile = muplar::runtime::linux_common::distro_profile(
+        selected ? selected->distro : std::string());
+    return NSStringFromStdString(
+        muplar::runtime::linux_common::terminal_install_hint(profile));
+}
+
+- (NSArray<NSString*>*)guestTerminalArgumentsForTerminal:(NSString*)terminal
+                                                   title:(NSString*)title
+                                                   shell:(NSString*)shell
+{
+    NSString* name = terminal.lastPathComponent.lowercaseString;
+    if ([name isEqualToString:@"xterm"] || [name isEqualToString:@"uxterm"] ||
+        [name isEqualToString:@"lxterminal"]) {
+        return @[terminal, @"-T", title, @"-e", shell];
+    }
+    if ([name isEqualToString:@"x-terminal-emulator"]) {
+        return @[terminal, @"-e", shell];
+    }
+    if ([name isEqualToString:@"konsole"] ||
+        [name isEqualToString:@"alacritty"]) {
+        return @[terminal, @"--title", title, @"-e", shell];
+    }
+    if ([name isEqualToString:@"gnome-terminal"] ||
+        [name isEqualToString:@"kgx"]) {
+        return @[terminal, @"--title", title, @"--", shell];
+    }
+    if ([name isEqualToString:@"xfce4-terminal"]) {
+        return @[terminal, @"--title", title, @"--command", shell];
+    }
+    if ([name isEqualToString:@"foot"]) {
+        return @[terminal, @"--title", title, shell];
+    }
+    if ([name isEqualToString:@"qterminal"]) {
+        return @[terminal, @"-e", shell];
+    }
+    if ([name isEqualToString:@"weston-terminal"]) {
+        return @[terminal, shell];
+    }
+    return @[terminal, @"--title", title, @"--", shell];
+}
+
+- (void)launchLinuxTaskWithGuestArguments:(NSArray<NSString*>*)guestArguments
+                                   prefix:(prefix::PrefixLayout*)selected
+                                      app:(MuplarAppShortcut*)app
+                                    quiet:(BOOL)quiet
+{
+    NSString* mupBin = [self mupBinPath];
+    if (!mupBin) {
+        [self showError:@"mup binary not found. Make sure the mup CLI is built and located next to the App bundle."];
+        return;
+    }
+
+    if (![[NSFileManager defaultManager] isExecutableFileAtPath:mupBin]) {
+        [self showError:[NSString stringWithFormat:@"mup binary at %@ is not executable.", mupBin]];
+        return;
+    }
+
+    NSString* wawonaError = nil;
+    if (![self ensureWawonaForLinuxPrefix:selected errorMessage:&wawonaError]) {
+        [self showError:wawonaError ?: @"Failed to start Wawona compositor."];
+        return;
+    }
+
+    NSString* x11Error = nil;
+    NSArray<NSString*>* actualGuestArguments =
+        [self wrapGuestArgumentsForX11IfNeeded:guestArguments
+                                        prefix:selected
+                                  errorMessage:&x11Error];
+    if (!actualGuestArguments) {
+        [self showError:x11Error ?: @"Failed to prepare Linux X11 launch."];
+        return;
+    }
+
+    NSMutableDictionary<NSString*, NSString*>* env =
+        [NSProcessInfo.processInfo.environment mutableCopy];
+    ApplyDefaultLinuxDisplayEnvironment(env);
+    NSString* angleDir = [self angleLibraryDir];
+    if (angleDir.length > 0) {
+        NSString* existingDyld = env[@"DYLD_LIBRARY_PATH"];
+        env[@"DYLD_LIBRARY_PATH"] = existingDyld.length > 0
+            ? [angleDir stringByAppendingFormat:@":%@", existingDyld]
+            : angleDir;
+    }
+
+    NSTask* task = [[NSTask alloc] init];
+    task.launchPath = mupBin;
+    NSMutableArray<NSString*>* args = [NSMutableArray array];
+    if (quiet)
+        [args addObject:@"--quiet"];
+    [args addObjectsFromArray:@[@"--prefix", NSStringFromStdString(selected->name)]];
+    [args addObjectsFromArray:actualGuestArguments];
+    task.arguments = args;
+    task.environment = env;
+    [self setupLoggingForTask:task prefix:selected appName:app.name];
+
+    NSString* key = [self appKeyForApp:app];
+    [_launchingAppPaths addObject:key];
+    [_appsTableView reloadData];
+
+    std::filesystem::path pidPath = prefix::pid_file_path(*selected);
+    NSString* pidFile = NSStringFromPath(pidPath);
+    [[NSFileManager defaultManager] createDirectoryAtPath:[pidFile stringByDeletingLastPathComponent]
+                              withIntermediateDirectories:YES
+                                               attributes:nil
+                                                    error:nil];
+
+    task.terminationHandler = ^(NSTask* t) {
+        BOOL crashed = (t.terminationReason != NSTaskTerminationReasonExit ||
+                        t.terminationStatus != 0);
+        [[NSFileManager defaultManager] removeItemAtPath:pidFile error:nil];
+        dispatch_async(dispatch_get_main_queue(), ^{
+            [self->_launchingAppPaths removeObject:key];
+            [self->_runningTasks removeObjectForKey:key];
+            if (crashed)
+                [self recycleWawonaAfterLinuxCrashIfIdle];
+            [self loadAppsForSelectedPrefix];
+            [self reloadPrefixes:nil];
+        });
+    };
+
+    @try {
+        [task launch];
+        _runningTasks[key] = task;
+        NSString* pidContent = [NSString stringWithFormat:@"%d\n", task.processIdentifier];
+        [pidContent writeToFile:pidFile atomically:YES encoding:NSUTF8StringEncoding error:nil];
+
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1500 * NSEC_PER_MSEC)),
+                       dispatch_get_main_queue(), ^{
+            [self->_launchingAppPaths removeObject:key];
+            [self loadAppsForSelectedPrefix];
+            [self reloadPrefixes:nil];
+        });
+    } @catch (NSException* ex) {
+        [self->_launchingAppPaths removeObject:key];
+        [_appsTableView reloadData];
+        [self showError:[NSString stringWithFormat:@"Failed to launch Linux app: %@", ex.reason]];
     }
 }
 
@@ -2319,17 +3350,17 @@ static NSString* MapLinuxIconToSFSymbol(NSString* icon)
                                           stringByAppendingPathComponent:@"lib/wine/x86_64-windows"];
     NSString* wineLibDir = [[NSFileManager defaultManager] fileExistsAtPath:bundleDllPath]
                            ? bundleDllPath : siblingDllPath;
-    
+
     NSString* wineLibPath = [[[wineBin stringByDeletingLastPathComponent]
                                        stringByDeletingLastPathComponent]
                                        stringByAppendingPathComponent:@"lib"];
-    
+
     NSString* existingFallback = NSProcessInfo.processInfo.environment[@"DYLD_FALLBACK_LIBRARY_PATH"];
     NSString* newFallback = [NSString stringWithFormat:@"/usr/local/lib:/opt/homebrew/lib:%@", wineLibPath];
     if (existingFallback) {
         newFallback = [newFallback stringByAppendingFormat:@":%@", existingFallback];
     }
-    
+
     NSString* cmdStr = [NSString stringWithFormat:
         @"export WINEPREFIX='%@'\n"
         @"export WINEDEBUG='+err'\n"
@@ -2340,85 +3371,39 @@ static NSString* MapLinuxIconToSFSymbol(NSString* icon)
         wineLibDir ? [NSString stringWithFormat:@"export WINEDLLPATH='%@'", wineLibDir] : @"",
         newFallback,
         wineBin];
-        
+
     [self runCommandInTerminal:cmdStr prefix:selected app:app];
 }
 
 - (void)launchLinuxApp:(MuplarAppShortcut*)app prefix:(prefix::PrefixLayout*)selected
 {
-    NSString* mupBin = [self mupBinPath];
-    if (!mupBin) {
-        [self showError:@"mup binary not found. Make sure the mup CLI is built and located next to the App bundle."];
-        return;
-    }
-    
-    if (![[NSFileManager defaultManager] isExecutableFileAtPath:mupBin]) {
-        [self showError:[NSString stringWithFormat:@"mup binary at %@ is not executable.", mupBin]];
-        return;
-    }
-    
-    // Write launch log header
-    [self writeLaunchLogHeaderForPrefix:selected appName:app.name];
-    NSString* logPath = [NSStringFromPath(selected->logs_dir) stringByAppendingPathComponent:@"muplar.log"];
-    
-    NSString* angleDir = @"/Users/dbaotrung/personal/muplar/third_party/angle-bin";
-    
     NSString* guestAppPath = [self guestPathFromHostPath:app.path prefix:selected];
-    
-    std::filesystem::path pidPath = prefix::pid_file_path(*selected);
-    NSString* pidFile = NSStringFromPath(pidPath);
-    NSString* pidDir = [pidFile stringByDeletingLastPathComponent];
-    
-    NSString* key = [self appKeyForApp:app];
-    [_launchingAppPaths addObject:key];
-    [_appsTableView reloadData];
-    
-    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1500 * NSEC_PER_MSEC)),
-                   dispatch_get_main_queue(), ^{
-        [self->_launchingAppPaths removeObject:key];
-        [self loadAppsForSelectedPrefix];
-        [self reloadPrefixes:nil];
-    });
 
-    NSString* cmd;
-    NSString* cmdStr;
-    if ([self isTerminalShortcut:app]) {
-        cmd = [NSString stringWithFormat:@"'%@'", guestAppPath];
-        cmdStr = [NSString stringWithFormat:
-            @"mkdir -p '%@'\n"
-            @"echo $$ > '%@'\n"
-            @"trap \"rm -f '%@'\" EXIT\n"
-            @"export DYLD_LIBRARY_PATH='%@'\n"
-            @"'%@' --quiet --prefix '%@' %@\n"
-            @"__muplar_status=$?\n"
-            @"__muplar_tty=\"$(tty)\"\n"
-            @"osascript >/dev/null 2>&1 <<EOF &\n"
-            @"tell application \"Terminal\"\n"
-            @"    repeat with w in windows\n"
-            @"        repeat with t in tabs of w\n"
-            @"            if tty of t is \"$__muplar_tty\" then\n"
-            @"                close w\n"
-            @"                return\n"
-            @"            end if\n"
-            @"        end repeat\n"
-            @"    end repeat\n"
-            @"end tell\n"
-            @"EOF\n"
-            @"exit $__muplar_status",
-            pidDir, pidFile, pidFile, angleDir, mupBin, NSStringFromStdString(selected->name), cmd];
-    } else {
-        NSString* guestShell = [self findGuestShellInPrefix:selected];
-        cmd = [NSString stringWithFormat:@"'%@' -c \"'%@'; echo; read -p 'Press Enter to exit...'\"", guestShell, guestAppPath];
-        cmdStr = [NSString stringWithFormat:
-            @"mkdir -p '%@'\n"
-            @"echo $$ > '%@'\n"
-            @"trap \"rm -f '%@'\" EXIT\n"
-            @"export DYLD_LIBRARY_PATH='%@'\n"
-            @"exec '%@' --prefix '%@' %@ 2>&1 | tee -a '%@'",
-            pidDir, pidFile, pidFile, angleDir, mupBin, NSStringFromStdString(selected->name), cmd, logPath];
+    if ([self isLinuxShellShortcut:app]) {
+        NSString* terminal = [self findGuestTerminalEmulatorInPrefix:selected];
+        if (!terminal) {
+            [self showError:
+                [NSString stringWithFormat:
+                    @"No Linux terminal emulator was found in this instance. %@.",
+                    [self terminalInstallHintForPrefix:selected]]];
+            return;
+        }
+
+        NSArray<NSString*>* guestArgs =
+            [self guestTerminalArgumentsForTerminal:terminal
+                                              title:app.name
+                                              shell:guestAppPath];
+        [self launchLinuxTaskWithGuestArguments:guestArgs
+                                         prefix:selected
+                                            app:app
+                                          quiet:YES];
+        return;
     }
-        
-    [self runCommandInTerminal:cmdStr prefix:selected app:app];
+
+    [self launchLinuxTaskWithGuestArguments:@[guestAppPath]
+                                     prefix:selected
+                                        app:app
+                                      quiet:NO];
 }
 
 - (void)launchShortcut:(MuplarAppShortcut*)app
@@ -2445,7 +3430,7 @@ static NSString* MapLinuxIconToSFSymbol(NSString* icon)
 
     NSString* wineBin = [self wine64PathForPrefix:*selected];
     if (!wineBin) {
-        [self showError:@"wine binary not found. Build Wine first or set the prefix sysroot."];
+        [self showError:@"Windows module binary not found. Build Windows module first or set the prefix sysroot."];
         return;
     }
 
@@ -2453,7 +3438,7 @@ static NSString* MapLinuxIconToSFSymbol(NSString* icon)
 
     NSMutableDictionary* env = [NSProcessInfo.processInfo.environment mutableCopy];
     env[@"WINEPREFIX"] = winePrefix;
-    
+
     NSString* bundleDllPath = [[[[NSBundle mainBundle] privateFrameworksPath]
                                   stringByAppendingPathComponent:@"wine"]
                                   stringByAppendingPathComponent:@"lib/wine/x86_64-windows"];
@@ -2519,15 +3504,15 @@ static NSString* MapLinuxIconToSFSymbol(NSString* icon)
     };
 
     @try {
-        NSLog(@"[wine] launching app: %@", app.name);
+        NSLog(@"[Windows] launching app: %@", app.name);
         [task launch];
-        
+
         _runningTasks[key] = task;
 
         // Write PID file
         NSString* pidContent = [NSString stringWithFormat:@"%d\n", task.processIdentifier];
         [pidContent writeToFile:pidFile atomically:YES encoding:NSUTF8StringEncoding error:nil];
-        
+
         dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1500 * NSEC_PER_MSEC)),
                        dispatch_get_main_queue(), ^{
             [self->_launchingAppPaths removeObject:key];
@@ -2546,7 +3531,7 @@ static NSString* MapLinuxIconToSFSymbol(NSString* icon)
     NSInteger row = ((NSControl*)sender).tag;
     if (row < 0 || row >= (NSInteger)_appsList.count) return;
     MuplarAppShortcut* app = _appsList[row];
-    
+
     NSString* status = [self statusForApp:app];
     if ([status isEqualToString:@"Running"]) {
         NSString* key = [self appKeyForApp:app];
@@ -2574,6 +3559,21 @@ int main(int argc, char* argv[])
     (void)argc;
     (void)argv;
     @autoreleasepool {
+        NSString* home = NSHomeDirectory();
+        NSString* muplarDir = [home stringByAppendingPathComponent:@".muplar"];
+        [[NSFileManager defaultManager] createDirectoryAtPath:muplarDir withIntermediateDirectories:YES attributes:nil error:nil];
+        NSString* logPath = [muplarDir stringByAppendingPathComponent:@"muplar.log"];
+
+        const char* logPathStr = [logPath UTF8String];
+        std::freopen(logPathStr, "a", stdout);
+        std::freopen(logPathStr, "a", stderr);
+
+        NSDateFormatter* formatter = [[NSDateFormatter alloc] init];
+        formatter.dateFormat = @"yyyy-MM-dd HH:mm:ss";
+        NSString* timestamp = [formatter stringFromDate:[NSDate date]];
+        std::printf("\n=== Muplar Instance Manager Launched at %s ===\n", [timestamp UTF8String]);
+        std::fflush(stdout);
+
         NSApplication* app = [NSApplication sharedApplication];
         PrefixManagerAppDelegate* delegate =
             [[PrefixManagerAppDelegate alloc] init];

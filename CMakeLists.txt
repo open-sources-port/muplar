@@ -162,7 +162,7 @@ ExternalProject_Add(busybox_external
     DOWNLOAD_COMMAND ""
     SOURCE_DIR      ${CMAKE_SOURCE_DIR}/third_party/busybox
     CONFIGURE_COMMAND ""
-    BUILD_COMMAND   sh ${BUSYBOX_BUILD_SHELL}
+    BUILD_COMMAND   /bin/zsh ${BUSYBOX_BUILD_SHELL}
     INSTALL_COMMAND ""
     BUILD_IN_SOURCE 0
     USES_TERMINAL_BUILD YES
@@ -173,6 +173,54 @@ ExternalProject_Add(busybox_external
 )
 
 add_custom_target(busybox_bin DEPENDS busybox_external)
+
+# =========================================
+# Wawona: Wayland compositor
+# =========================================
+set(WAWONA_BUILD_SHELL ${CMAKE_SOURCE_DIR}/tools/build-wawona.sh)
+set(WAWONA_BIN ${CMAKE_BINARY_DIR}/bin/wawona)
+
+ExternalProject_Add(wawona_external
+    DOWNLOAD_COMMAND ""
+    SOURCE_DIR      ${CMAKE_SOURCE_DIR}/third_party/wawona
+    CONFIGURE_COMMAND ""
+    BUILD_COMMAND   sh ${WAWONA_BUILD_SHELL}
+    INSTALL_COMMAND ""
+    BUILD_IN_SOURCE 0
+    USES_TERMINAL_BUILD YES
+    BINARY_DIR      ${CMAKE_BINARY_DIR}
+    BUILD_BYPRODUCTS
+        ${WAWONA_BIN}
+)
+
+add_custom_target(wawona_bin DEPENDS wawona_external)
+
+# =========================================
+# EGL/GLESv2 Guest Stubs
+# =========================================
+set(STUBS_BUILD_SHELL ${CMAKE_SOURCE_DIR}/tools/build-egl-gles-stubs.sh)
+set(GUEST_ARM64_EGL_SO ${CMAKE_BINARY_DIR}/bin/aarch64/libEGL.so)
+set(GUEST_ARM64_GLES_SO ${CMAKE_BINARY_DIR}/bin/aarch64/libGLESv2.so)
+set(GUEST_X64_EGL_SO ${CMAKE_BINARY_DIR}/bin/x86_64/libEGL.so)
+set(GUEST_X64_GLES_SO ${CMAKE_BINARY_DIR}/bin/x86_64/libGLESv2.so)
+
+ExternalProject_Add(egl_gles_stubs_external
+    DOWNLOAD_COMMAND ""
+    SOURCE_DIR      ${CMAKE_SOURCE_DIR}/tools/guest-egl-gles-stubs
+    CONFIGURE_COMMAND ""
+    BUILD_COMMAND   sh ${STUBS_BUILD_SHELL}
+    INSTALL_COMMAND ""
+    BUILD_IN_SOURCE 0
+    USES_TERMINAL_BUILD YES
+    BINARY_DIR      ${CMAKE_BINARY_DIR}
+    BUILD_BYPRODUCTS
+        ${GUEST_ARM64_EGL_SO}
+        ${GUEST_ARM64_GLES_SO}
+        ${GUEST_X64_EGL_SO}
+        ${GUEST_X64_GLES_SO}
+)
+
+add_custom_target(egl_gles_stubs_bin DEPENDS egl_gles_stubs_external)
 
 set(MUPLAR_WINE_PREFIX_DIR ${WINE_PREFIX_DIR})
 set(MUPLAR_HAS_WINE ON)
