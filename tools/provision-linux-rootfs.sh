@@ -57,6 +57,25 @@ fail() {
     exit 1
 }
 
+clear_rootfs_dir() {
+    local path="$1"
+    mkdir -p "$path"
+    find "$path" ! -type l -exec chmod u+rwX {} + 2>/dev/null || true
+    find "$path" -mindepth 1 -maxdepth 1 -exec rm -rf {} +
+}
+
+is_case_insensitive_dir() {
+    local path="$1"
+    local probe="$path/.muplar-case-probe-$$"
+    mkdir -p "$probe"
+    : >"$probe/a"
+    : >"$probe/A"
+    local count
+    count="$(find "$probe" -maxdepth 1 -type f | wc -l | tr -d ' ')"
+    rm -rf "$probe"
+    [[ "$count" == "1" ]]
+}
+
 need_arg() {
     local flag="$1"
     local value="${2:-}"
@@ -310,6 +329,94 @@ PY
     FROM_TAR="$tarball"
 }
 
+download_debian() {
+    [[ -n "$CURL_BIN" ]] || fail "curl is required for --download"
+
+    local debian_branch
+    case "$ARCH" in
+        aarch64) debian_branch="dist-arm64v8" ;;
+        x86_64) debian_branch="dist-amd64" ;;
+        *) fail "unsupported Debian arch: $ARCH" ;;
+    esac
+
+    local url="https://github.com/debuerreotype/docker-debian-artifacts/raw/${debian_branch}/bookworm/oci/blobs/rootfs.tar.gz"
+    local tarball="$CACHE_DIR/debian-bookworm-${ARCH}.tar.gz"
+
+    if [[ ! -f "$tarball" ]]; then
+        echo "[linux-rootfs] Downloading debian-bookworm-${ARCH}.tar.gz"
+        "$CURL_BIN" -fL "$url" -o "$tarball.part"
+        mv "$tarball.part" "$tarball"
+    else
+        echo "[linux-rootfs] Using cached debian-bookworm-${ARCH}.tar.gz"
+    fi
+
+    FROM_TAR="$tarball"
+}
+
+download_fedora() {
+    [[ -n "$CURL_BIN" ]] || fail "curl is required for --download"
+
+    local url="https://archives.fedoraproject.org/pub/archive/fedora/linux/releases/40/Container/${ARCH}/images/Fedora-Container-Base-Generic.${ARCH}-40-1.14.oci.tar.xz"
+    local tarball="$CACHE_DIR/fedora-40-${ARCH}.oci.tar.xz"
+
+    if [[ ! -f "$tarball" ]]; then
+        echo "[linux-rootfs] Downloading fedora-40-${ARCH}.oci.tar.xz"
+        "$CURL_BIN" -fL "$url" -o "$tarball.part"
+        mv "$tarball.part" "$tarball"
+    else
+        echo "[linux-rootfs] Using cached fedora-40-${ARCH}.oci.tar.xz"
+    fi
+
+    FROM_TAR="$tarball"
+}
+
+download_arch() {
+    [[ -n "$CURL_BIN" ]] || fail "curl is required for --download"
+
+    local url
+    local ext
+    if [[ "$ARCH" == "aarch64" ]]; then
+        url="http://archlinuxarm.org/os/ArchLinuxARM-aarch64-latest.tar.gz"
+        ext="tar.gz"
+    else
+        url="https://geo.mirror.pkgbuild.com/iso/latest/archlinux-bootstrap-x86_64.tar.zst"
+        ext="tar.zst"
+    fi
+    local tarball="$CACHE_DIR/archlinux-bootstrap-${ARCH}.${ext}"
+
+    if [[ ! -f "$tarball" ]]; then
+        echo "[linux-rootfs] Downloading archlinux-bootstrap-${ARCH}.${ext}"
+        "$CURL_BIN" -fL "$url" -o "$tarball.part"
+        mv "$tarball.part" "$tarball"
+    else
+        echo "[linux-rootfs] Using cached archlinux-bootstrap-${ARCH}.${ext}"
+    fi
+
+    FROM_TAR="$tarball"
+}
+
+download_opensuse() {
+    [[ -n "$CURL_BIN" ]] || fail "curl is required for --download"
+
+    local url
+    if [[ "$ARCH" == "aarch64" ]]; then
+        url="https://download.opensuse.org/ports/aarch64/tumbleweed/appliances/opensuse-tumbleweed-image.aarch64-lxc.tar.xz"
+    else
+        url="https://download.opensuse.org/tumbleweed/appliances/opensuse-tumbleweed-image.x86_64-lxc.tar.xz"
+    fi
+    local tarball="$CACHE_DIR/opensuse-tumbleweed-lxc-${ARCH}.tar.xz"
+
+    if [[ ! -f "$tarball" ]]; then
+        echo "[linux-rootfs] Downloading opensuse-tumbleweed-lxc-${ARCH}.tar.xz"
+        "$CURL_BIN" -fL "$url" -o "$tarball.part"
+        mv "$tarball.part" "$tarball"
+    else
+        echo "[linux-rootfs] Using cached opensuse-tumbleweed-lxc-${ARCH}.tar.xz"
+    fi
+
+    FROM_TAR="$tarball"
+}
+
 if [[ "$DOWNLOAD" == true ]]; then
     case "$DISTRO" in
         alpine)
@@ -317,6 +424,18 @@ if [[ "$DOWNLOAD" == true ]]; then
             ;;
         ubuntu)
             download_ubuntu
+            ;;
+        debian)
+            download_debian
+            ;;
+        fedora)
+            download_fedora
+            ;;
+        arch)
+            download_arch
+            ;;
+        opensuse)
+            download_opensuse
             ;;
         *)
             fail "$DISTRO automatic download is not wired yet; use --from-tar PATH"
@@ -333,12 +452,19 @@ fi
 
 preexisting_rootfs_contents=false
 preexisting_rootfs_path=""
-if [[ -n "$PREFIX_ROOT" ]]; then
+if [[ "$prefix_exists_before" == true ]]; then
+    prefix_info_before="$("$MUP" prefix info "$PREFIX")"
+    preexisting_rootfs_path="$(printf '%s\n' "$prefix_info_before" | sed -n 's/^Rootfs: //p' | head -n 1)"
+    if [[ -n "$preexisting_rootfs_path" && -d "$preexisting_rootfs_path" ]] &&
+       find "$preexisting_rootfs_path" -mindepth 1 -maxdepth 1 | read -r _; then
+        preexisting_rootfs_contents=true
+    fi
+elif [[ -n "$PREFIX_ROOT" ]]; then
     preexisting_rootfs_path="$PREFIX_ROOT/rootfs"
     if [[ -d "$PREFIX_ROOT/rootfs" ]] && find "$PREFIX_ROOT/rootfs" -mindepth 1 -maxdepth 1 | read -r _; then
         preexisting_rootfs_contents=true
     fi
-elif [[ "$prefix_exists_before" == false ]]; then
+else
     default_home="${MUPLAR_HOME:-${HOME:-}/.muplar}"
     preexisting_rootfs_path="$default_home/prefixes/$PREFIX/rootfs"
     if [[ -n "$default_home" && -d "$default_home/prefixes/$PREFIX/rootfs" ]] &&
@@ -356,6 +482,15 @@ if [[ "$REPLACE_ROOTFS" != true ]]; then
     fi
 fi
 
+if [[ "$REPLACE_ROOTFS" == true && "$preexisting_rootfs_contents" == true ]]; then
+    case "$preexisting_rootfs_path" in
+        /*/rootfs|*/rootfs) ;;
+        *) fail "refusing to manage suspicious rootfs path: $preexisting_rootfs_path" ;;
+    esac
+    [[ "$preexisting_rootfs_path" != "/" ]] || fail "refusing to clear /"
+    clear_rootfs_dir "$preexisting_rootfs_path"
+fi
+
 prefix_create_args=(prefix create "$PREFIX" --kind linux --arch "$ARCH" --distro "$DISTRO")
 if [[ -n "$PREFIX_ROOT" ]]; then
     prefix_create_args+=(--root "$PREFIX_ROOT")
@@ -365,7 +500,7 @@ if [[ -n "$SYSROOT" ]]; then
 fi
 
 echo "[linux-rootfs] Registering instance: $PREFIX ($DISTRO/$ARCH)"
-"$MUP" "${prefix_create_args[@]}" >/dev/null
+MUPLAR_SKIP_LINUX_BOOTSTRAP=1 "$MUP" "${prefix_create_args[@]}" >/dev/null
 
 prefix_info="$("$MUP" prefix info "$PREFIX")"
 rootfs="$(printf '%s\n' "$prefix_info" | sed -n 's/^Rootfs: //p' | head -n 1)"
@@ -384,10 +519,20 @@ if [[ "$prefix_exists_before" == true || "$preexisting_rootfs_contents" == true 
 fi
 
 echo "[linux-rootfs] Preparing rootfs: $rootfs"
-mkdir -p "$rootfs"
-find "$rootfs" -mindepth 1 -maxdepth 1 -exec rm -rf {} +
+clear_rootfs_dir "$rootfs"
 
 echo "[linux-rootfs] Validating archive entries"
+TARBALL_TO_EXTRACT="$FROM_TAR"
+OCI_TMP_DIR=""
+if [[ "$FROM_TAR" == *.oci.tar.xz ]]; then
+    echo "[linux-rootfs] OCI container image detected, extracting rootfs layer..."
+    OCI_TMP_DIR="$(mktemp -d)"
+    "$TAR_BIN" -xf "$FROM_TAR" -C "$OCI_TMP_DIR"
+    # Find the largest file in blobs/sha256/
+    rootfs_layer="$(find "$OCI_TMP_DIR" -type f | xargs ls -S | head -n 1)"
+    TARBALL_TO_EXTRACT="$rootfs_layer"
+fi
+
 while IFS= read -r entry; do
     [[ -z "$entry" ]] && continue
     case "$entry" in
@@ -401,17 +546,34 @@ while IFS= read -r entry; do
             fail "tarball contains parent traversal: $entry"
         fi
     done
-done < <("$TAR_BIN" -tf "$FROM_TAR")
+done < <("$TAR_BIN" -tf "$TARBALL_TO_EXTRACT")
 
 echo "[linux-rootfs] Extracting $(basename "$FROM_TAR")"
-tar_args=(-x -f "$FROM_TAR" -C "$rootfs")
+tar_args=(-x -f "$TARBALL_TO_EXTRACT" -C "$rootfs")
+if [[ "$DISTRO" == "arch" ]] && is_case_insensitive_dir "$rootfs"; then
+    echo "[linux-rootfs] Skipping Arch terminfo aliases on case-insensitive filesystem"
+    tar_args=(-x \
+              --exclude './usr/share/terminfo/*' \
+              --exclude 'usr/share/terminfo/*' \
+              -f "$TARBALL_TO_EXTRACT" -C "$rootfs")
+fi
 if [[ "$STRIP_COMPONENTS" != "0" ]]; then
     tar_args+=(--strip-components "$STRIP_COMPONENTS")
 fi
 "$TAR_BIN" "${tar_args[@]}"
 
+if [[ -n "$OCI_TMP_DIR" ]]; then
+    rm -rf "$OCI_TMP_DIR"
+fi
+
+# Some distro appliances ship top-level placeholders such as /home with
+# read-only modes. Muplar needs to add /home/muplar during scaffold refresh.
+if [[ -d "$rootfs/home" ]]; then
+    chmod u+rwx "$rootfs/home"
+fi
+
 echo "[linux-rootfs] Refreshing Muplar scaffold"
-"$MUP" "${prefix_create_args[@]}" >/dev/null
+MUPLAR_SKIP_LINUX_BOOTSTRAP=1 "$MUP" "${prefix_create_args[@]}" >/dev/null
 
 cat >"$rootfs/etc/muplar-provisioned" <<EOF
 distro=$DISTRO

@@ -2,7 +2,8 @@
 set -e
 
 ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
-WAWONA_SRC="${ROOT_DIR}/third_party/wawona"
+MUPLAR_WAYLAND_SRC="${ROOT_DIR}/third_party/muplar-wayland"
+WAWONA_SRC="${MUPLAR_WAYLAND_SRC}"
 BUILD_DIR="${ROOT_DIR}/build"
 OUTPUT_BIN="${BUILD_DIR}/bin/wawona"
 OBJ_BUILD_DIR="${BUILD_DIR}/wawona-macos-objc"
@@ -150,7 +151,7 @@ EOF
     export PATH="${TMP_BIN_DIR}:$PATH"
     
     cd waypipe
-    bash ../dependencies/libs/waypipe/patch-waypipe-source.sh
+    bash "${MUPLAR_WAYLAND_SRC}/dependencies/libs/waypipe/patch-waypipe-source.sh"
     cd ..
     
     # Restore PATH and clean up tmp-bin
@@ -191,17 +192,18 @@ export LIBRARY_PATH="/opt/homebrew/lib:$LIBRARY_PATH"
 export CPATH="/opt/homebrew/include:$CPATH"
 export PKG_CONFIG_PATH="/opt/homebrew/lib/pkgconfig:$PKG_CONFIG_PATH"
 
-# Run cargo build --release. Cargo's `wawona` binary is a platform stub; the
-# macOS compositor entrypoint is Objective-C and links against libwawona.a.
+# Run cargo build --release. Cargo's binary is a platform stub; the macOS
+# compositor entrypoint is Objective-C and links against the Rust staticlib.
 "$CARGO_BIN" build --release
 
 mkdir -p "${BUILD_DIR}/bin"
-if [ ! -f "target/release/libwawona.a" ]; then
-    echo "ERROR: Wawona static library not found at target/release/libwawona.a"
+WAWONA_RUST_STATICLIB="target/release/libmuplar_wayland.a"
+if [ ! -f "$WAWONA_RUST_STATICLIB" ]; then
+    echo "ERROR: Muplar Wayland static library not found at $WAWONA_RUST_STATICLIB"
     exit 1
 fi
 
-echo "Building Wawona macOS compositor entrypoint..."
+echo "Building Muplar Wawona macOS compositor host..."
 
 SDKROOT="$(xcrun --sdk macosx --show-sdk-path)"
 CC="$(xcrun --sdk macosx -find clang)"
@@ -329,7 +331,7 @@ link_libs=(
     -lssl
     -lcrypto
     -lz
-    target/release/libwawona.a
+    "$WAWONA_RUST_STATICLIB"
     -fobjc-arc
     -ObjC
     -Wl,-rpath,/opt/homebrew/lib

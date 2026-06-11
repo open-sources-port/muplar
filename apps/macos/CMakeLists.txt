@@ -51,6 +51,7 @@ add_custom_target(populate_manager_bundle ALL
     # Create directory skeleton
     COMMAND ${CMAKE_COMMAND} -E make_directory
         "${APP_CONTENTS}/MacOS"
+        "${APP_CONTENTS}/Resources"
         "${APP_CONTENTS}/Frameworks"
         "${APP_CONTENTS}/Frameworks/aarch64"
         "${APP_CONTENTS}/Frameworks/x86_64"
@@ -58,6 +59,11 @@ add_custom_target(populate_manager_bundle ALL
         "${APP_CONTENTS}/Frameworks/wine/bin"
         "${APP_CONTENTS}/Frameworks/wine/lib"
         "${APP_CONTENTS}/Frameworks/wine/share/wine"
+
+    # ── Windows compatibility defaults → Resources/ ─────────────────────────
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        "${CMAKE_SOURCE_DIR}/platform/windows-x64/muplar-fonts.reg"
+        "${APP_CONTENTS}/Resources/muplar-fonts.reg"
 
     # ── mup CLI next to the main executable ───────────────────────────────────
     COMMAND bash -c
@@ -70,16 +76,12 @@ add_custom_target(populate_manager_bundle ALL
              codesign --entitlements '${CMAKE_SOURCE_DIR}/mup.entitlements' --force -s - '${APP_CONTENTS}/MacOS/mup'; \
          fi"
 
-    # ── BusyBox Static Binaries → Frameworks/ ────────────────────────────────
+
+
+    # ── Linux Bootstrap Rootfs → Frameworks/ ─────────────────────────────────
     COMMAND bash -c
-        "if [ -f '${CMAKE_BINARY_DIR}/bin/busybox_aarch64' ]; then \
-             cp -f '${CMAKE_BINARY_DIR}/bin/busybox_aarch64' '${APP_CONTENTS}/Frameworks/busybox_aarch64'; \
-             codesign --force -s - '${APP_CONTENTS}/Frameworks/busybox_aarch64'; \
-         fi"
-    COMMAND bash -c
-        "if [ -f '${CMAKE_BINARY_DIR}/bin/busybox_x86_64' ]; then \
-             cp -f '${CMAKE_BINARY_DIR}/bin/busybox_x86_64' '${APP_CONTENTS}/Frameworks/busybox_x86_64'; \
-             codesign --force -s - '${APP_CONTENTS}/Frameworks/busybox_x86_64'; \
+        "if [ -d '${LINUX_BOOTSTRAP_DIR}' ]; then \
+             find '${LINUX_BOOTSTRAP_DIR}' -name 'linux-bootstrap-*.tar.gz' -exec cp -f {} '${APP_CONTENTS}/Frameworks/' \\;; \
          fi"
 
     # ── Wawona → Frameworks/ (with dependency bundling) ──────────────────────
@@ -176,7 +178,7 @@ add_custom_target(populate_manager_bundle ALL
         "if [ -d '${WINE_PREFIX_DIR}/bin' ]; then \
              cp -Rf '${WINE_PREFIX_DIR}/bin/.' '${APP_CONTENTS}/Frameworks/wine/bin/'; \
          else \
-             echo '[bundle] wine-prefix not built yet, skipping wine copy'; \
+             echo '[bundle] Windows compatibility runtime not built yet, skipping copy'; \
          fi"
 
     # ── Wine libraries → Frameworks/wine/lib/wine/ ─────────────────────────────
@@ -255,8 +257,11 @@ add_custom_target(populate_manager_bundle ALL
              codesign --force -s - '${APP_CONTENTS}/Frameworks/wine/lib/wine/x86_64-unix/libfreetype.6.dylib' '${APP_CONTENTS}/Frameworks/wine/lib/wine/x86_64-unix/libpng16.16.dylib'; \
          fi"
 
+    # Re-sign after bundle resources and nested binaries are copied.
+    COMMAND codesign --force --deep -s - "${APP_BUNDLE}"
+
     COMMENT "Populating ${APP_BUNDLE_NAME}.app bundle"
     VERBATIM
 )
 
-add_dependencies(populate_manager_bundle muplar_prefix_manager wine_lib dxmt_lib mup busybox_bin wawona_bin egl_gles_stubs_bin)
+add_dependencies(populate_manager_bundle muplar_prefix_manager wine_lib dxmt_lib mup wawona_bin egl_gles_stubs_bin)

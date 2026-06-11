@@ -8,9 +8,6 @@
 [submodule "third_party/wine"]
 	path = third_party/wine
 	url = https://gitlab.winehq.org/wine/wine.git
-[submodule "third_party/busybox"]
-	path = third_party/busybox
-	url = https://github.com/mirror/busybox.git
-[submodule "third_party/wawona"]
-	path = third_party/wawona
-	url = https://github.com/aspauldingcode/Wawona.git
+[submodule "third_party/muplar-wayland-compo"]
+	path = third_party/muplar-wayland
+	url = https://github.com/open-sources-port/muplar-wayland.git

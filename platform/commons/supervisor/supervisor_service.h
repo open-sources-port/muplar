@@ -3,14 +3,14 @@
 // platform/commons/supervisor/supervisor_service.h
 //
 // SupervisorService: keeps Wawona (global Wayland compositor) and per-prefix
-// Wine servers alive for the lifetime of the instance manager.
+// Windows compatibility services alive for the lifetime of the instance manager.
 //
 // Architecture:
 //   - WawonaGuard   — one global instance; restarts wawona on crash with
 //                     exponential backoff; uses kqueue EVFILT_PROC/NOTE_EXIT
 //                     for zero-latency crash detection on macOS.
-//   - WineServerGuard — one per Wine prefix; same restart logic scoped to
-//                     wineserver -f for that WINEPREFIX.
+//   - WineServerGuard — one per Windows instance; same restart logic scoped to
+//                     the backend service process.
 //   - SupervisorService — owns the guards; created by the instance manager
 //                     on launch, torn down on quit.
 //
@@ -104,9 +104,9 @@ private:
 // ---------------------------------------------------------------------------
 // WineServerGuard
 // ---------------------------------------------------------------------------
-// Keeps wineserver running for a single Wine prefix. wineserver -f keeps
-// itself in the foreground; we monitor its exit via kqueue and restart it
-// so subsequent wine launches are always fast (no cold-start of the server).
+// Keeps the Windows compatibility backend service running for a single
+// Windows instance. The backend stays in the foreground; we monitor its exit
+// via kqueue and restart it so subsequent launches avoid a cold start.
 
 class WineServerGuard {
 public:
@@ -132,7 +132,7 @@ private:
     //   /tmp/.wine-<uid>/server-<dev_hex>-<ino_hex>
     std::filesystem::path wineserver_socket_path() const;
 
-    // Locate the wineserver binary next to the wine binary.
+    // Locate the backend service binary next to the Windows compatibility runtime.
     std::filesystem::path resolve_wineserver_bin() const;
 
     pid_t spawn();
@@ -162,9 +162,10 @@ public:
     SupervisorService();
     ~SupervisorService();
 
-    // Start the supervisor: launch Wawona, then start WineServerGuards for all
-    // existing Wine prefixes. Kicks off a background thread that polls for
-    // newly-created Wine prefixes every poll_interval_ms milliseconds.
+    // Start the supervisor: launch Wawona, then start Windows compatibility
+    // services for all existing Windows instances. Kicks off a background
+    // thread that polls for newly-created Windows instances every
+    // poll_interval_ms milliseconds.
     void start(int poll_interval_ms = 2000);
 
     // Stop everything cleanly.

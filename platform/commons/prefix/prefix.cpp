@@ -1,12 +1,15 @@
 #include "prefix.h"
 #include "distro_profile.h"
 
+#include <algorithm>
 #include <cctype>
 #include <cstdlib>
 #include <cstring>
 #include <fstream>
 #include <sstream>
 #include <stdexcept>
+#include <vector>
+#include <sys/stat.h>
 #include <sys/wait.h>
 #include <sys/types.h>
 #include <signal.h>
@@ -30,6 +33,49 @@ static std::filesystem::path get_executable_path()
     }
 #endif
     return std::filesystem::current_path();
+}
+
+static void ensure_wine_tmp_dir_private()
+{
+    std::filesystem::path sock_dir =
+        std::filesystem::path("/tmp") /
+        (".wine-" + std::to_string(static_cast<unsigned long>(getuid())));
+    std::error_code ec;
+    std::filesystem::create_directories(sock_dir, ec);
+    if (ec) {
+        std::fprintf(stderr, "[Muplar Windows Compatibility] failed to create %s: %s\n",
+                     sock_dir.c_str(), ec.message().c_str());
+        return;
+    }
+    if (chmod(sock_dir.c_str(), 0700) != 0) {
+        std::fprintf(stderr, "[Muplar Windows Compatibility] chmod 0700 %s failed: %s\n",
+                     sock_dir.c_str(), std::strerror(errno));
+    }
+}
+
+static bool is_case_insensitive_directory(const std::filesystem::path& dir)
+{
+    std::error_code ec;
+    auto probe_dir = dir / (".muplar-case-probe-" + std::to_string(static_cast<unsigned long>(getpid())));
+    std::filesystem::create_directories(probe_dir, ec);
+    if (ec)
+        return false;
+
+    auto lower = probe_dir / "a";
+    auto upper = probe_dir / "A";
+    {
+        std::ofstream lower_out(lower);
+        std::ofstream upper_out(upper);
+    }
+
+    bool insensitive = false;
+    if (std::filesystem::exists(lower, ec) && std::filesystem::exists(upper, ec)) {
+        ec.clear();
+        insensitive = std::filesystem::equivalent(lower, upper, ec) && !ec;
+    }
+
+    std::filesystem::remove_all(probe_dir, ec);
+    return insensitive;
 }
 
 static std::filesystem::path find_guest_sh()
@@ -59,32 +105,272 @@ static std::filesystem::path find_guest_sh()
     return {};
 }
 
-static std::filesystem::path find_guest_busybox(GuestArch arch)
+
+static bool auto_download_bootstrap(const std::string& distro, GuestArch arch, const std::filesystem::path& dest)
+{
+    std::string normalized_distro = distro;
+    std::transform(normalized_distro.begin(), normalized_distro.end(), normalized_distro.begin(),
+                   [](unsigned char c){ return std::tolower(c); });
+    if (normalized_distro.empty()) normalized_distro = "ubuntu";
+
+    std::string arch_str = (arch == GuestArch::Aarch64) ? "aarch64" : "x86_64";
+    std::string ubuntu_arch = (arch == GuestArch::Aarch64) ? "arm64" : "amd64";
+
+    std::error_code ec;
+    std::filesystem::create_directories(dest.parent_path(), ec);
+
+    std::fprintf(stderr, "[linux] Auto-downloading '%s' bootstrap for %s...\n", normalized_distro.c_str(), arch_str.c_str());
+
+    std::string url;
+    if (normalized_distro == "ubuntu") {
+        std::string py_cmd = "python3 -c 'import urllib.request, re, sys; "
+                             "arch = \"" + ubuntu_arch + "\"; dest = \"" + dest.string() + "\"; "
+                             "try:\n"
+                             "    html = urllib.request.urlopen(\"https://cdimage.ubuntu.com/ubuntu-base/releases/26.04/release/\").read().decode(\"utf-8\")\n"
+                             "    match = re.findall(rf\"ubuntu-base-26\\.04(?:\\.(\\d+))?-base-{arch}\\.tar\\.gz\", html)\n"
+                             "    if match:\n"
+                             "        version = max(match)\n"
+                             "        filename = f\"ubuntu-base-26.04.{version}-base-{arch}.tar.gz\" if version else f\"ubuntu-base-26.04-base-{arch}.tar.gz\"\n"
+                             "        url = f\"https://cdimage.ubuntu.com/ubuntu-base/releases/26.04/release/{filename}\"\n"
+                             "        print(f\"Downloading {url}...\")\n"
+                             "        urllib.request.urlretrieve(url, dest)\n"
+                             "        sys.exit(0)\n"
+                             "except Exception as e:\n"
+                             "    print(f\"Python download failed: {e}\")\n"
+                             "sys.exit(1)'";
+        int rc = std::system(py_cmd.c_str());
+        if (rc == 0) return true;
+        
+        url = "https://cdimage.ubuntu.com/ubuntu-base/releases/26.04/release/ubuntu-base-26.04-base-" + ubuntu_arch + ".tar.gz";
+    } else if (normalized_distro == "alpine") {
+        std::string py_cmd = "python3 -c 'import urllib.request, re, sys; "
+                             "arch = \"" + arch_str + "\"; dest = \"" + dest.string() + "\"; "
+                             "try:\n"
+                             "    url_idx = f\"https://dl-cdn.alpinelinux.org/alpine/latest-stable/releases/{arch}/latest-releases.yaml\"\n"
+                             "    text = urllib.request.urlopen(url_idx).read().decode(\"utf-8\")\n"
+                             "    filename, branch = None, None\n"
+                             "    for line in text.splitlines():\n"
+                             "        if \"file: alpine-minirootfs-\" in line:\n"
+                             "            filename = line.split(\":\")[1].strip().strip(\"\\\"\")\n"
+                             "        if \"branch:\" in line:\n"
+                             "            branch = line.split(\":\")[1].strip().strip(\"\\\"\")\n"
+                             "        if filename and branch:\n"
+                             "            break\n"
+                             "    if filename and branch:\n"
+                             "        url = f\"https://dl-cdn.alpinelinux.org/alpine/{branch}/releases/{arch}/{filename}\"\n"
+                             "        print(f\"Downloading {url}...\")\n"
+                             "        urllib.request.urlretrieve(url, dest)\n"
+                             "        sys.exit(0)\n"
+                             "except Exception as e:\n"
+                             "    print(f\"Python download failed: {e}\")\n"
+                             "sys.exit(1)'";
+        int rc = std::system(py_cmd.c_str());
+        if (rc == 0) return true;
+
+        url = "https://dl-cdn.alpinelinux.org/alpine/v3.20/releases/" + arch_str + "/alpine-minirootfs-3.20.3-" + arch_str + ".tar.gz";
+    } else if (normalized_distro == "debian") {
+        std::string debian_branch = (arch == GuestArch::Aarch64) ? "dist-arm64v8" : "dist-amd64";
+        url = "https://github.com/debuerreotype/docker-debian-artifacts/raw/" + debian_branch + "/bookworm/oci/blobs/rootfs.tar.gz";
+    } else if (normalized_distro == "fedora") {
+        url = "https://dl.fedoraproject.org/pub/fedora/linux/releases/40/Container/" + arch_str + "/images/Fedora-Container-Base-Generic-40-1.14." + arch_str + ".tar.xz";
+    } else if (normalized_distro == "arch") {
+        url = (arch == GuestArch::Aarch64)
+            ? "http://archlinuxarm.org/os/ArchLinuxARM-aarch64-latest.tar.gz"
+            : "https://geo.mirror.pkgbuild.com/iso/latest/archlinux-bootstrap-x86_64.tar.zst";
+    } else if (normalized_distro == "opensuse") {
+        url = (arch == GuestArch::Aarch64)
+            ? "https://download.opensuse.org/ports/aarch64/tumbleweed/appliances/opensuse-tumbleweed-image.aarch64-lxc.tar.xz"
+            : "https://download.opensuse.org/tumbleweed/appliances/opensuse-tumbleweed-image.x86_64-lxc.tar.xz";
+    }
+
+    if (!url.empty()) {
+        std::string cmd = "curl -L -f -s -S -o \"" + dest.string() + "\" \"" + url + "\"";
+        std::fprintf(stderr, "[linux] Downloading %s...\n", url.c_str());
+        int rc = std::system(cmd.c_str());
+        return rc == 0;
+    }
+
+    return false;
+}
+
+static std::filesystem::path find_linux_distro_bootstrap(const std::string& distro, GuestArch arch)
 {
     auto exec_dir = get_executable_path();
-    std::string filename = (arch == GuestArch::Aarch64) ? "busybox_aarch64" : "busybox_x86_64";
+    std::string normalized_distro = distro;
+    std::transform(normalized_distro.begin(), normalized_distro.end(), normalized_distro.begin(),
+                   [](unsigned char c){ return std::tolower(c); });
 
-    // Check if the binary is in the same directory (CLI/build bin)
-    auto candidate = exec_dir / filename;
-    std::error_code ec;
-    if (std::filesystem::exists(candidate, ec)) {
-        return candidate;
+    if (normalized_distro.empty()) {
+        normalized_distro = "ubuntu";
     }
 
-    // Check if it's next to the app bundle
+    std::string arch_str = (arch == GuestArch::Aarch64) ? "aarch64" : "x86_64";
+    std::string filename = "linux-bootstrap-" + normalized_distro + "-" + arch_str + ".tar.gz";
+
+    std::error_code ec;
+    
+    // 1. Check same directory
+    auto candidate = exec_dir / filename;
+    if (std::filesystem::exists(candidate, ec))
+        return candidate;
+
+    // 2. Check next to app bundle
     auto parent_dir = exec_dir.parent_path().parent_path().parent_path();
     candidate = parent_dir / filename;
-    if (std::filesystem::exists(candidate, ec)) {
+    if (std::filesystem::exists(candidate, ec))
         return candidate;
+
+    // 3. Check inside bundle frameworks
+    candidate = exec_dir.parent_path().parent_path() / "Frameworks" / filename;
+    if (std::filesystem::exists(candidate, ec))
+        return candidate;
+
+    // 4. Check source tree
+    candidate = exec_dir.parent_path().parent_path() / "third_party" / "linux-bootstrap" / filename;
+    if (std::filesystem::exists(candidate, ec))
+        return candidate;
+
+    // 5. Check global cache
+    candidate = muplar_home() / "cache" / "linux-bootstrap" / filename;
+    if (std::filesystem::exists(candidate, ec)) {
+        ec.clear();
+        auto size = std::filesystem::file_size(candidate, ec);
+        if (!ec && size > 0)
+            return candidate;
     }
 
-    // Check if it's inside the bundle frameworks (MacOS app bundle -> Contents/Frameworks/...)
-    candidate = exec_dir.parent_path().parent_path() / "Frameworks" / filename;
-    if (std::filesystem::exists(candidate, ec)) {
+    // 6. Compatibility fallback for old naming scheme (linux-bootstrap-<arch>.tar.gz)
+    if (normalized_distro == "ubuntu") {
+        std::string old_filename = "linux-bootstrap-" + arch_str + ".tar.gz";
+        candidate = exec_dir / old_filename;
+        if (std::filesystem::exists(candidate, ec)) return candidate;
+        candidate = parent_dir / old_filename;
+        if (std::filesystem::exists(candidate, ec)) return candidate;
+        candidate = exec_dir.parent_path().parent_path() / "Frameworks" / old_filename;
+        if (std::filesystem::exists(candidate, ec)) return candidate;
+        candidate = exec_dir.parent_path().parent_path() / "third_party" / "linux-bootstrap" / old_filename;
+        if (std::filesystem::exists(candidate, ec)) return candidate;
+        candidate = muplar_home() / "cache" / "linux-bootstrap" / old_filename;
+        if (std::filesystem::exists(candidate, ec)) {
+            ec.clear();
+            auto size = std::filesystem::file_size(candidate, ec);
+            if (!ec && size > 0) return candidate;
+        }
+    }
+
+    // Auto-download to cache if not found
+    candidate = muplar_home() / "cache" / "linux-bootstrap" / filename;
+    if (auto_download_bootstrap(normalized_distro, arch, candidate)) {
         return candidate;
     }
 
     return {};
+}
+
+static void print_distro_download_suggestion(const std::string& distro, GuestArch arch, const std::filesystem::path& dest)
+{
+    std::string normalized_distro = distro;
+    std::transform(normalized_distro.begin(), normalized_distro.end(), normalized_distro.begin(),
+                   [](unsigned char c){ return std::tolower(c); });
+
+    std::string arch_str = (arch == GuestArch::Aarch64) ? "aarch64" : "x86_64";
+    std::string ubuntu_arch = (arch == GuestArch::Aarch64) ? "arm64" : "amd64";
+
+    std::string url = "";
+    if (normalized_distro == "ubuntu") {
+        url = "https://cdimage.ubuntu.com/ubuntu-base/releases/26.04/release/ubuntu-base-26.04-base-" + ubuntu_arch + ".tar.gz";
+    } else if (normalized_distro == "alpine") {
+        url = "https://dl-cdn.alpinelinux.org/alpine/latest-stable/releases/" + arch_str + "/ (Download alpine-minirootfs)";
+    } else if (normalized_distro == "debian") {
+        url = "https://github.com/debuerreotype/docker-debian-artifacts/raw/dist-" + ubuntu_arch + "/bookworm/rootfs.tar.xz";
+    } else if (normalized_distro == "fedora") {
+        url = "https://dl.fedoraproject.org/pub/fedora/linux/releases/40/Container/" + arch_str + "/images/";
+    } else if (normalized_distro == "arch") {
+        url = (arch == GuestArch::Aarch64)
+            ? "http://archlinuxarm.org/os/ArchLinuxARM-aarch64-latest.tar.gz"
+            : "https://geo.mirror.pkgbuild.com/iso/latest/archlinux-bootstrap-x86_64.tar.zst";
+    } else if (normalized_distro == "opensuse") {
+        url = (arch == GuestArch::Aarch64)
+            ? "https://download.opensuse.org/ports/aarch64/tumbleweed/appliances/opensuse-tumbleweed-image.aarch64-lxc.tar.xz"
+            : "https://download.opensuse.org/tumbleweed/appliances/opensuse-tumbleweed-image.x86_64-lxc.tar.xz";
+    } else {
+        url = "https://cdimage.ubuntu.com/ubuntu-base/releases/";
+    }
+
+    std::fprintf(stderr,
+        "[linux] ERROR: Distro bootstrap rootfs not found for '%s' (%s).\n"
+        "[linux] Please download a minimal rootfs tarball manually from:\n"
+        "[linux]   %s\n"
+        "[linux] and save it to:\n"
+        "[linux]   %s\n",
+        distro.c_str(), arch_str.c_str(), url.c_str(), dest.c_str());
+}
+
+static bool extract_bootstrap_rootfs(const std::filesystem::path& tarball,
+                                     const std::filesystem::path& rootfs_dir,
+                                     const std::string& distro)
+{
+    std::error_code ec;
+    std::filesystem::create_directories(rootfs_dir, ec);
+    bool skip_case_variant_terminfo =
+        distro == "arch" && is_case_insensitive_directory(rootfs_dir);
+
+    std::fprintf(stderr, "[linux] Extracting bootstrap rootfs: %s\n",
+                 tarball.filename().c_str());
+
+    pid_t pid = fork();
+    if (pid < 0)
+        return false;
+
+    if (pid == 0) {
+        std::string tarball_str = tarball.string();
+        std::string rootfs_str = rootfs_dir.string();
+        std::vector<std::string> args = {"tar", "-x"};
+        if (skip_case_variant_terminfo) {
+            args.push_back("--exclude");
+            args.push_back("./usr/share/terminfo/*");
+            args.push_back("--exclude");
+            args.push_back("usr/share/terminfo/*");
+        }
+        args.push_back("-f");
+        args.push_back(tarball_str);
+        args.push_back("-C");
+        args.push_back(rootfs_str);
+
+        std::vector<char*> argv;
+        argv.reserve(args.size() + 1);
+        for (auto& arg : args)
+            argv.push_back(const_cast<char*>(arg.c_str()));
+        argv.push_back(nullptr);
+
+        execvp("tar", argv.data());
+        _exit(127);
+    }
+
+    int status = 0;
+    while (waitpid(pid, &status, 0) < 0) {
+        if (errno == EINTR)
+            continue;
+        std::fprintf(stderr, "[linux] waitpid failed for tar: %s\n",
+                     std::strerror(errno));
+        return false;
+    }
+
+    if (WIFEXITED(status) && WEXITSTATUS(status) == 0) {
+        auto home_dir = rootfs_dir / "home";
+        std::error_code chmod_ec;
+        if (std::filesystem::is_directory(home_dir, chmod_ec) &&
+            chmod(home_dir.c_str(), 0755) != 0) {
+            std::fprintf(stderr, "[linux] chmod 0755 %s failed: %s\n",
+                         home_dir.c_str(), std::strerror(errno));
+        }
+        std::fprintf(stderr, "[linux] Bootstrap rootfs extracted successfully\n");
+        return true;
+    }
+
+    std::fprintf(stderr, "[linux] tar extraction failed (exit %d)\n",
+                 WIFEXITED(status) ? WEXITSTATUS(status) : -1);
+    return false;
 }
 
 static std::filesystem::path find_guest_stub(const std::string& filename, GuestArch arch)
@@ -177,65 +463,6 @@ static std::string join_strings(const std::vector<std::string>& values,
     return out;
 }
 
-static constexpr const char* kBusyboxApplets[] = {
-    "[", "[[", "acpid", "add-shell", "addgroup", "adduser", "adjtimex",
-    "ar", "arch", "arp", "arping", "ash", "awk", "base64", "basename",
-    "bash", "bc", "blkdiscard", "blkid", "blockdev", "bootchartd", "brctl",
-    "bunzip2", "bzcat", "bzip2", "cal", "cat", "chat", "chattr",
-    "chgrp", "chmod", "chown", "chpasswd", "chroot", "chrt", "chvt",
-    "cksum", "clear", "cmp", "comm", "conspy", "cp", "cpio", "crond",
-    "crontab", "cryptpw", "cttyhack", "cut", "date", "dc", "dd",
-    "deallocvt", "delgroup", "deluser", "depmod", "devmem", "df",
-    "diff", "dirname", "dmesg", "dnsd", "dnsdomainname", "dos2unix",
-    "du", "dumpkmap", "dumpleases", "echo", "ed", "egrep", "eject",
-    "env", "ether-wake", "expand", "expr", "factor", "fallocate",
-    "false", "fatattr", "fbset", "fbsplash", "fdflush", "fdformat",
-    "fdisk", "fgconsole", "fgrep", "find", "findfs", "flock", "fold",
-    "free", "freeramdisk", "fsck", "fsck.minix", "fsfreeze", "fstrim",
-    "ftpget", "ftpput", "getopt", "getty", "grep", "groups", "gunzip",
-    "gzip", "halt", "head", "hexdump", "hexedit", "hostid", "hostname",
-    "httpd", "hush", "hwclock", "i2cdetect", "i2cdump", "i2cget",
-    "i2cset", "i2ctransfer", "id", "ifconfig", "ifdown", "ifenslave",
-    "ifplugd", "ifup", "inetd", "init", "insmod", "install", "ionice",
-    "iostat", "ip", "ipaddr", "ipcalc", "ipcrm", "ipcs", "iplink",
-    "ipneigh", "iproute", "iprule", "iptunnel", "kbd_mode", "kill",
-    "killall", "killall5", "klogd", "last", "less", "link", "linux32",
-    "linux64", "linuxrc", "ln", "loadfont", "loadkmap", "logger",
-    "login", "logname", "losetup", "lpd", "lpq", "lpr", "ls", "lsattr",
-    "lsmod", "lsof", "lspci", "lsscsi", "lsusb", "lzcat", "lzma",
-    "lzop", "makedevs", "md5sum", "mdev", "mesg", "microcom", "mkdir",
-    "mkdosfs", "mke2fs", "mkfifo", "mknod", "mkpasswd", "mkswap",
-    "mktemp", "modinfo", "modprobe", "more", "mount", "mountpoint",
-    "mpstat", "mt", "mv", "nameif", "nanddump", "nandwrite",
-    "nbd-client", "nc", "netstat", "nice", "nl", "nmeter", "nohup",
-    "nologin", "nproc", "nsenter", "nslookup", "ntpd", "od", "openvt",
-    "partprobe", "passwd", "paste", "patch", "pidof", "ping", "ping6",
-    "pipe_progress", "pivot_root", "pkill", "pmap", "poweroff",
-    "printenv", "printf", "ps", "pscan", "pstree", "pwd", "pwdx",
-    "raidautorun", "rdate", "rdev", "readahead", "readlink",
-    "readprofile", "realpath", "reboot", "reformime", "remove-shell",
-    "renice", "reset", "resize", "resume", "rev", "rm", "rmdir",
-    "rmmod", "route", "rpm", "rpm2cpio", "rtcwake", "run-init",
-    "run-parts", "runlevel", "runsv", "runsvdir", "rx", "script",
-    "scriptreplay", "sed", "sendmail", "seq", "setarch", "setconsole",
-    "setfattr", "setfont", "setkeycodes", "setlogcons", "setpriv",
-    "setserial", "setsid", "sh", "sha1sum", "sha256sum", "sha3sum",
-    "sha512sum", "shred", "shuf", "slattach", "sleep", "smemcap",
-    "softlimit", "sort", "split", "ssl_client", "start-stop-daemon",
-    "stat", "strings", "stty", "su", "sulogin", "sum", "sv", "svc",
-    "svlogd", "swapoff", "swapon", "switch_root", "sync", "sysctl",
-    "syslogd", "tac", "tail", "tar", "tc", "tee", "telnet", "telnetd",
-    "test", "tftp", "time", "timeout", "top", "touch", "tr",
-    "traceroute", "traceroute6", "true", "truncate", "ts", "tty",
-    "tunctl", "ubiattach", "ubidetach", "ubimkvol", "ubirename",
-    "ubirmvol", "ubirsvol", "ubiupdatevol", "udhcpc", "udhcpd", "udpsvd",
-    "uevent", "umount", "uname", "uncompress", "unexpand", "uniq",
-    "unix2dos", "unlink", "unlzma", "unshare", "unxz", "unzip", "uptime",
-    "users", "usleep", "uudecode", "uuencode", "vconfig", "vi", "vlock",
-    "volname", "w", "wall", "watch", "watchdog", "wc", "wget", "which",
-    "who", "whoami", "whois", "xargs", "xxd", "xz", "xzcat", "yes",
-    "zcat",
-};
 
 static void ensure_relative_symlink(const std::filesystem::path& link_path,
                                     const char* target)
@@ -316,15 +543,6 @@ static void ensure_guest_x11_socket_dir(const std::filesystem::path& rootfs)
         std::filesystem::create_directories(x11_dir, ec);
 }
 
-static void install_busybox_applets(const std::filesystem::path& dir,
-                                    const char* busybox_target)
-{
-    for (const char* applet : kBusyboxApplets) {
-        if (std::string(applet) == "busybox")
-            continue;
-        ensure_relative_symlink(dir / applet, busybox_target);
-    }
-}
 
 struct InstanceRegistryEntry {
     std::string name;
@@ -791,13 +1009,62 @@ static std::filesystem::path resolve_wine_from_bin_dir(
     return {};
 }
 
+static std::filesystem::path resolve_windows_font_registry_file()
+{
+    std::error_code ec;
+
+    if (const char* env = std::getenv("MUPLAR_WINDOWS_FONTS_REG");
+        env && env[0]) {
+        std::filesystem::path candidate = expand_user_path(env);
+        if (std::filesystem::is_regular_file(candidate, ec))
+            return candidate;
+        ec.clear();
+    }
+
+    auto exec_dir = get_executable_path();
+    for (const auto& candidate : {
+             exec_dir.parent_path() / "Resources" / "muplar-fonts.reg",
+             exec_dir.parent_path() / "Frameworks" / "muplar-fonts.reg",
+             exec_dir.parent_path().parent_path() / "platform" / "windows-x64" /
+                 "muplar-fonts.reg",
+             std::filesystem::current_path() / "platform" / "windows-x64" /
+                 "muplar-fonts.reg",
+             muplar_home() / "muplar-fonts.reg",
+         }) {
+        if (std::filesystem::is_regular_file(candidate, ec))
+            return candidate;
+        ec.clear();
+    }
+
+    return {};
+}
+
+static void set_windows_compatibility_env(
+    const PrefixLayout& layout,
+    const std::filesystem::path& runtime_root)
+{
+    setenv("WINEPREFIX", layout.rootfs.string().c_str(), 1);
+    setenv("WINEDEBUG", "-all", 1);
+
+    std::filesystem::path runtime_lib_dir = runtime_root / "lib" / "wine";
+    if (std::filesystem::is_directory(runtime_lib_dir))
+        setenv("WINEDLLPATH", runtime_lib_dir.string().c_str(), 1);
+
+    std::filesystem::path runtime_lib = runtime_root / "lib";
+    if (std::filesystem::is_directory(runtime_lib)) {
+        setenv("DYLD_FALLBACK_LIBRARY_PATH",
+               (runtime_lib.string() + ":/usr/local/lib:/opt/homebrew/lib").c_str(),
+               1);
+    }
+}
+
 static int wait_for_child(pid_t pid, const char* label)
 {
     int status = 0;
     while (waitpid(pid, &status, 0) < 0) {
         if (errno == EINTR)
             continue;
-        std::fprintf(stderr, "[Wine] waitpid failed for %s: %s\n",
+        std::fprintf(stderr, "[Muplar Windows Compatibility] waitpid failed for %s: %s\n",
                      label, std::strerror(errno));
         return 1;
     }
@@ -805,7 +1072,7 @@ static int wait_for_child(pid_t pid, const char* label)
     if (WIFEXITED(status))
         return WEXITSTATUS(status);
     if (WIFSIGNALED(status)) {
-        std::fprintf(stderr, "[Wine] %s killed by signal %d\n",
+        std::fprintf(stderr, "[Muplar Windows Compatibility] %s killed by signal %d\n",
                      label, WTERMSIG(status));
         return 128 + WTERMSIG(status);
     }
@@ -830,7 +1097,7 @@ static std::filesystem::path ensure_wine_mono_msi_cached()
 
     std::filesystem::create_directories(cache_dir, ec);
     if (ec) {
-        std::fprintf(stderr, "[Wine] cannot create Wine Mono cache dir %s: %s\n",
+        std::fprintf(stderr, "[Muplar Windows Compatibility] cannot create managed runtime cache dir %s: %s\n",
                      cache_dir.c_str(), ec.message().c_str());
         return {};
     }
@@ -839,7 +1106,7 @@ static std::filesystem::path ensure_wine_mono_msi_cached()
     if (curl.empty())
         curl = "/usr/bin/curl";
     if (!std::filesystem::exists(curl, ec)) {
-        std::fprintf(stderr, "[Wine] curl not found, skipping Wine Mono download\n");
+        std::fprintf(stderr, "[Muplar Windows Compatibility] curl not found, skipping managed runtime download\n");
         return {};
     }
 
@@ -852,7 +1119,7 @@ static std::filesystem::path ensure_wine_mono_msi_cached()
 
     pid_t pid = fork();
     if (pid < 0) {
-        std::fprintf(stderr, "[Wine] fork() failed for Wine Mono download: %s\n",
+        std::fprintf(stderr, "[Muplar Windows Compatibility] fork() failed for managed runtime download: %s\n",
                      std::strerror(errno));
         return {};
     }
@@ -870,20 +1137,20 @@ static std::filesystem::path ensure_wine_mono_msi_cached()
             nullptr
         };
         execve(curl_str.c_str(), argv, environ);
-        std::fprintf(stderr, "[Wine] execve curl failed: %s\n", std::strerror(errno));
+        std::fprintf(stderr, "[Muplar Windows Compatibility] execve curl failed: %s\n", std::strerror(errno));
         _exit(127);
     }
 
-    int rc = wait_for_child(pid, "Wine Mono download");
+    int rc = wait_for_child(pid, "managed runtime download");
     if (rc != 0) {
         std::filesystem::remove(tmp, ec);
-        std::fprintf(stderr, "[Wine] Wine Mono download failed with code %d\n", rc);
+        std::fprintf(stderr, "[Muplar Windows Compatibility] managed runtime download failed with code %d\n", rc);
         return {};
     }
 
     std::filesystem::rename(tmp, msi, ec);
     if (ec) {
-        std::fprintf(stderr, "[Wine] cannot move Wine Mono MSI into cache: %s\n",
+        std::fprintf(stderr, "[Muplar Windows Compatibility] cannot move managed runtime package into cache: %s\n",
                      ec.message().c_str());
         return {};
     }
@@ -904,33 +1171,20 @@ static void install_wine_mono(const PrefixLayout& layout,
             wine = find_on_path("wine");
     }
     if (wine.empty()) {
-        std::fprintf(stderr, "[Wine] wine binary not found, skipping Wine Mono install\n");
+        std::fprintf(stderr, "[Muplar Windows Compatibility] runtime binary not found, skipping managed runtime install\n");
         return;
     }
 
     pid_t pid = fork();
     if (pid < 0) {
-        std::fprintf(stderr, "[Wine] fork() failed for Wine Mono install: %s\n",
+        std::fprintf(stderr, "[Muplar Windows Compatibility] fork() failed for managed runtime install: %s\n",
                      std::strerror(errno));
         return;
     }
 
     if (pid == 0) {
-        setenv("WINEPREFIX", layout.rootfs.string().c_str(), 1);
-        setenv("WINEDEBUG", "-all", 1);
-
         std::filesystem::path wine_root = wine.parent_path().parent_path();
-        std::filesystem::path wine_lib_dir =
-            wine_root / "lib" / "wine" / "x86_64-windows";
-        if (std::filesystem::is_directory(wine_lib_dir))
-            setenv("WINEDLLPATH", wine_lib_dir.string().c_str(), 1);
-
-        std::filesystem::path wine_lib = wine_root / "lib";
-        if (std::filesystem::is_directory(wine_lib)) {
-            setenv("DYLD_FALLBACK_LIBRARY_PATH",
-                   (wine_lib.string() + ":/usr/local/lib:/opt/homebrew/lib").c_str(),
-                   1);
-        }
+        set_windows_compatibility_env(layout, wine_root);
 
         std::string wine_str = wine.string();
         std::string msi_str = msi.string();
@@ -943,14 +1197,64 @@ static void install_wine_mono(const PrefixLayout& layout,
             nullptr
         };
         execve(wine_str.c_str(), argv, environ);
-        std::fprintf(stderr, "[Wine] execve wine msiexec failed: %s\n",
+        std::fprintf(stderr, "[Muplar Windows Compatibility] execve msiexec failed: %s\n",
                      std::strerror(errno));
         _exit(127);
     }
 
-    int rc = wait_for_child(pid, "Wine Mono install");
+    int rc = wait_for_child(pid, "managed runtime install");
     if (rc != 0) {
-        std::fprintf(stderr, "[Wine] Wine Mono install exited with code %d\n", rc);
+        std::fprintf(stderr, "[Muplar Windows Compatibility] managed runtime install exited with code %d\n", rc);
+    }
+}
+
+static void import_windows_font_registry(
+    const PrefixLayout& layout,
+    const std::filesystem::path& wine_bin_dir)
+{
+    std::filesystem::path reg_file = resolve_windows_font_registry_file();
+    if (reg_file.empty())
+        return;
+
+    std::filesystem::path runtime = resolve_wine_from_bin_dir(wine_bin_dir);
+    if (runtime.empty()) {
+        runtime = find_on_path("wine64");
+        if (runtime.empty())
+            runtime = find_on_path("wine");
+    }
+    if (runtime.empty()) {
+        std::fprintf(stderr, "[Muplar Windows Compatibility] runtime binary not found, skipping font setup\n");
+        return;
+    }
+
+    pid_t pid = fork();
+    if (pid < 0) {
+        std::fprintf(stderr, "[Muplar Windows Compatibility] fork() failed for font setup: %s\n",
+                     std::strerror(errno));
+        return;
+    }
+
+    if (pid == 0) {
+        set_windows_compatibility_env(layout, runtime.parent_path().parent_path());
+
+        std::string runtime_str = runtime.string();
+        std::string reg_file_str = reg_file.string();
+        char* argv[] = {
+            const_cast<char*>(runtime_str.c_str()),
+            const_cast<char*>("regedit"),
+            const_cast<char*>("/S"),
+            const_cast<char*>(reg_file_str.c_str()),
+            nullptr
+        };
+        execve(runtime_str.c_str(), argv, environ);
+        std::fprintf(stderr, "[Muplar Windows Compatibility] execve font setup failed: %s\n",
+                     std::strerror(errno));
+        _exit(127);
+    }
+
+    int rc = wait_for_child(pid, "font setup");
+    if (rc != 0) {
+        std::fprintf(stderr, "[Muplar Windows Compatibility] font setup exited with code %d\n", rc);
     }
 }
 
@@ -958,29 +1262,20 @@ static void run_wineboot_init(const PrefixLayout& layout)
 {
     std::filesystem::path wineboot = resolve_wineboot(layout);
     if (wineboot.empty()) {
-        std::fprintf(stderr, "[Wine] wineboot binary not found, skipping auto-init\n");
+        std::fprintf(stderr, "[Muplar Windows Compatibility] setup binary not found, skipping auto-init\n");
         return;
     }
 
+    ensure_wine_tmp_dir_private();
+
     pid_t pid = fork();
     if (pid < 0) {
-        std::fprintf(stderr, "[Wine] fork() failed for wineboot init: %s\n", std::strerror(errno));
+        std::fprintf(stderr, "[Muplar Windows Compatibility] fork() failed for setup init: %s\n", std::strerror(errno));
         return;
     }
 
     if (pid == 0) {
-        setenv("WINEPREFIX", layout.rootfs.string().c_str(), 1);
-        setenv("WINEDEBUG", "-all", 1);
-
-        std::filesystem::path wine_lib_dir = wineboot.parent_path().parent_path() / "lib" / "wine" / "x86_64-windows";
-        if (std::filesystem::is_directory(wine_lib_dir)) {
-            setenv("WINEDLLPATH", wine_lib_dir.string().c_str(), 1);
-        }
-
-        std::filesystem::path wine_lib = wineboot.parent_path().parent_path() / "lib";
-        if (std::filesystem::is_directory(wine_lib)) {
-            setenv("DYLD_FALLBACK_LIBRARY_PATH", (wine_lib.string() + ":/usr/local/lib:/opt/homebrew/lib").c_str(), 1);
-        }
+        set_windows_compatibility_env(layout, wineboot.parent_path().parent_path());
 
         std::string wineboot_str = wineboot.string();
         char* argv[] = {
@@ -990,16 +1285,17 @@ static void run_wineboot_init(const PrefixLayout& layout)
         };
 
         execve(wineboot_str.c_str(), argv, environ);
-        std::fprintf(stderr, "[Wine] execve wineboot failed: %s\n", std::strerror(errno));
+        std::fprintf(stderr, "[Muplar Windows Compatibility] execve setup failed: %s\n", std::strerror(errno));
         _exit(127);
     }
 
-    int rc = wait_for_child(pid, "wineboot init");
+    int rc = wait_for_child(pid, "Windows compatibility setup");
     if (rc != 0) {
-        std::fprintf(stderr, "[Wine] wineboot init exited with code %d\n", rc);
+        std::fprintf(stderr, "[Muplar Windows Compatibility] setup exited with code %d\n", rc);
         return;
     }
 
+    import_windows_font_registry(layout, wineboot.parent_path());
     install_wine_mono(layout, wineboot.parent_path());
 }
 
@@ -1024,17 +1320,10 @@ void ensure_layout_dirs(const PrefixLayout& layout)
         std::filesystem::create_directories(layout.rootfs / "system" / "xbin");
         {
             std::error_code ec;
-            auto bb_path = find_guest_busybox(layout.arch);
-            if (!bb_path.empty()) {
-                copy_file_if_changed(bb_path, layout.rootfs / "system" / "bin" / "busybox", ec);
-                install_busybox_applets(layout.rootfs / "system" / "bin", "busybox");
-                install_busybox_applets(layout.rootfs / "system" / "xbin", "../bin/busybox");
-            } else {
-                auto sh_path = find_guest_sh();
-                if (!sh_path.empty()) {
-                    copy_file_if_changed(sh_path, layout.rootfs / "system" / "bin" / "sh", ec);
-                    copy_file_if_changed(sh_path, layout.rootfs / "system" / "bin" / "bash", ec);
-                }
+            auto sh_path = find_guest_sh();
+            if (!sh_path.empty()) {
+                copy_file_if_changed(sh_path, layout.rootfs / "system" / "bin" / "sh", ec);
+                copy_file_if_changed(sh_path, layout.rootfs / "system" / "bin" / "bash", ec);
             }
         }
         break;
@@ -1115,20 +1404,39 @@ void ensure_layout_dirs(const PrefixLayout& layout)
         expose_host_display_sockets(layout.rootfs);
         {
             std::error_code ec;
-            auto bb_path = find_guest_busybox(layout.arch);
-            if (!bb_path.empty()) {
-                copy_file_if_changed(bb_path, layout.rootfs / "bin" / "busybox", ec);
-                install_busybox_applets(layout.rootfs / "bin", "busybox");
-                install_busybox_applets(layout.rootfs / "usr" / "bin",
-                                        "../../bin/busybox");
-                install_busybox_applets(layout.rootfs / "sbin", "../bin/busybox");
-                install_busybox_applets(layout.rootfs / "usr" / "sbin",
-                                        "../../bin/busybox");
-            } else {
-                auto sh_path = find_guest_sh();
-                if (!sh_path.empty()) {
-                    copy_file_if_changed(sh_path, layout.rootfs / "bin" / "sh", ec);
-                    copy_file_if_changed(sh_path, layout.rootfs / "bin" / "bash", ec);
+            auto real_sh = layout.rootfs / "bin" / "sh";
+            bool rootfs_has_userland = false;
+            if (std::filesystem::exists(real_sh, ec)) {
+                auto resolved = std::filesystem::canonical(real_sh, ec);
+                rootfs_has_userland =
+                    !ec && std::filesystem::is_regular_file(resolved, ec);
+            }
+
+            if (!rootfs_has_userland) {
+                const char* skip_bootstrap = std::getenv("MUPLAR_SKIP_LINUX_BOOTSTRAP");
+                bool bootstrap_disabled =
+                    skip_bootstrap && skip_bootstrap[0] && std::strcmp(skip_bootstrap, "0") != 0;
+                if (!bootstrap_disabled) {
+                    std::string normalized_distro = layout.distro;
+                    std::transform(normalized_distro.begin(), normalized_distro.end(), normalized_distro.begin(),
+                                   [](unsigned char c){ return std::tolower(c); });
+                    if (normalized_distro.empty()) normalized_distro = "ubuntu";
+                    auto bootstrap = find_linux_distro_bootstrap(layout.distro, layout.arch);
+                    if (!bootstrap.empty()) {
+                        extract_bootstrap_rootfs(bootstrap, layout.rootfs, normalized_distro);
+                    } else {
+                        std::string arch_str = (layout.arch == GuestArch::Aarch64) ? "aarch64" : "x86_64";
+                        std::string filename = "linux-bootstrap-" + normalized_distro + "-" + arch_str + ".tar.gz";
+                        std::filesystem::path dest = muplar_home() / "cache" / "linux-bootstrap" / filename;
+
+                        print_distro_download_suggestion(layout.distro, layout.arch, dest);
+
+                        auto sh_path = find_guest_sh();
+                        if (!sh_path.empty()) {
+                            copy_file_if_changed(sh_path, layout.rootfs / "bin" / "sh", ec);
+                            copy_file_if_changed(sh_path, layout.rootfs / "bin" / "bash", ec);
+                        }
+                    }
                 }
             }
 
@@ -1189,6 +1497,7 @@ void write_prefix_toml(const PrefixLayout& layout, bool overwrite = false)
     out << "kind = " << quote_toml(to_string(layout.kind)) << "\n";
     out << "arch = " << quote_toml(to_string(layout.arch)) << "\n";
     out << "runner = " << quote_toml(layout.runner) << "\n";
+    out << "logging = " << (layout.logging ? "\"true\"" : "\"false\"") << "\n";
     if (!layout.distro.empty()) {
         out << "distro = " << quote_toml(layout.distro) << "\n";
     }
@@ -1383,6 +1692,8 @@ PrefixLayout load_prefix_at_root(const std::filesystem::path& root,
             layout.runner = *stored;
         if (auto stored = read_toml_string(metadata, "distro"))
             layout.distro = *stored;
+        if (auto stored = read_toml_string(metadata, "logging"))
+            layout.logging = (*stored != "false");
     }
 
     if (layout.kind == PrefixKind::Linux && layout.distro.empty()) {

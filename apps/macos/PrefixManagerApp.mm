@@ -80,6 +80,51 @@ static NSString* DefaultWawonaDisplayName()
     return @"wayland-0";
 }
 
+static void EnsureWineSocketDirPrivate()
+{
+    NSString* path = [NSString stringWithFormat:@"/tmp/.wine-%lu",
+                                                static_cast<unsigned long>(getuid())];
+    NSFileManager* fm = NSFileManager.defaultManager;
+    [fm createDirectoryAtPath:path
+  withIntermediateDirectories:YES
+                   attributes:nil
+                        error:nil];
+    chmod(path.UTF8String, 0700);
+}
+
+static NSString* SanitizeWindowsCompatibilityLogText(NSString* text)
+{
+    if (!text)
+        return nil;
+
+    NSMutableString* sanitized = [text mutableCopy];
+    NSArray<NSArray<NSString*>*>* replacements = @[
+        @[@"WINEPREFIX", @"MUPLAR_WINDOWS_ROOT"],
+        @[@"WINEDEBUG", @"MUPLAR_WINDOWS_DEBUG"],
+        @[@"wineserver", @"Muplar Windows Compatibility service"],
+        @[@"wineboot", @"Muplar Windows Compatibility setup"],
+        @[@"wine64", @"Muplar Windows Compatibility runtime"],
+        @[@".wine-", @".muplar-windows-compat-"],
+        @[@"wine", @"Muplar Windows Compatibility"],
+    ];
+    for (NSArray<NSString*>* pair in replacements) {
+        NSString* needle = pair[0];
+        NSString* replacement = pair[1];
+        [sanitized replaceOccurrencesOfString:needle
+                                   withString:replacement
+                                      options:NSCaseInsensitiveSearch
+                                        range:NSMakeRange(0, sanitized.length)];
+    }
+    return sanitized;
+}
+
+static NSData* SanitizeWindowsCompatibilityLogData(NSData* data)
+{
+    NSString* text = [[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding];
+    NSString* sanitized = SanitizeWindowsCompatibilityLogText(text);
+    return sanitized ? [sanitized dataUsingEncoding:NSUTF8StringEncoding] : data;
+}
+
 static void ApplyDefaultLinuxDisplayEnvironment(
     NSMutableDictionary<NSString*, NSString*>* env)
 {
@@ -940,6 +985,7 @@ static NSString* ParseLnkFile(const std::filesystem::path& lnkPath)
                             NSWindowStyleMaskResizable
                     backing:NSBackingStoreBuffered
                        defer:NO];
+    _window.releasedWhenClosed = NO;
     _window.title = @"Muplar Instance Manager";
     _window.minSize = NSMakeSize(980, 560);
     [_window center];
@@ -1765,15 +1811,7 @@ static NSString* MapLinuxIconToSFSymbol(NSString* icon)
         return;
     }
 
-    if (kind == "linux") {
-        NSString* selectedDistro = distroPopup.titleOfSelectedItem.lowercaseString;
-        if (![selectedDistro isEqualToString:@"ubuntu"] &&
-            ![selectedDistro isEqualToString:@"alpine"]) {
-            [self showError:
-                @"Automatic Linux rootfs download currently supports Ubuntu and Alpine. Use tools/provision-linux-rootfs.sh --from-tar for this distro."];
-            return;
-        }
-    }
+
 
     NSString* instanceName = [nameField.stringValue copy];
     NSString* distroTitle = [distroPopup.titleOfSelectedItem copy];
@@ -1782,7 +1820,7 @@ static NSString* MapLinuxIconToSFSymbol(NSString* icon)
     NSString* archString = [internalArch copy];
     NSString* busyMessage = nil;
     if (kind == "wine") {
-        busyMessage = @"Preparing the Windows prefix and updating its configuration. This can take a little while.";
+        busyMessage = @"Preparing the Windows instance and updating its configuration. This can take a little while.";
     } else if (kind == "linux") {
         busyMessage = @"Downloading or preparing the Linux rootfs. The instance will appear when setup finishes.";
     } else {
@@ -1989,57 +2027,83 @@ static NSString* MapLinuxIconToSFSymbol(NSString* icon)
 
 - (NSString*)wine64PathForPrefix:(const prefix::PrefixLayout&)layout
 {
-    // 1. Embedded in the app bundle: Contents/Frameworks/wine/bin/wine  (preferred)
-    NSString* frameworksPath = [[NSBundle mainBundle] privateFrameworksPath];
-    NSString* bundleWine = [[[frameworksPath stringByAppendingPathComponent:@"wine"]
-                                             stringByAppendingPathComponent:@"bin"]
-                                             stringByAppendingPathComponent:@"wine"];
-    NSLog(@"[Windows] checking bundle: %@", bundleWine);
-    if ([[NSFileManager defaultManager] isExecutableFileAtPath:bundleWine])
-        return bundleWine;
+    NSString* path = nil;
 
-    // 2. runtime_sysroot stored in the prefix.
+    // 1. runtime_sysroot stored in the prefix.
     if (!layout.runtime_sysroot.empty()) {
         NSString* sysrootStr = NSStringFromPath(layout.runtime_sysroot);
         NSString* resolvedStr = ResolveWorkspaceRelativePath(sysrootStr);
-        std::filesystem::path c = std::filesystem::path(resolvedStr.UTF8String) / "bin" / "wine";
-        NSLog(@"[Windows] checking sysroot: %s", c.c_str());
-        if (std::filesystem::is_regular_file(c))
-            return NSStringFromStdString(c.string());
+        for (NSString* binName in @[@"wine64", @"wine"]) {
+            NSString* cPath = [[resolvedStr stringByAppendingPathComponent:@"bin"] stringByAppendingPathComponent:binName];
+            NSLog(@"[Windows] checking sysroot: %@", cPath);
+            if ([[NSFileManager defaultManager] isExecutableFileAtPath:cPath]) {
+                path = cPath;
+                break;
+            }
+        }
+    }
+
+    // 2. Embedded in the app bundle: Contents/Frameworks/wine/bin/wine (preferred fallback)
+    if (!path) {
+        NSString* frameworksPath = [[NSBundle mainBundle] privateFrameworksPath];
+        NSString* bundleWine = [[[frameworksPath stringByAppendingPathComponent:@"wine"]
+                                                 stringByAppendingPathComponent:@"bin"]
+                                                 stringByAppendingPathComponent:@"wine"];
+        NSLog(@"[Windows] checking bundle: %@", bundleWine);
+        if ([[NSFileManager defaultManager] isExecutableFileAtPath:bundleWine]) {
+            path = bundleWine;
+        }
     }
 
     // 3. Dev build: build/bin/App.app -> build/bin -> build -> build/wine-prefix/bin/wine
-    NSString* bundlePath = [[NSBundle mainBundle] bundlePath];
-    NSString* buildDir   = [[bundlePath stringByDeletingLastPathComponent]
-                                        stringByDeletingLastPathComponent];
-    NSString* devCandidate = [[[[buildDir stringByAppendingPathComponent:@"wine-prefix"]
-                                          stringByAppendingPathComponent:@"bin"]
-                                          stringByAppendingPathComponent:@"wine"]
-                                          stringByStandardizingPath];
-    NSLog(@"[Windows] checking dev build: %@", devCandidate);
-    if ([[NSFileManager defaultManager] isExecutableFileAtPath:devCandidate])
-        return devCandidate;
+    if (!path) {
+        NSString* bundlePath = [[NSBundle mainBundle] bundlePath];
+        NSString* buildDir   = [[bundlePath stringByDeletingLastPathComponent]
+                                            stringByDeletingLastPathComponent];
+        NSString* devCandidate = [[[[buildDir stringByAppendingPathComponent:@"wine-prefix"]
+                                               stringByAppendingPathComponent:@"bin"]
+                                               stringByAppendingPathComponent:@"wine"]
+                                               stringByStandardizingPath];
+        NSLog(@"[Windows] checking dev build: %@", devCandidate);
+        if ([[NSFileManager defaultManager] isExecutableFileAtPath:devCandidate]) {
+            path = devCandidate;
+        }
+    }
 
     // 4. System PATH.
-    NSTask* which = [[NSTask alloc] init];
-    which.launchPath = @"/usr/bin/which";
-    which.arguments  = @[@"wine"];
-    NSPipe* pipe = [NSPipe pipe];
-    which.standardOutput = pipe;
-    which.standardError  = [NSFileHandle fileHandleWithNullDevice];
-    @try {
-        [which launch];
-        [which waitUntilExit];
-        NSData*   data   = [[pipe fileHandleForReading] readDataToEndOfFile];
-        NSString* result = [[NSString alloc] initWithData:data
-                                                 encoding:NSUTF8StringEncoding];
-        result = [result stringByTrimmingCharactersInSet:
-                      [NSCharacterSet whitespaceAndNewlineCharacterSet]];
-        NSLog(@"[Windows] which: %@", result);
-        if (result.length > 0 &&
-            [[NSFileManager defaultManager] isExecutableFileAtPath:result])
-            return result;
-    } @catch (...) {}
+    if (!path) {
+        NSTask* which = [[NSTask alloc] init];
+        which.launchPath = @"/usr/bin/which";
+        which.arguments  = @[@"wine"];
+        NSPipe* pipe = [NSPipe pipe];
+        which.standardOutput = pipe;
+        which.standardError  = [NSFileHandle fileHandleWithNullDevice];
+        @try {
+            [which launch];
+            [which waitUntilExit];
+            NSData*   data   = [[pipe fileHandleForReading] readDataToEndOfFile];
+            NSString* result = [[NSString alloc] initWithData:data
+                                                     encoding:NSUTF8StringEncoding];
+            result = [result stringByTrimmingCharactersInSet:
+                          [NSCharacterSet whitespaceAndNewlineCharacterSet]];
+            NSLog(@"[Windows] which: %@", result);
+            if (result.length > 0 &&
+                [[NSFileManager defaultManager] isExecutableFileAtPath:result]) {
+                path = result;
+            }
+        } @catch (...) {}
+    }
+
+    if (path) {
+        // Resolve symlinks to get canonical path so that sibling DLL / lib paths work
+        std::error_code ec;
+        std::filesystem::path canonicalPath = std::filesystem::canonical(path.UTF8String, ec);
+        if (!ec) {
+            path = NSStringFromStdString(canonicalPath.string());
+        }
+        NSLog(@"[Windows] resolved compatibility runtime path to canonical: %@", path);
+        return path;
+    }
 
     NSLog(@"[Windows] not found. bundle=%@", [[NSBundle mainBundle] bundlePath]);
     return nil;
@@ -2705,7 +2769,7 @@ static NSString* MapLinuxIconToSFSymbol(NSString* icon)
     BOOL wawonaReady = _supervisor->wawona().wait_for_socket(5000);
     if (!wawonaReady) {
         if (errorMessage)
-            *errorMessage = @"Wawona compositor did not create a Wayland socket. The bundled Wawona binary may be a stub build.";
+            *errorMessage = @"Muplar display compositor did not create a Wayland socket. The bundled compositor binary may be a stub build.";
         return NO;
     }
 
@@ -2944,33 +3008,16 @@ static NSString* MapLinuxIconToSFSymbol(NSString* icon)
 
 - (void)setupLoggingForTask:(NSTask*)task prefix:(prefix::PrefixLayout*)selected appName:(NSString*)appName
 {
+    if (!selected || !selected->logging) {
+        task.standardOutput = [NSFileHandle fileHandleWithNullDevice];
+        task.standardError = [NSFileHandle fileHandleWithNullDevice];
+        return;
+    }
+
     // Write a header to the per-prefix log
     [self writeLaunchLogHeaderForPrefix:selected appName:appName];
 
-    // Direct task output to the global muplar.log so all output is centralized
-    NSString* home = NSHomeDirectory();
-    NSString* globalLogDir = [home stringByAppendingPathComponent:@".muplar"];
-    [[NSFileManager defaultManager] createDirectoryAtPath:globalLogDir withIntermediateDirectories:YES attributes:nil error:nil];
-    NSString* globalLogPath = [globalLogDir stringByAppendingPathComponent:@"muplar.log"];
-
-    if (![[NSFileManager defaultManager] fileExistsAtPath:globalLogPath]) {
-        [[NSFileManager defaultManager] createFileAtPath:globalLogPath contents:[NSData data] attributes:nil];
-    }
-
-    NSFileHandle* globalHandle = [NSFileHandle fileHandleForWritingAtPath:globalLogPath];
-    if (globalHandle) {
-        [globalHandle seekToEndOfFile];
-
-        // Write a launch header to the global log too
-        NSDateFormatter* formatter = [[NSDateFormatter alloc] init];
-        formatter.dateFormat = @"yyyy-MM-dd HH:mm:ss";
-        NSString* timestamp = [formatter stringFromDate:[NSDate date]];
-        NSString* header = [NSString stringWithFormat:@"\n=== [%@] Launching app: %@ (prefix: %@) ===\n",
-                            timestamp, appName, NSStringFromStdString(selected->name)];
-        [globalHandle writeData:[header dataUsingEncoding:NSUTF8StringEncoding]];
-    }
-
-    // Use NSPipe to capture output and write to global log with flushing
+    // Use NSPipe to capture output and write to per-prefix log with flushing
     NSPipe* pipe = [NSPipe pipe];
     task.standardOutput = pipe;
     task.standardError = pipe;
@@ -2986,8 +3033,8 @@ static NSString* MapLinuxIconToSFSymbol(NSString* icon)
     pipe.fileHandleForReading.readabilityHandler = ^(NSFileHandle* handle) {
         NSData* data = [handle availableData];
         if (data.length == 0) return;
-        if (globalHandle) {
-            @try { [globalHandle writeData:data]; } @catch (NSException* __unused e) {}
+        if (selected->kind == prefix::PrefixKind::Wine) {
+            data = SanitizeWindowsCompatibilityLogData(data);
         }
         if (prefixHandle) {
             @try { [prefixHandle writeData:data]; } @catch (NSException* __unused e) {}
@@ -3253,7 +3300,7 @@ static NSString* MapLinuxIconToSFSymbol(NSString* icon)
 
     NSString* wawonaError = nil;
     if (![self ensureWawonaForLinuxPrefix:selected errorMessage:&wawonaError]) {
-        [self showError:wawonaError ?: @"Failed to start Wawona compositor."];
+        [self showError:wawonaError ?: @"Failed to start Muplar display compositor."];
         return;
     }
 
@@ -3337,19 +3384,21 @@ static NSString* MapLinuxIconToSFSymbol(NSString* icon)
 {
     NSString* wineBin = [self wine64PathForPrefix:*selected];
     if (!wineBin) {
-        [self showError:@"wine binary not found. Build Wine first or set the prefix sysroot."];
+        [self showError:@"Windows compatibility layer not found. Build Windows support first or set the prefix sysroot."];
         return;
     }
+
+    EnsureWineSocketDirPrivate();
 
     NSString* winePrefix = NSStringFromPath(selected->rootfs);
     NSString* bundleDllPath = [[[[NSBundle mainBundle] privateFrameworksPath]
                                   stringByAppendingPathComponent:@"wine"]
-                                  stringByAppendingPathComponent:@"lib/wine/x86_64-windows"];
+                                  stringByAppendingPathComponent:@"lib/wine"];
     NSString* siblingDllPath = [[[wineBin stringByDeletingLastPathComponent]
                                           stringByDeletingLastPathComponent]
-                                          stringByAppendingPathComponent:@"lib/wine/x86_64-windows"];
-    NSString* wineLibDir = [[NSFileManager defaultManager] fileExistsAtPath:bundleDllPath]
-                           ? bundleDllPath : siblingDllPath;
+                                          stringByAppendingPathComponent:@"lib/wine"];
+    NSString* wineLibDir = [[NSFileManager defaultManager] fileExistsAtPath:siblingDllPath]
+                           ? siblingDllPath : bundleDllPath;
 
     NSString* wineLibPath = [[[wineBin stringByDeletingLastPathComponent]
                                        stringByDeletingLastPathComponent]
@@ -3363,7 +3412,7 @@ static NSString* MapLinuxIconToSFSymbol(NSString* icon)
 
     NSString* cmdStr = [NSString stringWithFormat:
         @"export WINEPREFIX='%@'\n"
-        @"export WINEDEBUG='+err'\n"
+        @"export WINEDEBUG='-all'\n"
         @"%@\n"
         @"export DYLD_FALLBACK_LIBRARY_PATH='%@'\n"
         @"exec '%@' 'cmd'",
@@ -3430,23 +3479,25 @@ static NSString* MapLinuxIconToSFSymbol(NSString* icon)
 
     NSString* wineBin = [self wine64PathForPrefix:*selected];
     if (!wineBin) {
-        [self showError:@"Windows module binary not found. Build Windows module first or set the prefix sysroot."];
+        [self showError:@"Muplar Windows Compatibility runtime not found. Build Windows support first or set the prefix sysroot."];
         return;
     }
 
     NSString* winePrefix = NSStringFromPath(selected->rootfs);
+
+    EnsureWineSocketDirPrivate();
 
     NSMutableDictionary* env = [NSProcessInfo.processInfo.environment mutableCopy];
     env[@"WINEPREFIX"] = winePrefix;
 
     NSString* bundleDllPath = [[[[NSBundle mainBundle] privateFrameworksPath]
                                   stringByAppendingPathComponent:@"wine"]
-                                  stringByAppendingPathComponent:@"lib/wine/x86_64-windows"];
+                                  stringByAppendingPathComponent:@"lib/wine"];
     NSString* siblingDllPath = [[[wineBin stringByDeletingLastPathComponent]
                                           stringByDeletingLastPathComponent]
-                                          stringByAppendingPathComponent:@"lib/wine/x86_64-windows"];
-    NSString* wineLibDir = [[NSFileManager defaultManager] fileExistsAtPath:bundleDllPath]
-                           ? bundleDllPath : siblingDllPath;
+                                          stringByAppendingPathComponent:@"lib/wine"];
+    NSString* wineLibDir = [[NSFileManager defaultManager] fileExistsAtPath:siblingDllPath]
+                           ? siblingDllPath : bundleDllPath;
     if ([[NSFileManager defaultManager] fileExistsAtPath:wineLibDir])
         env[@"WINEDLLPATH"] = wineLibDir;
 
@@ -3460,7 +3511,7 @@ static NSString* MapLinuxIconToSFSymbol(NSString* icon)
     env[@"DYLD_FALLBACK_LIBRARY_PATH"] = newFallback;
     [env removeObjectForKey:@"DYLD_LIBRARY_PATH"];
 
-    env[@"WINEDEBUG"] = @"+err";
+    env[@"WINEDEBUG"] = @"-all";
 
     NSTask* task = [[NSTask alloc] init];
     NSString* launchPath = wineBin;
@@ -3560,9 +3611,9 @@ int main(int argc, char* argv[])
     (void)argv;
     @autoreleasepool {
         NSString* home = NSHomeDirectory();
-        NSString* muplarDir = [home stringByAppendingPathComponent:@".muplar"];
-        [[NSFileManager defaultManager] createDirectoryAtPath:muplarDir withIntermediateDirectories:YES attributes:nil error:nil];
-        NSString* logPath = [muplarDir stringByAppendingPathComponent:@"muplar.log"];
+        NSString* muplarLogsDir = [[home stringByAppendingPathComponent:@".muplar"] stringByAppendingPathComponent:@"logs"];
+        [[NSFileManager defaultManager] createDirectoryAtPath:muplarLogsDir withIntermediateDirectories:YES attributes:nil error:nil];
+        NSString* logPath = [muplarLogsDir stringByAppendingPathComponent:@"manager.log"];
 
         const char* logPathStr = [logPath UTF8String];
         std::freopen(logPathStr, "a", stdout);

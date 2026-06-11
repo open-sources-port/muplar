@@ -13,7 +13,7 @@ target_link_libraries(muplar_runtime_windows_x64
 )
 add_dependencies(muplar_runtime_windows_x64 wine_lib)
 
-# ── Wine runtime library ─────────────────────────────────────────────────
+# ── Windows compatibility runtime library ─────────────────────────────────
 add_library(muplar_runtime_wine STATIC
     wine_runtime.cpp
 )

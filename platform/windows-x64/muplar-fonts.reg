@@ -1,0 +1,15 @@
+Windows Registry Editor Version 5.00
+
+[HKEY_CURRENT_USER\Control Panel\Desktop]
+"FontSmoothing"="2"
+"FontSmoothingType"=dword:00000002
+"FontSmoothingGamma"=dword:00000578
+"FontSmoothingOrientation"=dword:00000001
+
+[HKEY_LOCAL_MACHINE\Software\Microsoft\Windows NT\CurrentVersion\FontSubstitutes]
+"Segoe UI"="Tahoma"
+"Segoe UI Light"="Tahoma"
+"Segoe UI Semibold"="Tahoma"
+"Segoe UI Symbol"="Tahoma"
+"MS Shell Dlg"="Tahoma"
+"MS Shell Dlg 2"="Tahoma"

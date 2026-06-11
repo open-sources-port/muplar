@@ -65,6 +65,22 @@ static fs::path get_executable_dir()
     return fs::path(buf).parent_path();
 }
 
+static void ensure_wine_tmp_dir_private()
+{
+    auto sock_dir = fs::path("/tmp") / (".wine-" + std::to_string(getuid()));
+    std::error_code ec;
+    fs::create_directories(sock_dir, ec);
+    if (ec) {
+        std::fprintf(stderr, "[Muplar Windows Compatibility] failed to create %s: %s\n",
+                     sock_dir.c_str(), ec.message().c_str());
+        return;
+    }
+    if (chmod(sock_dir.c_str(), 0700) != 0) {
+        std::fprintf(stderr, "[Muplar Windows Compatibility] chmod 0700 %s failed: %s\n",
+                     sock_dir.c_str(), std::strerror(errno));
+    }
+}
+
 // Locate the wawona binary: try next to mup, then build dir, then PATH.
 static fs::path resolve_wawona_bin()
 {
@@ -477,19 +493,17 @@ pid_t WineServerGuard::spawn()
 {
     fs::path wineserver = resolve_wineserver_bin();
     if (wineserver.empty()) {
-        std::fprintf(stderr, "[WineServerGuard:%s] wineserver binary not found\n",
+        std::fprintf(stderr, "[WindowsCompatibilityService:%s] service binary not found\n",
                      layout_.name.c_str());
         return -1;
     }
 
-    // Ensure wineserver socket directory exists
-    auto sock_dir = fs::path("/tmp") / (".wine-" + std::to_string(getuid()));
+    ensure_wine_tmp_dir_private();
     std::error_code ec;
-    fs::create_directories(sock_dir, ec);
 
     pid_t pid = fork();
     if (pid < 0) {
-        std::fprintf(stderr, "[WineServerGuard:%s] fork() failed: %s\n",
+        std::fprintf(stderr, "[WindowsCompatibilityService:%s] fork() failed: %s\n",
                      layout_.name.c_str(), strerror(errno));
         return -1;
     }
@@ -513,11 +527,11 @@ pid_t WineServerGuard::spawn()
             nullptr
         };
         execve(ws_str.c_str(), argv, get_environ());
-        std::fprintf(stderr, "[WineServerGuard] execve failed: %s\n", strerror(errno));
+        std::fprintf(stderr, "[WindowsCompatibilityService] execve failed: %s\n", strerror(errno));
         _exit(127);
     }
 
-    std::fprintf(stderr, "[WineServerGuard:%s] started wineserver pid=%d\n",
+    std::fprintf(stderr, "[WindowsCompatibilityService:%s] started service pid=%d\n",
                  layout_.name.c_str(), (int)pid);
     return pid;
 }
@@ -576,7 +590,7 @@ void WineServerGuard::monitor_loop()
                 crash_times_.end());
             if ((int)crash_times_.size() >= policy_.max_crashes_in_window) {
                 std::fprintf(stderr,
-                    "[WineServerGuard:%s] crash rate too high, stopping\n",
+                    "[WindowsCompatibilityService:%s] crash rate too high, stopping\n",
                     layout_.name.c_str());
                 break;
             }
@@ -601,7 +615,7 @@ void WineServerGuard::monitor_loop()
         if (status == -1) break;
 
         int exit_code = WIFEXITED(status) ? WEXITSTATUS(status) : -1;
-        std::fprintf(stderr, "[WineServerGuard:%s] wineserver exited (code=%d), restarting\n",
+        std::fprintf(stderr, "[WindowsCompatibilityService:%s] service exited (code=%d), restarting\n",
                      layout_.name.c_str(), exit_code);
 
         crash_times_.push_back(steady_clock::now());
@@ -615,7 +629,7 @@ void WineServerGuard::monitor_loop()
 
     if (stop_pipe[0] >= 0) close(stop_pipe[0]);
     if (stop_pipe[1] >= 0) close(stop_pipe[1]);
-    std::fprintf(stderr, "[WineServerGuard:%s] monitor thread exiting\n",
+    std::fprintf(stderr, "[WindowsCompatibilityService:%s] monitor thread exiting\n",
                  layout_.name.c_str());
 }
 
@@ -639,7 +653,7 @@ void SupervisorService::start(int poll_interval_ms)
     // 1. Start Wawona
     wawona_guard_->start();
 
-    // 2. Start WineServerGuards for all existing Wine prefixes
+    // 2. Start Windows compatibility services for all existing Windows instances
     sync_wine_guards();
 
     // 3. Background poll for new/removed prefixes
@@ -655,7 +669,7 @@ void SupervisorService::stop()
     if (poll_thread_.joinable())
         poll_thread_.join();
 
-    // Stop all wine guards
+    // Stop all Windows compatibility services
     {
         std::lock_guard<std::mutex> lk(guards_mu_);
         for (auto& [name, guard] : wine_guards_)
@@ -676,7 +690,7 @@ void SupervisorService::on_prefix_created(const prefix::PrefixLayout& layout)
     auto guard = std::make_unique<WineServerGuard>(layout);
     guard->start();
     wine_guards_[layout.name] = std::move(guard);
-    std::fprintf(stderr, "[SupervisorService] started WineServerGuard for '%s'\n",
+    std::fprintf(stderr, "[SupervisorService] started Windows compatibility service for '%s'\n",
                  layout.name.c_str());
 }
 
@@ -688,7 +702,7 @@ void SupervisorService::on_prefix_deleted(const std::string& prefix_name)
 
     it->second->stop();
     wine_guards_.erase(it);
-    std::fprintf(stderr, "[SupervisorService] stopped WineServerGuard for '%s'\n",
+    std::fprintf(stderr, "[SupervisorService] stopped Windows compatibility service for '%s'\n",
                  prefix_name.c_str());
 }
 
@@ -704,7 +718,7 @@ void SupervisorService::sync_wine_guards()
     auto all_prefixes = prefix::list_prefixes();
     std::lock_guard<std::mutex> lk(guards_mu_);
 
-    // Add guards for new Wine prefixes
+    // Add services for new Windows instances
     for (const auto& p : all_prefixes) {
         if (p.kind != prefix::PrefixKind::Wine) continue;
         if (wine_guards_.count(p.name)) continue;
@@ -712,7 +726,7 @@ void SupervisorService::sync_wine_guards()
         auto guard = std::make_unique<WineServerGuard>(p);
         guard->start();
         wine_guards_[p.name] = std::move(guard);
-        std::fprintf(stderr, "[SupervisorService] started WineServerGuard for '%s'\n",
+        std::fprintf(stderr, "[SupervisorService] started Windows compatibility service for '%s'\n",
                      p.name.c_str());
     }
 
@@ -727,7 +741,7 @@ void SupervisorService::sync_wine_guards()
     for (const auto& name : to_remove) {
         wine_guards_[name]->stop();
         wine_guards_.erase(name);
-        std::fprintf(stderr, "[SupervisorService] removed WineServerGuard for '%s'\n",
+        std::fprintf(stderr, "[SupervisorService] removed Windows compatibility service for '%s'\n",
                      name.c_str());
     }
 }

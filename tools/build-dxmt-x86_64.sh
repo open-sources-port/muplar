@@ -20,9 +20,9 @@ ROOT_DIR="$(CDPATH= cd -- "${SCRIPT_DIR}/.." && pwd)"
 
 echo "== build_dxmt: DXMT_SRC_DIR=${DXMT_SRC_DIR} =="
 echo "== build_dxmt: DXMT_BUILD_DIR=${DXMT_BUILD_DIR} =="
-echo "== build_dxmt: WINE_INSTALL_PATH=${WINE_INSTALL_PATH} =="
+echo "== build_dxmt: Windows compatibility install path configured =="
 echo "== build_dxmt: LLVM_PATH=${LLVM_PATH} =="
-echo "== build_dxmt: install prefix=${WINE_INSTALL_PATH}/lib/wine =="
+echo "== build_dxmt: module install prefix configured =="
 
 if ! command -v meson >/dev/null 2>&1; then
     echo "ERROR: meson not found, run: brew install meson"

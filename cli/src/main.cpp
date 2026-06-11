@@ -8,7 +8,7 @@
 //
 // Now main() parses CLI flags into a platform launch config and delegates to a
 // runtime implementation. Android ARM64 currently wraps the elfuse
-// Hypervisor.framework pipeline; Linux and Wine runtimes can plug in beside it.
+// Hypervisor.framework pipeline; Linux and Windows-compatible runtimes plug in beside it.
 
 #include <iostream>
 #include <algorithm>
@@ -57,18 +57,18 @@ static void print_usage(const char* prog)
               << "              <elf-file|apk-file> [args...]\n";
     std::cerr << "       " << prog
               << " prefix create NAME|PATH [--root PATH]"
-                 " [--kind android|linux|wine]"
+                 " [--kind android|linux|windows]"
               << " [--arch aarch64|x86_64] [--runner elfuse]"
               << " [--distro alpine|debian|ubuntu|fedora|arch|opensuse|generic]"
               << " [--sysroot PATH]\n"
-              << "              (android supports aarch64 only; wine supports x86_64 only; linux supports both)\n"
+              << "              (android supports aarch64 only; windows supports x86_64 only; linux supports both)\n"
               << "       " << prog << " prefix list [--plain]\n"
               << "       " << prog << " prefix info NAME|PATH\n"
               << "       " << prog << " prefix clone SRC_NAME|PATH DST_NAME"
               << " [--root PATH] [--replace]\n"
               << "       " << prog << " prefix delete NAME|PATH --yes\n";
     std::cerr << "       " << prog
-              << " instance start NAME [--daemon] [--wine-bin PATH] <program> [args...]\n"
+              << " instance start NAME [--daemon] [--windows-runtime-bin PATH] <program> [args...]\n"
               << "       " << prog << " instance stop  NAME [--force]\n"
               << "       " << prog << " instance status NAME\n"
               << "       " << prog << " instance list\n";
@@ -100,10 +100,18 @@ static int handle_rosettad_translate_command(int argc, char** argv)
     }
 }
 
+static std::string prefix_kind_display_string(
+    muplar::runtime::prefix::PrefixKind kind)
+{
+    if (kind == muplar::runtime::prefix::PrefixKind::Wine)
+        return "windows";
+    return muplar::runtime::prefix::to_string(kind);
+}
+
 static std::string prefix_kind_string(
     const muplar::runtime::prefix::PrefixLayout& prefix)
 {
-    return muplar::runtime::prefix::to_string(prefix.kind);
+    return prefix_kind_display_string(prefix.kind);
 }
 
 static std::string prefix_arch_string(
@@ -124,6 +132,16 @@ static std::string prefix_state_string(
 static std::string optional_path_string(const std::filesystem::path& path)
 {
     return path.empty() ? "-" : path.string();
+}
+
+static std::string runtime_sysroot_display_string(
+    const muplar::runtime::prefix::PrefixLayout& prefix)
+{
+    if (prefix.runtime_sysroot.empty())
+        return "-";
+    if (prefix.kind == muplar::runtime::prefix::PrefixKind::Wine)
+        return "configured";
+    return prefix.runtime_sysroot.string();
 }
 
 static void print_prefix_table(
@@ -150,7 +168,7 @@ static void print_prefix_table(
             prefix_arch_string(prefix),
             prefix.runner,
             prefix_state_string(prefix),
-            optional_path_string(prefix.runtime_sysroot),
+            runtime_sysroot_display_string(prefix),
             prefix.root.string(),
         });
     }
@@ -216,7 +234,7 @@ static void print_prefix_plain(
                   << "\t" << prefix.runner
                   << "\t" << prefix.root.string();
         if (!prefix.runtime_sysroot.empty())
-            std::cout << "\t" << prefix.runtime_sysroot.string();
+            std::cout << "\t" << runtime_sysroot_display_string(prefix);
         std::cout << "\n";
     }
 }
@@ -240,7 +258,7 @@ static void print_prefix_info(
     std::cout << "APK cache: " << prefix.apk_cache_dir.string() << "\n";
     std::cout << "Logs: " << prefix.logs_dir.string() << "\n";
     std::cout << "Runtime sysroot: "
-              << optional_path_string(prefix.runtime_sysroot) << "\n";
+              << runtime_sysroot_display_string(prefix) << "\n";
 }
 
 static int handle_prefix_command(int argc, char** argv)
@@ -423,7 +441,7 @@ static int handle_prefix_command(int argc, char** argv)
                   spec, root, runtime_sysroot, true, kind, arch, runner, distro);
         std::cout << "prefix: " << prefix.root << "\n";
         std::cout << "kind: "
-                  << muplar::runtime::prefix::to_string(prefix.kind) << "\n";
+                  << prefix_kind_string(prefix) << "\n";
         if (!prefix.distro.empty())
             std::cout << "distro: " << prefix.distro << "\n";
         std::cout << "arch: "
@@ -431,7 +449,8 @@ static int handle_prefix_command(int argc, char** argv)
         std::cout << "runner: " << prefix.runner << "\n";
         std::cout << "rootfs: " << prefix.rootfs << "\n";
         if (!prefix.runtime_sysroot.empty())
-            std::cout << "runtime sysroot: " << prefix.runtime_sysroot << "\n";
+            std::cout << "runtime sysroot: "
+                      << runtime_sysroot_display_string(prefix) << "\n";
         return 0;
     } catch (const std::exception& e) {
         std::cerr << "Prefix error: " << e.what() << "\n";
@@ -479,8 +498,8 @@ static int run_platform_runtime(
         return runtime.run(cfg);
     }
 #else
-        std::cerr << "Wine support was not built into this binary.\n"
-                  << "Rebuild with -DMUPLAR_ENABLE_WINE=ON.\n";
+        std::cerr << "Muplar Windows Compatibility support was not built into this binary.\n"
+                  << "Rebuild with Windows compatibility enabled.\n";
         return 1;
 #endif
     }
@@ -551,7 +570,7 @@ static int handle_instance_command(int argc, char** argv)
             auto state  = prefix::query_prefix_state(layout);
             pid_t pid   = prefix::read_prefix_pid(layout);
             std::cout << "Name:  " << layout.name << "\n";
-            std::cout << "Kind:  " << prefix::to_string(layout.kind) << "\n";
+            std::cout << "Kind:  " << prefix_kind_display_string(layout.kind) << "\n";
             std::cout << "Arch:  " << prefix::to_string(layout.arch) << "\n";
             std::cout << "State: "
                       << (state == prefix::PrefixState::Running ? "running" : "stopped")
@@ -630,7 +649,7 @@ static int handle_instance_command(int argc, char** argv)
     if (sub == "start") {
         if (argc < 5) {
             std::cerr << "Usage: mup instance start NAME [--daemon] "
-                         "[--wine-bin PATH] <program> [args...]\n";
+                         "[--windows-runtime-bin PATH] <program> [args...]\n";
             return 2;
         }
 
@@ -647,7 +666,7 @@ static int handle_instance_command(int argc, char** argv)
             if (flag == "--daemon" || flag == "-d") {
                 daemon_mode = true;
                 ++i;
-            } else if (flag == "--wine-bin" && i + 1 < argc) {
+            } else if ((flag == "--windows-runtime-bin" || flag == "--wine-bin") && i + 1 < argc) {
                 wine_bin = argv[i + 1];
                 i += 2;
             } else if (flag == "--") {
@@ -700,18 +719,18 @@ static int handle_instance_command(int argc, char** argv)
             }
 #else
             if (layout.kind == prefix::PrefixKind::Wine) {
-                std::cerr << "instance start: Wine support was not built into this binary.\n"
-                          << "Rebuild with -DMUPLAR_ENABLE_WINE=ON.\n";
+                std::cerr << "instance start: Muplar Windows Compatibility support was not built into this binary.\n"
+                          << "Rebuild with Windows compatibility enabled.\n";
                 return 1;
             }
 #endif
 
             if (!wine_bin.empty()) {
-                std::cerr << "instance start: --wine-bin is only valid for wine prefixes.\n";
+                std::cerr << "instance start: --windows-runtime-bin is only valid for Windows instances.\n";
                 return 2;
             }
             if (daemon_mode) {
-                std::cerr << "instance start: --daemon is only valid for wine prefixes for now.\n";
+                std::cerr << "instance start: --daemon is only valid for Windows instances for now.\n";
                 return 2;
             }
 
@@ -915,7 +934,7 @@ int main(int argc, char** argv)
             }
             launch_cfg.active_prefix = active_prefix;
             std::string prefix_kind =
-                muplar::runtime::prefix::to_string(active_prefix->kind);
+                prefix_kind_display_string(active_prefix->kind);
             std::string guest_arch =
                 muplar::runtime::prefix::to_string(active_prefix->arch);
             if (!launch_cfg.quiet) {
@@ -926,8 +945,12 @@ int main(int argc, char** argv)
                           << " root=" << active_prefix->root.string()
                           << " rootfs=" << active_prefix->rootfs.string() << "\n";
                 if (!active_prefix->runtime_sysroot.empty()) {
-                    std::cerr << "[Prefix] runtime sysroot="
-                              << active_prefix->runtime_sysroot.string() << "\n";
+                    if (active_prefix->kind == muplar::runtime::prefix::PrefixKind::Wine) {
+                        std::cerr << "[Prefix] Windows compatibility runtime=configured\n";
+                    } else {
+                        std::cerr << "[Prefix] runtime sysroot="
+                                  << active_prefix->runtime_sysroot.string() << "\n";
+                    }
                 }
             }
         } catch (const std::exception& e) {

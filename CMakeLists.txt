@@ -151,38 +151,36 @@ ExternalProject_Add(dxmt_external
 
 add_custom_target(dxmt_lib DEPENDS dxmt_external)
 
-# =========================================
-# BusyBox: cross-compiles static shells
-# =========================================
-set(BUSYBOX_BUILD_SHELL ${CMAKE_SOURCE_DIR}/tools/build-busybox.sh)
-set(BUSYBOX_AARCH64_BIN ${CMAKE_BINARY_DIR}/bin/busybox_aarch64)
-set(BUSYBOX_X86_64_BIN  ${CMAKE_BINARY_DIR}/bin/busybox_x86_64)
 
-ExternalProject_Add(busybox_external
-    DOWNLOAD_COMMAND ""
-    SOURCE_DIR      ${CMAKE_SOURCE_DIR}/third_party/busybox
-    CONFIGURE_COMMAND ""
-    BUILD_COMMAND   /bin/zsh ${BUSYBOX_BUILD_SHELL}
-    INSTALL_COMMAND ""
-    BUILD_IN_SOURCE 0
-    USES_TERMINAL_BUILD YES
-    BINARY_DIR      ${CMAKE_BINARY_DIR}
-    BUILD_BYPRODUCTS
-        ${BUSYBOX_AARCH64_BIN}
-        ${BUSYBOX_X86_64_BIN}
-)
 
-add_custom_target(busybox_bin DEPENDS busybox_external)
+# =========================================
+# Linux Bootstrap: pre-downloaded Ubuntu Base rootfs
+# Provides real distro coreutils for Linux instances
+# (replaces BusyBox for Linux; Android still uses BusyBox)
+# Run tools/setup-linux-bootstrap.sh once to download.
+# =========================================
+set(LINUX_BOOTSTRAP_DIR ${CMAKE_SOURCE_DIR}/third_party/linux-bootstrap)
+set(LINUX_BOOTSTRAP_AARCH64 ${LINUX_BOOTSTRAP_DIR}/linux-bootstrap-aarch64.tar.gz)
+set(LINUX_BOOTSTRAP_X86_64  ${LINUX_BOOTSTRAP_DIR}/linux-bootstrap-x86_64.tar.gz)
+
+if(EXISTS "${LINUX_BOOTSTRAP_AARCH64}" OR EXISTS "${LINUX_BOOTSTRAP_X86_64}")
+    message(STATUS "Linux bootstrap: found")
+    set(MUPLAR_HAS_LINUX_BOOTSTRAP ON)
+else()
+    message(STATUS "Linux bootstrap: not found in source tree "
+        "(will be downloaded dynamically at runtime if needed)")
+    set(MUPLAR_HAS_LINUX_BOOTSTRAP OFF)
+endif()
 
 # =========================================
 # Wawona: Wayland compositor
 # =========================================
-set(WAWONA_BUILD_SHELL ${CMAKE_SOURCE_DIR}/tools/build-wawona.sh)
+set(WAWONA_BUILD_SHELL ${CMAKE_SOURCE_DIR}/tools/build-muplar-wayland.sh)
 set(WAWONA_BIN ${CMAKE_BINARY_DIR}/bin/wawona)
 
 ExternalProject_Add(wawona_external
     DOWNLOAD_COMMAND ""
-    SOURCE_DIR      ${CMAKE_SOURCE_DIR}/third_party/wawona
+    SOURCE_DIR      ${CMAKE_SOURCE_DIR}/third_party/muplar-wayland
     CONFIGURE_COMMAND ""
     BUILD_COMMAND   sh ${WAWONA_BUILD_SHELL}
     INSTALL_COMMAND ""
@@ -224,8 +222,8 @@ add_custom_target(egl_gles_stubs_bin DEPENDS egl_gles_stubs_external)
 
 set(MUPLAR_WINE_PREFIX_DIR ${WINE_PREFIX_DIR})
 set(MUPLAR_HAS_WINE ON)
-message(STATUS "Wine backend: enabled")
-message(STATUS "Wine prefix:  ${WINE_PREFIX_DIR}")
+message(STATUS "Muplar Windows Compatibility: enabled")
+message(STATUS "Windows compatibility runtime: configured")
 
 # =========================================
 # Global include directories

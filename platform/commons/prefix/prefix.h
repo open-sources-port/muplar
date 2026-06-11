@@ -39,6 +39,7 @@ struct PrefixLayout {
     std::filesystem::path apk_cache_dir;
     std::filesystem::path logs_dir;
     std::filesystem::path runtime_sysroot;
+    bool logging = true;
 };
 
 std::filesystem::path muplar_home();

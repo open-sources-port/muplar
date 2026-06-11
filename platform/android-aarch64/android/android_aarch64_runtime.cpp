@@ -438,19 +438,76 @@ int AndroidAarch64Runtime::run(const PlatformLaunchConfig& config)
         guest_cfg.host_cwd = default_host_cwd(*config.active_prefix).string();
     }
     
-    if (!guest_cfg.sysroot.empty() && !config.input_path.empty() && config.input_path[0] == '/') {
-        std::filesystem::path host_candidate = std::filesystem::path(guest_cfg.sysroot) / config.input_path.substr(1);
-        std::error_code ec;
-        if (std::filesystem::exists(host_candidate, ec)) {
-            guest_cfg.elf_path = host_candidate.string();
-            guest_cfg.guest_elf_path = config.input_path;
+    std::string resolved_elf_path = config.input_path;
+    std::string resolved_guest_elf_path = "";
+
+    if (!config.input_path.empty()) {
+        if (config.input_path[0] == '/') {
+            // Absolute path
+            if (!guest_cfg.sysroot.empty()) {
+                std::filesystem::path host_candidate = std::filesystem::path(guest_cfg.sysroot) / config.input_path.substr(1);
+                std::error_code ec;
+                if (std::filesystem::exists(host_candidate, ec)) {
+                    resolved_elf_path = host_candidate.string();
+                    resolved_guest_elf_path = config.input_path;
+                }
+            }
+        } else if (config.input_path.find('/') == std::string::npos) {
+            // Relative command name, look up in guest PATH
+            std::vector<std::string> search_dirs;
+            if (config.active_prefix) {
+                if (config.active_prefix->kind == prefix::PrefixKind::Android) {
+                    search_dirs = { "/system/bin", "/system/xbin", "/bin" };
+                } else if (config.active_prefix->kind == prefix::PrefixKind::Linux) {
+                    search_dirs = { "/bin", "/usr/bin", "/sbin", "/usr/sbin" };
+                } else if (config.active_prefix->kind == prefix::PrefixKind::Wine) {
+                    search_dirs = { "/bin", "/usr/bin" };
+                }
+            } else {
+                search_dirs = { "/bin", "/usr/bin", "/system/bin" };
+            }
+
+            for (const auto& dir : search_dirs) {
+                if (guest_cfg.sysroot.empty()) continue;
+                std::string rel_dir = (dir[0] == '/') ? dir.substr(1) : dir;
+                std::filesystem::path host_candidate = std::filesystem::path(guest_cfg.sysroot) / rel_dir / config.input_path;
+                std::error_code ec;
+                if (std::filesystem::exists(host_candidate, ec)) {
+                    resolved_elf_path = host_candidate.string();
+                    resolved_guest_elf_path = (dir[0] == '/') ? (dir + "/" + config.input_path) : ("/" + dir + "/" + config.input_path);
+                    break;
+                }
+            }
+        } else {
+            // Relative path with directories (e.g., ./foo or bin/foo)
+            std::filesystem::path base_dir = std::filesystem::current_path();
+            if (config.active_prefix) {
+                base_dir = default_host_cwd(*config.active_prefix);
+            }
+            std::filesystem::path host_candidate = base_dir / config.input_path;
+            std::error_code ec;
+            if (std::filesystem::exists(host_candidate, ec)) {
+                resolved_elf_path = host_candidate.string();
+                if (!guest_cfg.sysroot.empty() && resolved_elf_path.rfind(guest_cfg.sysroot, 0) == 0) {
+                    resolved_guest_elf_path = resolved_elf_path.substr(guest_cfg.sysroot.length());
+                    if (resolved_guest_elf_path.empty() || resolved_guest_elf_path[0] != '/') {
+                        resolved_guest_elf_path = "/" + resolved_guest_elf_path;
+                    }
+                }
+            }
         }
     }
-    
-    if (guest_cfg.guest_elf_path.empty() && !guest_cfg.sysroot.empty() && guest_cfg.elf_path.rfind(guest_cfg.sysroot, 0) == 0) {
-        guest_cfg.guest_elf_path = guest_cfg.elf_path.substr(guest_cfg.sysroot.length());
-        if (guest_cfg.guest_elf_path.empty() || guest_cfg.guest_elf_path[0] != '/') {
-            guest_cfg.guest_elf_path = "/" + guest_cfg.guest_elf_path;
+
+    if (!resolved_guest_elf_path.empty()) {
+        guest_cfg.elf_path = resolved_elf_path;
+        guest_cfg.guest_elf_path = resolved_guest_elf_path;
+    } else {
+        guest_cfg.elf_path = resolved_elf_path;
+        if (guest_cfg.guest_elf_path.empty() && !guest_cfg.sysroot.empty() && guest_cfg.elf_path.rfind(guest_cfg.sysroot, 0) == 0) {
+            guest_cfg.guest_elf_path = guest_cfg.elf_path.substr(guest_cfg.sysroot.length());
+            if (guest_cfg.guest_elf_path.empty() || guest_cfg.guest_elf_path[0] != '/') {
+                guest_cfg.guest_elf_path = "/" + guest_cfg.guest_elf_path;
+            }
         }
     }
     

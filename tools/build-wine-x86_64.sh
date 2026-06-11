@@ -11,12 +11,12 @@ WINE_EXE="${WINE_PREFIX_DIR}/bin/wine"
 BREW_PREFIX="/usr/local"
 
 if [ -x "${WINE_EXE}" ]; then
-    echo "== build_wine: Wine already installed, skipping =="
+    echo "== build_windows_compat: Muplar Windows Compatibility already installed, skipping =="
     exit 0
 fi
 
 if [ "$(uname -m)" != "x86_64" ]; then
-    echo "== build_wine: restarting under Rosetta x86_64 =="
+    echo "== build_windows_compat: restarting under Rosetta x86_64 =="
     exec arch -x86_64 /bin/zsh "$0" "$@"
     echo "ERROR: failed to restart under Rosetta"
     exit 1
@@ -93,7 +93,7 @@ require_file() {
     fi
 }
 
-echo "== build_wine: checking environment =="
+echo "== build_windows_compat: checking environment =="
 uname -m
 which clang
 which pkg-config
@@ -109,11 +109,11 @@ require_pkg vulkan
 require_file "${BREW_PREFIX}/include/vulkan/vulkan.h"
 require_file "${BREW_PREFIX}/lib/libvulkan.dylib"
 
-echo "== build_wine: freetype =="
+echo "== build_windows_compat: freetype =="
 pkg-config --cflags freetype2
 pkg-config --libs freetype2
 
-echo "== build_wine: vulkan =="
+echo "== build_windows_compat: vulkan =="
 pkg-config --cflags vulkan
 pkg-config --libs vulkan
 
@@ -124,13 +124,13 @@ export VULKAN_LIBS="$(pkg-config --libs vulkan)"
 
 mkdir -p "$WINE_BUILD_DIR"
 
-echo "== build_wine: running configure =="
+echo "== build_windows_compat: running configure =="
 cd "$WINE_BUILD_DIR"
 rm -f config.cache
 
 "$WINE_SRC_DIR/configure" \
     --prefix="$WINE_PREFIX_DIR" \
-    --enable-win64 \
+    --enable-archs=i386,x86_64 \
     --without-x \
     --without-wayland \
     --with-freetype \
@@ -139,20 +139,24 @@ rm -f config.cache
     --with-vulkan \
     --disable-tests
 
-echo "== build_wine: verifying Vulkan configure result =="
+echo "== build_windows_compat: verifying Vulkan configure result =="
 if grep -qi "vulkan.*no" config.log; then
     echo "ERROR: configure still reports Vulkan as missing"
     grep -i vulkan config.log || true
     exit 1
 fi
 
-echo "== build_wine: running make =="
+echo "== build_windows_compat: running make =="
 make -j"$(sysctl -n hw.logicalcpu)"
 
-echo "== build_wine: running make install =="
+echo "== build_windows_compat: running make install =="
 make install
 
-echo "== build_wine: checking installed Vulkan Wine files =="
-find "$WINE_PREFIX_DIR" -iname "vulkan-1.dll*" -o -iname "winevulkan*"
+echo "== build_windows_compat: checking installed Vulkan compatibility files =="
+if [ -n "$(find "$WINE_PREFIX_DIR" \( -iname "vulkan-1.dll*" -o -iname "winevulkan*" \) -print -quit)" ]; then
+    echo "== build_windows_compat: Vulkan compatibility files found =="
+else
+    echo "== build_windows_compat: Vulkan compatibility files not found =="
+fi
 
-echo "== build_wine: done =="
+echo "== build_windows_compat: done =="
