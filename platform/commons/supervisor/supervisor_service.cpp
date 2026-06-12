@@ -39,6 +39,14 @@
    static char** get_environ() { return environ; }
 #endif
 
+#ifdef __APPLE__
+extern "C" {
+void MuplarWawonaStartInProcess(const char* socket_name);
+void MuplarWawonaStopInProcess(void);
+bool MuplarWawonaIsRunningInProcess(void);
+}
+#endif
+
 namespace muplar::supervisor {
 
 using namespace std::chrono;
@@ -243,6 +251,40 @@ WawonaGuard::~WawonaGuard()
     stop();
 }
 
+bool WawonaGuard::wait_for_socket(int timeout_ms) const
+{
+    return poll_for_socket(wayland_socket_path(), timeout_ms);
+}
+
+
+#ifdef __APPLE__
+pid_t WawonaGuard::spawn()
+{
+    return 0;
+}
+
+void WawonaGuard::start()
+{
+    if (!MuplarWawonaIsRunningInProcess()) {
+        MuplarWawonaStartInProcess("wayland-0");
+    }
+}
+
+void WawonaGuard::stop()
+{
+    if (MuplarWawonaIsRunningInProcess()) {
+        MuplarWawonaStopInProcess();
+    }
+}
+
+bool WawonaGuard::is_running() const
+{
+    return MuplarWawonaIsRunningInProcess();
+}
+
+void WawonaGuard::apply_backoff() {}
+void WawonaGuard::monitor_loop() {}
+#else
 pid_t WawonaGuard::spawn()
 {
     fs::path wawona = resolve_wawona_bin();
@@ -320,11 +362,6 @@ bool WawonaGuard::is_running() const
 {
     pid_t pid = pid_.load();
     return pid > 0 && kill(pid, 0) == 0;
-}
-
-bool WawonaGuard::wait_for_socket(int timeout_ms) const
-{
-    return poll_for_socket(wayland_socket_path(), timeout_ms);
 }
 
 void WawonaGuard::apply_backoff()
@@ -414,6 +451,7 @@ void WawonaGuard::monitor_loop()
     if (stop_pipe[1] >= 0) close(stop_pipe[1]);
     std::fprintf(stderr, "[WawonaGuard] monitor thread exiting\n");
 }
+#endif
 
 // ---------------------------------------------------------------------------
 // WineServerGuard
@@ -508,6 +546,7 @@ pid_t WineServerGuard::spawn()
         return -1;
     }
     if (pid == 0) {
+        umask(0077);
         // Set WINEPREFIX before exec
         setenv("WINEPREFIX", layout_.rootfs.string().c_str(), 1);
         setenv("WINEDEBUG", "-all", 1);

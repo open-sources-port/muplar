@@ -76,6 +76,35 @@ is_case_insensitive_dir() {
     [[ "$count" == "1" ]]
 }
 
+ensure_resolver_config() {
+    local resolv="$1/etc/resolv.conf"
+    if [[ -L "$resolv" || ! -s "$resolv" ]]; then
+        rm -f "$resolv"
+        mkdir -p "$1/etc"
+        cat >"$resolv" <<'EOF'
+nameserver 1.1.1.1
+nameserver 8.8.8.8
+EOF
+    fi
+}
+
+ensure_dpkg_casefold_config() {
+    local root="$1"
+    if ! is_case_insensitive_dir "$root"; then
+        return
+    fi
+    local dir="$root/etc/dpkg/dpkg.cfg.d"
+    mkdir -p "$dir"
+    cat >"$dir/muplar-casefold-terminfo" <<'EOF'
+# Muplar rootfs lives on a case-insensitive host filesystem.
+# Uppercase terminfo aliases collide with lowercase entries.
+path-exclude=/usr/share/terminfo/[A-Z]/*
+path-exclude=/usr/share/terminfo/*/*[A-Z]*
+path-exclude=/lib/terminfo/[A-Z]/*
+path-exclude=/lib/terminfo/*/*[A-Z]*
+EOF
+}
+
 need_arg() {
     local flag="$1"
     local value="${2:-}"
@@ -571,6 +600,10 @@ fi
 if [[ -d "$rootfs/home" ]]; then
     chmod u+rwx "$rootfs/home"
 fi
+mkdir -p "$rootfs/tmp" "$rootfs/var/tmp"
+chmod 1777 "$rootfs/tmp" "$rootfs/var/tmp"
+ensure_resolver_config "$rootfs"
+ensure_dpkg_casefold_config "$rootfs"
 
 echo "[linux-rootfs] Refreshing Muplar scaffold"
 MUPLAR_SKIP_LINUX_BOOTSTRAP=1 "$MUP" "${prefix_create_args[@]}" >/dev/null

@@ -45,7 +45,7 @@ struct RestartPolicy {
     // Stop restarting after this many consecutive crashes within
     // crash_window_sec seconds. 0 = restart forever.
     int max_crashes_in_window = 5;
-    int crash_window_sec = 10;
+    int crash_window_sec = 120;
 };
 
 // ---------------------------------------------------------------------------

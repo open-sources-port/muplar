@@ -10,6 +10,7 @@
 #include <string>
 #include <sys/time.h>
 #include <system_error>
+#include <cerrno>
 #include <unistd.h>
 #include <dlfcn.h>
 #include <vector>
@@ -1482,7 +1483,12 @@ void AndroidRuntime::register_libc_stubs()
         });
 
     add("libc.so", "isatty", HVC_ISATTY,
-        [](guest_t*, const uint64_t[8]) -> uint64_t { return 0; });
+        [](guest_t*, const uint64_t a[8]) -> uint64_t {
+            int32_t fd = static_cast<int32_t>(a[0]);
+            if (fd >= 0 && fd <= 2)
+                return ::isatty(fd) ? 1 : 0;
+            return 0;
+        });
     add("libc.so", "fileno", HVC_FILENO,
         [](guest_t*, const uint64_t[8]) -> uint64_t { return guest_negative_one(); });
     add("libc.so", "getauxval", HVC_GETAUXVAL,
@@ -2241,6 +2247,24 @@ void AndroidRuntime::register_libc_stubs()
     add("libc.so", "read", HVC_READ,
         [this](guest_t* g, const uint64_t a[8]) -> uint64_t {
             int32_t fd = static_cast<int32_t>(a[0]);
+            if (fd == 0) {
+                if (!a[1] && a[2])
+                    return guest_neg_errno(14); // EFAULT
+
+                size_t requested = a[2] > SIZE_MAX ? SIZE_MAX : static_cast<size_t>(a[2]);
+                std::vector<uint8_t> bytes(requested);
+                while (true) {
+                    ssize_t n = ::read(STDIN_FILENO, bytes.data(), bytes.size());
+                    if (n < 0 && errno == EINTR)
+                        continue;
+                    if (n < 0)
+                        return guest_neg_errno(errno);
+                    if (n > 0 && guest_write(g, a[1], bytes.data(), static_cast<size_t>(n)) != 0)
+                        return guest_neg_errno(14);
+                    return static_cast<uint64_t>(n);
+                }
+            }
+
             HostPipe* pipe = pipe_for_fd(fd);
             if (!pipe || fd != pipe->read_fd || !pipe->read_open)
                 return guest_neg_errno(9); // EBADF
@@ -2274,8 +2298,11 @@ void AndroidRuntime::register_libc_stubs()
                 return guest_neg_errno(14);
 
             if (fd == 1 || fd == 2) {
-                if (!bytes.empty())
-                    std::fwrite(bytes.data(), 1, bytes.size(), stderr);
+                if (!bytes.empty()) {
+                    FILE* out = (fd == 1) ? stdout : stderr;
+                    std::fwrite(bytes.data(), 1, bytes.size(), out);
+                    std::fflush(out);
+                }
                 return static_cast<uint64_t>(count);
             }
 

@@ -451,6 +451,33 @@ static void write_text_file_if_missing(const std::filesystem::path& path,
         out << content;
 }
 
+static void write_text_file_if_missing_or_empty(const std::filesystem::path& path,
+                                                const std::string& content)
+{
+    std::error_code ec;
+    bool should_write = !std::filesystem::exists(path, ec);
+    ec.clear();
+
+    if (!should_write && std::filesystem::is_symlink(path, ec)) {
+        should_write = true;
+        std::filesystem::remove(path, ec);
+        ec.clear();
+    }
+
+    if (!should_write && std::filesystem::is_regular_file(path, ec)) {
+        auto size = std::filesystem::file_size(path, ec);
+        should_write = !ec && size == 0;
+    }
+
+    if (!should_write)
+        return;
+
+    std::filesystem::create_directories(path.parent_path(), ec);
+    std::ofstream out(path, std::ios::trunc);
+    if (out)
+        out << content;
+}
+
 static std::string join_strings(const std::vector<std::string>& values,
                                 const char* separator)
 {
@@ -1331,6 +1358,22 @@ void ensure_layout_dirs(const PrefixLayout& layout)
         std::filesystem::create_directories(layout.rootfs / "etc");
         std::filesystem::create_directories(layout.rootfs / "home" / "muplar");
         std::filesystem::create_directories(layout.rootfs / "var");
+        std::filesystem::create_directories(layout.rootfs / "tmp");
+        std::filesystem::create_directories(layout.rootfs / "var" / "tmp");
+        {
+            std::error_code ec;
+            auto tmpPerms = std::filesystem::perms::owner_all |
+                            std::filesystem::perms::group_all |
+                            std::filesystem::perms::others_all |
+                            std::filesystem::perms::sticky_bit;
+            std::filesystem::permissions(layout.rootfs / "tmp", tmpPerms,
+                                         std::filesystem::perm_options::replace,
+                                         ec);
+            ec.clear();
+            std::filesystem::permissions(layout.rootfs / "var" / "tmp", tmpPerms,
+                                         std::filesystem::perm_options::replace,
+                                         ec);
+        }
         {
             auto profile =
                 linux_common::distro_profile(layout.distro.empty() ? "ubuntu"
@@ -1339,6 +1382,10 @@ void ensure_layout_dirs(const PrefixLayout& layout)
                                        linux_common::os_release_content(profile));
             write_text_file_if_missing(layout.rootfs / "etc" / "hostname",
                                        layout.name + "\n");
+            write_text_file_if_missing_or_empty(
+                layout.rootfs / "etc" / "resolv.conf",
+                "nameserver 1.1.1.1\n"
+                "nameserver 8.8.8.8\n");
             write_text_file_if_missing(
                 layout.rootfs / "etc" / "profile",
                 "export HOME=${HOME:-/home/muplar}\n"
@@ -1349,6 +1396,17 @@ void ensure_layout_dirs(const PrefixLayout& layout)
                 layout.rootfs / "etc" / "muplar-default-packages",
                 "# Distro default packages Muplar expects when this rootfs is provisioned.\n"
                 "terminal=" + join_strings(profile.terminal_packages, ",") + "\n");
+            if (is_case_insensitive_directory(layout.rootfs)) {
+                std::filesystem::create_directories(layout.rootfs / "etc" / "dpkg" / "dpkg.cfg.d");
+                write_text_file_if_missing(
+                    layout.rootfs / "etc" / "dpkg" / "dpkg.cfg.d" / "muplar-casefold-terminfo",
+                    "# Muplar rootfs lives on a case-insensitive host filesystem.\n"
+                    "# Uppercase terminfo aliases collide with lowercase entries.\n"
+                    "path-exclude=/usr/share/terminfo/[A-Z]/*\n"
+                    "path-exclude=/usr/share/terminfo/*/*[A-Z]*\n"
+                    "path-exclude=/lib/terminfo/[A-Z]/*\n"
+                    "path-exclude=/lib/terminfo/*/*[A-Z]*\n");
+            }
         }
 
         // Sync host home directories
