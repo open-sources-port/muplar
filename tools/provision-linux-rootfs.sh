@@ -105,6 +105,86 @@ path-exclude=/lib/terminfo/*/*[A-Z]*
 EOF
 }
 
+ensure_arch_pacman_sandbox_config() {
+    local root="$1"
+    local conf="$root/etc/pacman.conf"
+    [[ -f "$conf" ]] || return
+
+    # Muplar/elfuse does not currently emulate Linux Landlock, and pacman's
+    # sandbox setup treats that as fatal. Keep package downloads functional in
+    # Arch rootfses by disabling the sandbox features that require it. Also keep
+    # downloads single-lane and non-animated; Muplar's current Linux networking
+    # path is more reliable without pacman's parallel progress UI.
+    #
+    # pacman's DownloadUser path currently trips Muplar's fork/drop-privilege
+    # emulation during package retrieval. gpg-agent also cannot create its Unix
+    # socket yet, so use signature verification with TrustAll over the imported
+    # Arch Linux ARM keyring instead of pacman-key local signing.
+    sed -i.bak \
+        -e 's/^#DisableSandboxFilesystem/DisableSandboxFilesystem/' \
+        -e 's/^#DisableSandboxSyscalls/DisableSandboxSyscalls/' \
+        -e 's/^#NoProgressBar/NoProgressBar/' \
+        -e 's/^ParallelDownloads[[:space:]]*=.*/ParallelDownloads = 1/' \
+        -e 's/^[[:space:]]*DownloadUser[[:space:]]*=.*/#DownloadUser = alpm/' \
+        -e 's/^SigLevel[[:space:]]*=.*/SigLevel    = Required DatabaseOptional TrustAll/' \
+        "$conf"
+}
+
+ensure_arch_mirror_config() {
+    local root="$1"
+    local mirrorlist="$root/etc/pacman.d/mirrorlist"
+    [[ -f "$mirrorlist" ]] || return
+
+    if grep -q 'Muplar preferred mirrors' "$mirrorlist"; then
+        return
+    fi
+
+    local tmp
+    tmp="$(mktemp)"
+    {
+        cat <<'EOF'
+# Muplar preferred mirrors
+Server = https://mirror.csclub.uwaterloo.ca/archlinuxarm/$arch/$repo
+Server = http://mirror.archlinuxarm.org/$arch/$repo
+
+EOF
+        sed '/^Server =/s/^/# /' "$mirrorlist"
+    } >"$tmp"
+    mv "$tmp" "$mirrorlist"
+}
+
+ensure_arch_pacman_keyring() {
+    local root="$1"
+    local keyring="$root/usr/share/pacman/keyrings/archlinuxarm.gpg"
+    local gpgdir="$root/etc/pacman.d/gnupg"
+    [[ -f "$keyring" ]] || return
+
+    rm -rf "$gpgdir"
+    mkdir -p "$gpgdir"
+
+    ELFUSE_GUEST_UID=0 ELFUSE_GUEST_GID=0 "$MUP" --quiet --prefix "$PREFIX" \
+        /bin/sh -lc 'set -e
+            gpg --dearmor --yes --output /etc/pacman.d/gnupg/pubring.gpg /usr/share/pacman/keyrings/archlinuxarm.gpg
+            : > /etc/pacman.d/gnupg/secring.gpg
+            : > /etc/pacman.d/gnupg/trustdb.gpg
+            chmod 644 /etc/pacman.d/gnupg/pubring.gpg /etc/pacman.d/gnupg/trustdb.gpg
+            chmod 600 /etc/pacman.d/gnupg/secring.gpg
+        '
+}
+
+ensure_arch_profile_config() {
+    local root="$1"
+    local gpm="$root/etc/profile.d/gpm.sh"
+    [[ -f "$gpm" ]] || return
+
+    # Muplar command launches do not currently expose a Linux ttyname. Arch's
+    # gpm profile hook probes tty on every login shell, so silence only that
+    # probe while preserving its behavior on real /dev/ttyN consoles.
+    sed -i.bak \
+        -e 's|case $( /usr/bin/tty ) in|case $( /usr/bin/tty 2>/dev/null ) in|' \
+        "$gpm"
+}
+
 need_arg() {
     local flag="$1"
     local value="${2:-}"
@@ -604,9 +684,21 @@ mkdir -p "$rootfs/tmp" "$rootfs/var/tmp"
 chmod 1777 "$rootfs/tmp" "$rootfs/var/tmp"
 ensure_resolver_config "$rootfs"
 ensure_dpkg_casefold_config "$rootfs"
+if [[ "$DISTRO" == "arch" ]]; then
+    # ensure_arch_pacman_sandbox_config "$rootfs"
+    ensure_arch_mirror_config "$rootfs"
+    ensure_arch_profile_config "$rootfs"
+fi
 
 echo "[linux-rootfs] Refreshing Muplar scaffold"
 MUPLAR_SKIP_LINUX_BOOTSTRAP=1 "$MUP" "${prefix_create_args[@]}" >/dev/null
+ensure_resolver_config "$rootfs"
+if [[ "$DISTRO" == "arch" ]]; then
+    ensure_arch_pacman_keyring "$rootfs"
+    #ensure_arch_pacman_sandbox_config "$rootfs"
+    ensure_arch_mirror_config "$rootfs"
+    ensure_arch_profile_config "$rootfs"
+fi
 
 cat >"$rootfs/etc/muplar-provisioned" <<EOF
 distro=$DISTRO

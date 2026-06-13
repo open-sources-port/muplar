@@ -77,6 +77,7 @@ ExternalProject_Add(elfuse_external
     BUILD_COMMAND   ${CMAKE_COMMAND} -P ${ELFUSE_BUILD_SCRIPT}
     INSTALL_COMMAND ""
     BUILD_IN_SOURCE 0
+    BUILD_ALWAYS    TRUE
     BUILD_BYPRODUCTS
         ${ELFUSE_BUILD_DIR}/shim_blob.h
         ${ELFUSE_BUILD_DIR}/version.h

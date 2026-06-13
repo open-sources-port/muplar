@@ -151,10 +151,6 @@ add_custom_target(populate_manager_bundle ALL
     COMMAND bash -c
         "if [ -f '${CMAKE_BINARY_DIR}/bin/mup' ]; then \
              cp -f '${CMAKE_BINARY_DIR}/bin/mup' '${APP_CONTENTS}/MacOS/mup'; \
-             install_name_tool -change ./libEGL.dylib @executable_path/../Frameworks/angle/libEGL.dylib '${APP_CONTENTS}/MacOS/mup'; \
-             install_name_tool -change ./libGLESv2.dylib @executable_path/../Frameworks/angle/libGLESv2.dylib '${APP_CONTENTS}/MacOS/mup'; \
-             install_name_tool -change @rpath/libEGL.dylib @executable_path/../Frameworks/angle/libEGL.dylib '${APP_CONTENTS}/MacOS/mup'; \
-             install_name_tool -change @rpath/libGLESv2.dylib @executable_path/../Frameworks/angle/libGLESv2.dylib '${APP_CONTENTS}/MacOS/mup'; \
              codesign --entitlements '${CMAKE_SOURCE_DIR}/mup.entitlements' --force -s - '${APP_CONTENTS}/MacOS/mup'; \
          fi"
 
