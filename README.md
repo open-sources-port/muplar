@@ -32,43 +32,6 @@ Mular aims to become a unified runtime layer where:
 
 ---
 
-## 🛠 Dependencies
-
-Muplar currently depends on the following tools and libraries:
-
-| Dependency | Purpose |
-|---|---|
-| Android NDK | Provides Clang toolchain, linker, and Android system headers/libraries |
-| aarch64-elf-binutils | ELF inspection and binary utilities (`readelf`, `objdump`, etc.) |
-| CMake | Cross-platform build system |
-| Ninja | Fast build backend used by CMake |
-| Apple Hypervisor Framework | Native virtualization support on macOS |
-| Xcode Command Line Tools | macOS compiler and development utilities |
-
----
-
-### macOS Installation
-
-#### Install Xcode Command Line Tools
-
-```bash
-xcode-select --install
-```
-
-### Install Homebrew Dependencies
-```bash
-brew install android-ndk cmake ninja aarch64-elf-binutils
-```
-Then export the environment variable:
-``` bash
-export ANDROID_NDK_HOME=/opt/homebrew/share/android-ndk
-```
----
-
-## 🏗 Architecture Overview
-![Muplar Architecture](https://drive.google.com/uc?export=view&id=1NaxCQf9Gedzkexm8vMlpUI8O7F5fFFkG)
-
-
 ## 🏗 Muplar Progress
 | Platform | Instance | Capability | Status |
 |---|---|---|---|
@@ -116,8 +79,46 @@ export ANDROID_NDK_HOME=/opt/homebrew/share/android-ndk
 | | Fedora X86_64 | All functions | ⏳ Not started |
 | | openSUSE X86_64 | All functions | ⏳ Not started |
 
+---
+
+## 🛠 Dependencies
+
+Muplar development currently depends on the following tools and libraries:
+
+| Dependency | Purpose |
+|---|---|
+| Android NDK | Provides Clang toolchain, linker, and Android system headers/libraries |
+| aarch64-elf-binutils | ELF inspection and binary utilities (`readelf`, `objdump`, etc.) |
+| CMake | Cross-platform build system |
+| Ninja | Fast build backend used by CMake |
+| Apple Hypervisor Framework | Native virtualization support on macOS |
+| Xcode Command Line Tools | macOS compiler and development utilities |
+
+---
+
+### macOS Installation
+
+#### Install Xcode Command Line Tools
+
+```bash
+xcode-select --install
+```
+
+### Install Homebrew Dependencies
+```bash
+brew install android-ndk cmake ninja aarch64-elf-binutils
+```
+Then export the environment variable:
+``` bash
+export ANDROID_NDK_HOME=/opt/homebrew/share/android-ndk
+```
+---
+
+## 🏗 Architecture Overview
+![Muplar Architecture](https://drive.google.com/uc?export=view&id=1NaxCQf9Gedzkexm8vMlpUI8O7F5fFFkG)
+
 ## 🏗 Android Progress
-![Muplar Android Roadmap](./muplar_roadmap_to_android_app.svg)
+![Muplar Android Roadmap](./docs/muplar_roadmap_to_android_app.svg)
 
 Visual summaries:
 
