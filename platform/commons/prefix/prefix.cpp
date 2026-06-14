@@ -1688,13 +1688,37 @@ void register_instance(const PrefixLayout& layout)
     write_instance_registry(filtered);
 }
 
-void unregister_instance(const PrefixLayout& layout)
+bool is_managed_prefix_store_child(const std::filesystem::path& root)
+{
+    std::filesystem::path managed_base =
+        absolute_normal_path(muplar_home() / "prefixes");
+    std::filesystem::path normalized_root = absolute_normal_path(root);
+    return normalized_root.parent_path() == managed_base &&
+           !normalized_root.filename().empty();
+}
+
+bool is_registered_instance_root_or_name(const std::filesystem::path& root,
+                                         const std::string& name)
+{
+    for (const auto& entry : read_instance_registry()) {
+        if ((!name.empty() && entry.name == name) ||
+            same_path(entry.root, root)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+void unregister_instance_root_or_name(const std::filesystem::path& root,
+                                      const std::string& name)
 {
     std::vector<InstanceRegistryEntry> entries = read_instance_registry();
     std::vector<InstanceRegistryEntry> filtered;
     for (const auto& entry : entries) {
-        if (entry.name == layout.name || same_path(entry.root, layout.root))
+        if ((!name.empty() && entry.name == name) ||
+            same_path(entry.root, root)) {
             continue;
+        }
         filtered.push_back(entry);
     }
     write_instance_registry(filtered);
@@ -2011,20 +2035,23 @@ PrefixLayout clone_prefix_to_root(const std::string& source_spec,
 
 void delete_prefix(const std::string& spec)
 {
-    PrefixLayout layout = open_prefix(spec, {}, false);
-    if (!is_prefix_root(layout.root)) {
+    std::filesystem::path root = resolve_prefix_root(spec);
+    std::string name = looks_like_path(spec) ? prefix_name_from_root(root) : spec;
+    bool registered = is_registered_instance_root_or_name(root, name);
+    if (!is_prefix_root(root) && !registered &&
+        !is_managed_prefix_store_child(root)) {
         throw std::runtime_error("not a Muplar prefix: " +
-                                 layout.root.string());
+                                 root.string());
     }
 
     std::error_code ec;
-    std::filesystem::remove_all(layout.root, ec);
+    std::filesystem::remove_all(root, ec);
     if (ec) {
         throw std::runtime_error("unable to delete prefix " +
-                                 layout.root.string() + ": " +
+                                 root.string() + ": " +
                                  ec.message());
     }
-    unregister_instance(layout);
+    unregister_instance_root_or_name(root, name);
 }
 
 // ---------------------------------------------------------------------------

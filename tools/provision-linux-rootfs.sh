@@ -23,6 +23,7 @@ fi
 TAR_BIN="${TAR:-$(command -v bsdtar || command -v tar || true)}"
 CURL_BIN="${CURL:-$(command -v curl || true)}"
 PYTHON3_BIN="${PYTHON3:-$(command -v python3 || true)}"
+AR_BIN="${AR:-$(command -v ar || true)}"
 
 PREFIX=""
 DISTRO=""
@@ -88,6 +89,46 @@ EOF
     fi
 }
 
+ensure_certificate_symlink_config() {
+    local root="$1"
+    [[ -n "$PYTHON3_BIN" ]] || return
+
+    "$PYTHON3_BIN" - "$root" <<'PY'
+import os
+import sys
+
+root = os.path.realpath(sys.argv[1])
+roots = [
+    os.path.join(root, "etc", "pki"),
+    os.path.join(root, "etc", "ssl"),
+    os.path.join(root, "etc", "ca-certificates"),
+]
+
+for base in roots:
+    if not os.path.isdir(base):
+        continue
+    for dirpath, dirnames, filenames in os.walk(base):
+        names = dirnames + filenames
+        for name in names:
+            path = os.path.join(dirpath, name)
+            if not os.path.islink(path):
+                continue
+            target = os.readlink(path)
+            if not target.startswith("/"):
+                continue
+            root_target = os.path.realpath(os.path.join(root, target.lstrip("/")))
+            if root_target != root and not root_target.startswith(root + os.sep):
+                continue
+            if not os.path.exists(root_target):
+                continue
+            rel_target = os.path.relpath(root_target, os.path.dirname(path))
+            if rel_target == target:
+                continue
+            os.unlink(path)
+            os.symlink(rel_target, path)
+PY
+}
+
 ensure_dpkg_casefold_config() {
     local root="$1"
     if ! is_case_insensitive_dir "$root"; then
@@ -105,31 +146,6 @@ path-exclude=/lib/terminfo/*/*[A-Z]*
 EOF
 }
 
-ensure_arch_pacman_sandbox_config() {
-    local root="$1"
-    local conf="$root/etc/pacman.conf"
-    [[ -f "$conf" ]] || return
-
-    # Muplar/elfuse does not currently emulate Linux Landlock, and pacman's
-    # sandbox setup treats that as fatal. Keep package downloads functional in
-    # Arch rootfses by disabling the sandbox features that require it. Also keep
-    # downloads single-lane and non-animated; Muplar's current Linux networking
-    # path is more reliable without pacman's parallel progress UI.
-    #
-    # pacman's DownloadUser path currently trips Muplar's fork/drop-privilege
-    # emulation during package retrieval. gpg-agent also cannot create its Unix
-    # socket yet, so use signature verification with TrustAll over the imported
-    # Arch Linux ARM keyring instead of pacman-key local signing.
-    sed -i.bak \
-        -e 's/^#DisableSandboxFilesystem/DisableSandboxFilesystem/' \
-        -e 's/^#DisableSandboxSyscalls/DisableSandboxSyscalls/' \
-        -e 's/^#NoProgressBar/NoProgressBar/' \
-        -e 's/^ParallelDownloads[[:space:]]*=.*/ParallelDownloads = 1/' \
-        -e 's/^[[:space:]]*DownloadUser[[:space:]]*=.*/#DownloadUser = alpm/' \
-        -e 's/^SigLevel[[:space:]]*=.*/SigLevel    = Required DatabaseOptional TrustAll/' \
-        "$conf"
-}
-
 ensure_arch_mirror_config() {
     local root="$1"
     local mirrorlist="$root/etc/pacman.d/mirrorlist"
@@ -144,8 +160,9 @@ ensure_arch_mirror_config() {
     {
         cat <<'EOF'
 # Muplar preferred mirrors
-Server = https://mirror.csclub.uwaterloo.ca/archlinuxarm/$arch/$repo
-Server = http://mirror.archlinuxarm.org/$arch/$repo
+Server = http://nj.us.mirror.archlinuxarm.org/$arch/$repo
+Server = http://fl.us.mirror.archlinuxarm.org/$arch/$repo
+Server = http://de.mirror.archlinuxarm.org/$arch/$repo
 
 EOF
         sed '/^Server =/s/^/# /' "$mirrorlist"
@@ -163,13 +180,40 @@ ensure_arch_pacman_keyring() {
     mkdir -p "$gpgdir"
 
     ELFUSE_GUEST_UID=0 ELFUSE_GUEST_GID=0 "$MUP" --quiet --prefix "$PREFIX" \
-        /bin/sh -lc 'set -e
+        /bin/sh -c 'set -e
             gpg --dearmor --yes --output /etc/pacman.d/gnupg/pubring.gpg /usr/share/pacman/keyrings/archlinuxarm.gpg
             : > /etc/pacman.d/gnupg/secring.gpg
             : > /etc/pacman.d/gnupg/trustdb.gpg
             chmod 644 /etc/pacman.d/gnupg/pubring.gpg /etc/pacman.d/gnupg/trustdb.gpg
             chmod 600 /etc/pacman.d/gnupg/secring.gpg
         '
+}
+
+ensure_arch_pacman_trust_config() {
+    local root="$1"
+    local conf="$root/etc/pacman.conf"
+    [[ -f "$conf" ]] || return
+
+    # gpg-agent cannot complete pacman-key's local-signing flow in Muplar yet.
+    # Keep package signatures required, but trust keys already imported into
+    # the local pacman keyring.
+    sed -i.bak \
+        -e 's/^SigLevel[[:space:]]*=.*/SigLevel    = Required DatabaseOptional TrustAll/' \
+        -e 's/^DownloadUser[[:space:]]*=/# DownloadUser =/' \
+        -e 's|^#XferCommand[[:space:]]*=[[:space:]]*/usr/bin/curl.*|XferCommand = /usr/bin/curl -L -C - -f -o %o %u|' \
+        "$conf"
+}
+
+ensure_arch_pacman_local_db_config() {
+    local root="$1"
+    local local_db="$root/var/lib/pacman/local"
+    [[ -d "$local_db" ]] || return
+
+    # A failed host-side extraction or interrupted pacman transaction can leave
+    # empty package database directories behind. libalpm aborts later upgrades
+    # when it tries to create the same local package directory.
+    find "$local_db" -mindepth 1 -maxdepth 1 -type d ! -name '.*' \
+        ! -exec test -f '{}/desc' ';' -print -exec rm -rf '{}' '+'
 }
 
 ensure_arch_profile_config() {
@@ -183,6 +227,216 @@ ensure_arch_profile_config() {
     sed -i.bak \
         -e 's|case $( /usr/bin/tty ) in|case $( /usr/bin/tty 2>/dev/null ) in|' \
         "$gpm"
+}
+
+install_debian_dpkg_deb_wrapper() {
+    local root="$1"
+    local dpkg_deb="$root/usr/bin/dpkg-deb"
+    [[ -x "$dpkg_deb" ]] || return
+
+    if [[ ! -x "$root/usr/bin/dpkg-deb.real" ]]; then
+        mv "$dpkg_deb" "$root/usr/bin/dpkg-deb.real"
+    fi
+
+    cat >"$dpkg_deb" <<'EOF'
+#!/bin/sh
+real=/usr/bin/dpkg-deb.real
+
+cleanup_files=
+tmp_index=0
+tmp_path=
+cleanup() {
+    for path in $cleanup_files; do
+        rm -rf "$path"
+    done
+}
+trap cleanup EXIT HUP INT TERM
+
+make_tmp_file() {
+    tmp_index=$((tmp_index + 1))
+    path="/tmp/dpkg-deb-wrapper.$$.$tmp_index"
+    : >"$path" || exit 2
+    cleanup_files="$cleanup_files $path"
+    tmp_path=$path
+}
+
+make_tmp_dir() {
+    tmp_index=$((tmp_index + 1))
+    path="/tmp/dpkg-deb-wrapper.$$.$tmp_index.dir"
+    rm -rf "$path"
+    mkdir -p "$path" || exit 2
+    cleanup_files="$cleanup_files $path"
+    tmp_path=$path
+}
+
+member_to_tar_file() {
+    deb=$1
+    kind=$2
+    out=$3
+    make_tmp_file
+    compressed=$tmp_path
+
+    for member in "$kind.tar.xz" "$kind.tar.gz" "$kind.tar.zst" "$kind.tar"; do
+        if ar p "$deb" "$member" >"$compressed" 2>/dev/null && [ -s "$compressed" ]; then
+            case "$member" in
+                *.tar.xz) xz -dc "$compressed" >"$out" || exit 2 ;;
+                *.tar.gz) gzip -dc "$compressed" >"$out" || exit 2 ;;
+                *.tar.zst) zstd -dc "$compressed" >"$out" || exit 2 ;;
+                *.tar) cat "$compressed" >"$out" || exit 2 ;;
+            esac
+            return 0
+        fi
+        : >"$compressed"
+    done
+
+    echo "dpkg-deb: error: missing $kind archive in $deb" >&2
+    exit 2
+}
+
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --threads-max=*) shift ;;
+        --threads-max) shift 2 ;;
+        --debug|--verbose|--nocheck|--root-owner-group|--no-uniform-compression|--uniform-compression) shift ;;
+        *) break ;;
+    esac
+done
+
+command=$1
+[ $# -gt 0 ] && shift
+
+case "$command" in
+    --ctrl-tarfile)
+        [ $# -eq 1 ] || exec "$real" "$command" "$@"
+        make_tmp_file
+        tarfile=$tmp_path
+        member_to_tar_file "$1" control "$tarfile"
+        cat "$tarfile"
+        ;;
+    --fsys-tarfile)
+        [ $# -eq 1 ] || exec "$real" "$command" "$@"
+        make_tmp_file
+        tarfile=$tmp_path
+        member_to_tar_file "$1" data "$tarfile"
+        cat "$tarfile"
+        ;;
+    --control|-e)
+        [ $# -ge 1 ] || exec "$real" "$command" "$@"
+        deb=$1
+        dir=${2:-DEBIAN}
+        mkdir -p "$dir" || exit 2
+        make_tmp_file
+        tarfile=$tmp_path
+        member_to_tar_file "$deb" control "$tarfile"
+        tar -xf "$tarfile" -C "$dir"
+        ;;
+    --extract|-x)
+        [ $# -eq 2 ] || exec "$real" "$command" "$@"
+        mkdir -p "$2" || exit 2
+        make_tmp_file
+        tarfile=$tmp_path
+        member_to_tar_file "$1" data "$tarfile"
+        tar -xf "$tarfile" -C "$2"
+        ;;
+    --vextract|-X)
+        [ $# -eq 2 ] || exec "$real" "$command" "$@"
+        mkdir -p "$2" || exit 2
+        make_tmp_file
+        tarfile=$tmp_path
+        member_to_tar_file "$1" data "$tarfile"
+        tar -xvf "$tarfile" -C "$2"
+        ;;
+    --info|-I)
+        [ $# -ge 1 ] || exec "$real" "$command" "$@"
+        deb=$1
+        shift
+        make_tmp_dir
+        dir=$tmp_path
+        make_tmp_file
+        tarfile=$tmp_path
+        member_to_tar_file "$deb" control "$tarfile"
+        tar -xf "$tarfile" -C "$dir" || exit 2
+        if [ $# -gt 0 ]; then
+            for field in "$@"; do
+                [ -f "$dir/$field" ] && cat "$dir/$field"
+            done
+        else
+            echo " new Debian package, version 2.0."
+            [ -f "$dir/control" ] && cat "$dir/control"
+        fi
+        ;;
+    *)
+        exec "$real" "$command" "$@"
+        ;;
+esac
+EOF
+    chmod 755 "$dpkg_deb"
+}
+
+host_extract_deb_data() {
+    local deb="$1"
+    local root="$2"
+    local tmp
+    tmp="$(mktemp -d)"
+    (
+        cd "$tmp"
+        "$AR_BIN" x "$deb"
+        if [[ -f data.tar.xz ]]; then
+            "$TAR_BIN" -xpf data.tar.xz -C "$root"
+        elif [[ -f data.tar.gz ]]; then
+            "$TAR_BIN" -xpf data.tar.gz -C "$root"
+        elif [[ -f data.tar.zst ]]; then
+            "$TAR_BIN" -xpf data.tar.zst -C "$root"
+        elif [[ -f data.tar ]]; then
+            "$TAR_BIN" -xpf data.tar -C "$root"
+        else
+            fail "no data archive in $deb"
+        fi
+    )
+    rm -rf "$tmp"
+}
+
+ensure_debian_dpkg_deb_config() {
+    local root="$1"
+    [[ "$DISTRO" == "debian" ]] || return
+    [[ -n "$AR_BIN" ]] || fail "ar is required for Debian dpkg-deb bootstrap"
+
+    local binutils_arch_pkg
+    case "$ARCH" in
+        aarch64) binutils_arch_pkg="binutils-aarch64-linux-gnu" ;;
+        x86_64) binutils_arch_pkg="binutils-x86-64-linux-gnu" ;;
+        *) fail "unsupported Debian arch for binutils bootstrap: $ARCH" ;;
+    esac
+
+    echo "[linux-rootfs] Bootstrapping Debian dpkg-deb compatibility"
+    ELFUSE_GUEST_UID=0 ELFUSE_GUEST_GID=0 "$MUP" --quiet --prefix "$PREFIX" \
+        /bin/sh -c "set -e
+            cd /home/muplar
+            apt-get update
+            apt-get download xz-utils binutils binutils-common libbinutils ${binutils_arch_pkg}
+        "
+
+    local debs=()
+    while IFS= read -r deb; do
+        debs+=("$deb")
+        host_extract_deb_data "$deb" "$root"
+    done < <(find "$root/home/muplar" -maxdepth 1 -type f \
+        \( -name 'xz-utils_*.deb' -o -name 'binutils_*.deb' -o \
+           -name 'binutils-common_*.deb' -o -name 'libbinutils_*.deb' -o \
+           -name "${binutils_arch_pkg}_*.deb" \) | sort)
+
+    install_debian_dpkg_deb_wrapper "$root"
+
+    if [[ "${#debs[@]}" -gt 0 ]]; then
+        local guest_debs=()
+        for deb in "${debs[@]}"; do
+            guest_debs+=("/home/muplar/$(basename "$deb")")
+        done
+        ELFUSE_GUEST_UID=0 ELFUSE_GUEST_GID=0 DEBIAN_FRONTEND=noninteractive \
+            "$MUP" --quiet --prefix "$PREFIX" /usr/bin/dpkg -i "${guest_debs[@]}" || true
+        ELFUSE_GUEST_UID=0 ELFUSE_GUEST_GID=0 DEBIAN_FRONTEND=noninteractive \
+            "$MUP" --quiet --prefix "$PREFIX" /usr/bin/apt-get -f install -y
+    fi
 }
 
 need_arg() {
@@ -683,9 +937,11 @@ fi
 mkdir -p "$rootfs/tmp" "$rootfs/var/tmp"
 chmod 1777 "$rootfs/tmp" "$rootfs/var/tmp"
 ensure_resolver_config "$rootfs"
+ensure_certificate_symlink_config "$rootfs"
 ensure_dpkg_casefold_config "$rootfs"
 if [[ "$DISTRO" == "arch" ]]; then
-    # ensure_arch_pacman_sandbox_config "$rootfs"
+    ensure_arch_pacman_trust_config "$rootfs"
+    ensure_arch_pacman_local_db_config "$rootfs"
     ensure_arch_mirror_config "$rootfs"
     ensure_arch_profile_config "$rootfs"
 fi
@@ -693,9 +949,14 @@ fi
 echo "[linux-rootfs] Refreshing Muplar scaffold"
 MUPLAR_SKIP_LINUX_BOOTSTRAP=1 "$MUP" "${prefix_create_args[@]}" >/dev/null
 ensure_resolver_config "$rootfs"
+ensure_certificate_symlink_config "$rootfs"
+if [[ "$DISTRO" == "debian" ]]; then
+    ensure_debian_dpkg_deb_config "$rootfs"
+fi
 if [[ "$DISTRO" == "arch" ]]; then
     ensure_arch_pacman_keyring "$rootfs"
-    #ensure_arch_pacman_sandbox_config "$rootfs"
+    ensure_arch_pacman_trust_config "$rootfs"
+    ensure_arch_pacman_local_db_config "$rootfs"
     ensure_arch_mirror_config "$rootfs"
     ensure_arch_profile_config "$rootfs"
 fi

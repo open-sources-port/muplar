@@ -69,6 +69,53 @@ export ANDROID_NDK_HOME=/opt/homebrew/share/android-ndk
 ![Muplar Architecture](https://drive.google.com/uc?export=view&id=1NaxCQf9Gedzkexm8vMlpUI8O7F5fFFkG)
 
 
+## 🏗 Muplar Progress
+| Platform | Instance | Capability | Status |
+|---|---|---|---|
+| Windows X86_64|Windows Compatibility Layer|Execute Windows app|✅ Working|
+|||Execute Windows Game|✅ Working|
+|---|---|---|---|
+| Android ARM64 | Android ARM64 | Execute APK app | 🚧 In progress |
+| | | Android Settings | ⏳ Not started |
+| | | Execute Android Game | ⏳ Not started |
+|---|---|---|---|
+| Linux AMR64 | Ubuntu arm64 | Mini shell | ✅ Working |
+| | | Foot terminal (Wayland) | ✅ Working |
+| | | Package manager | ✅ Working |
+| | | X11 support | 🚧 In progress |
+| | | X11 Terminal | ⏳ Not started |
+| | Arch arm64 | Mini shell | ✅ Working |
+| | | Foot terminal (Wayland) | ✅ Working |
+| | | Package manager | ✅ Working |
+| | | X11 support | ⏳ Not started |
+| | | X11 Terminal | ⏳ Not started |
+| | Debian arm64 | Mini shell | ✅ Working |
+| | | Foot terminal (Wayland) | ✅ Working |
+| | | Package manager | ✅ Working |
+| | | X11 support | ⏳ Not started |
+| | | X11 Terminal | ⏳ Not started |
+| | Alpine arm64 | Mini shell | ✅ Working |
+| | | Foot terminal (Wayland) | ✅ Working |
+| | | Package manager | ✅ Working |
+| | | X11 support | ⏳ Not started |
+| | | X11 Terminal | ⏳ Not started |
+| | Fedora arm64 | Mini shell | ✅ Working |
+| | | Foot terminal (Wayland) | ⏳ Not started |
+| | | Package manager | ⏳ Not started |
+| | | X11 support | ⏳ Not started |
+| | | X11 Terminal | ⏳ Not started |
+| | openSUSE arm64 | Mini shell | ✅ Working |
+| | | Foot terminal (Wayland) | ⏳ Not started |
+| | | Package manager | ⏳ Not started |
+| | | X11 support | ⏳ Not started |
+| | | X11 Terminal | ⏳ Not started |
+| Linux X86_64 | Ubuntu X86_64 | All functions | ⏳ Not started |
+| | Arch X86_64 | All functions | ⏳ Not started |
+| | Debian X86_64 | All functions | ⏳ Not started |
+| | Alpine X86_64 | All functions | ⏳ Not started |
+| | Fedora X86_64 | All functions | ⏳ Not started |
+| | openSUSE X86_64 | All functions | ⏳ Not started |
+
 ## 🏗 Android Progress
 ![Muplar Android Roadmap](./muplar_roadmap_to_android_app.svg)
 

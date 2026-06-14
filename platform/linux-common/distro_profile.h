@@ -104,7 +104,7 @@ inline DistroProfile distro_profile(std::string distro)
                 "/usr/bin/kitty",
                 "/usr/bin/xterm",
             },
-            {"foot", "xterm", "xorg-xwayland"},
+            {"foot", "foot-terminfo", "ttf-dejavu", "xterm", "xorg-xwayland"},
         };
     }
     if (distro == "opensuse") {

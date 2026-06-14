@@ -363,10 +363,9 @@ static int handle_prefix_command(int argc, char** argv)
         }
 
         try {
-            auto prefix = muplar::runtime::prefix::open_prefix(
-                argv[3], {}, false);
+            auto root = muplar::runtime::prefix::resolve_prefix_root(argv[3]);
             muplar::runtime::prefix::delete_prefix(argv[3]);
-            std::cout << "deleted: " << prefix.root.string() << "\n";
+            std::cout << "deleted: " << root.string() << "\n";
             return 0;
         } catch (const std::exception& e) {
             std::cerr << "Prefix error: " << e.what() << "\n";
