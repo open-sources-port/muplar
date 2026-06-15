@@ -1,11 +1,16 @@
 #include "host_jvm_launcher.h"
 
 #include <cstdlib>
+#include <cstdint>
 #include <dlfcn.h>
 #include <filesystem>
 #include <iostream>
 #include <string>
 #include <vector>
+
+#ifdef __APPLE__
+#include <mach-o/dyld.h>
+#endif
 
 // Use the real jni.h shipped by the bundled Temurin JDK.
 // CMakeLists.txt adds third_party/jdk-bin/<arch>/include to the include path.
@@ -79,9 +84,52 @@ namespace {
 // libjvm path — resolved at compile time by CMakeLists.txt
 // ---------------------------------------------------------------------------
 
+static std::filesystem::path current_executable_path()
+{
+    std::error_code ec;
+
+#if defined(__APPLE__)
+    char pathbuf[4096] = {0};
+    uint32_t size = sizeof(pathbuf);
+    if (_NSGetExecutablePath(pathbuf, &size) == 0) {
+        auto path = std::filesystem::weakly_canonical(pathbuf, ec);
+        if (!ec && !path.empty()) return path;
+        return std::filesystem::path(pathbuf);
+    }
+#endif
+
+    auto path = std::filesystem::read_symlink("/proc/self/exe", ec);
+    if (!ec && !path.empty()) return path;
+    return {};
+}
+
 std::filesystem::path bundled_libjvm_path()
 {
+    std::error_code ec;
+    auto exe = current_executable_path();
+    if (!exe.empty()) {
+        auto macos_dir = exe.parent_path();
+        auto contents_dir = macos_dir.parent_path();
+        auto frameworks_dir = contents_dir / "Frameworks";
+
+        const std::filesystem::path candidates[] = {
+            // Release app layout used by tools/package-release-macos.sh.
+            frameworks_dir / "jdk-bin" / "macos-aarch64" / "lib" / "server" / "libjvm.dylib",
+            frameworks_dir / "jdk-bin" / "macos-x86_64" / "lib" / "server" / "libjvm.dylib",
+
+            // Optional flattened layout if you later decide to use it.
+            frameworks_dir / "jdk" / "lib" / "server" / "libjvm.dylib",
+        };
+
+        for (const auto& candidate : candidates) {
+            if (std::filesystem::is_regular_file(candidate, ec))
+                return candidate;
+        }
+    }
+
 #ifdef MUPLAR_JDK_LIBJVM_PATH
+    // Development fallback. This may be an absolute build-machine path, so it
+    // must not be the only lookup path used by release packages.
     return std::filesystem::path(MUPLAR_JDK_LIBJVM_PATH);
 #else
     return {};

@@ -138,6 +138,8 @@ else
 fi
 
 echo "[setup-jdk] Extracting..."
+TMPDIR_WORK="$(mktemp -d "${TMPDIR:-/tmp}/muplar-jdk.XXXXXX")"
+trap 'rm -rf "$TMPDIR_WORK"' EXIT
 EXTRACT_DIR="$TMPDIR_WORK/extracted"
 mkdir -p "$EXTRACT_DIR"
 tar -xzf "$TARBALL" -C "$EXTRACT_DIR"

@@ -17,6 +17,7 @@
 #include <cerrno>
 #include <cstdio>
 #include <cstdlib>
+#include <cstdint>
 #include <cstring>
 #include <filesystem>
 #include <fstream>
@@ -31,6 +32,10 @@
 #include <sys/stat.h>
 #include <unistd.h>
 #include <signal.h>
+
+#ifdef __APPLE__
+#include <mach-o/dyld.h>
+#endif
 
 #include "prefix.h"
 
@@ -58,6 +63,20 @@ static char **GetProcessEnvironment()
 
 namespace muplar::runtime::wine {
 namespace {
+
+static std::filesystem::path executable_dir()
+{
+#ifdef __APPLE__
+    char pathbuf[4096] = {0};
+    uint32_t size = sizeof(pathbuf);
+    if (_NSGetExecutablePath(pathbuf, &size) == 0) {
+        std::error_code ec;
+        auto exe = std::filesystem::weakly_canonical(pathbuf, ec);
+        if (!ec) return exe.parent_path();
+    }
+#endif
+    return {};
+}
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -128,7 +147,22 @@ std::filesystem::path resolve_wine_bin(
         }
     }
 
-    // 4. System PATH — try wine64 first, then wine.
+    // 4. Release layout: <Muplar>/bin/mup-real and <Muplar>/Frameworks/wine.
+    {
+        auto dir = executable_dir();
+        if (!dir.empty()) {
+            for (auto root : {
+                     dir.parent_path() / "Frameworks" / "wine",
+                     dir.parent_path().parent_path() / "Frameworks" / "wine",
+                 }) {
+                auto found = find_wine_in_dir(root);
+                if (!found.empty())
+                    return found;
+            }
+        }
+    }
+
+    // 5. System PATH — try wine64 first, then wine.
     for (const char* name : {"wine64", "wine"}) {
         auto found = find_on_path(name);
         if (!found.empty())

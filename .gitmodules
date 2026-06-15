@@ -1,6 +1,6 @@
 [submodule "third_party/elfuse"]
 	path = third_party/elfuse
-	url = git@github.com:open-sources-port/elfuse.git
+	url = https://github.com/open-sources-port/elfuse.git
 	branch = main
 [submodule "third_party/dxmt"]
 	path = third_party/dxmt

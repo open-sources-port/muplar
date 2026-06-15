@@ -8,7 +8,6 @@ COMMON_FILES=(
   cli
   linker64
   mup.entitlements
-  *.svg
   platform
   rependencies
   docs
@@ -16,6 +15,7 @@ COMMON_FILES=(
   tools
   .gitmodules
   .gitignore
+  apps
 )
 
 if [ -f "${OUTPUT_ZIP}" ]; then

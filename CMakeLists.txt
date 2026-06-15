@@ -190,6 +190,7 @@ ExternalProject_Add(wawona_external
     BINARY_DIR      ${CMAKE_BINARY_DIR}
     BUILD_BYPRODUCTS
         ${WAWONA_BIN}
+        ${CMAKE_SOURCE_DIR}/third_party/muplar-wayland/target/release/libmuplar_wayland.a
 )
 
 add_custom_target(wawona_bin DEPENDS wawona_external)
@@ -270,7 +271,11 @@ endif()
 add_subdirectory(cli)
 # add_subdirectory(compositor)
 add_subdirectory(platform)
-add_subdirectory(apps)
+if(EXISTS "${CMAKE_SOURCE_DIR}/apps/CMakeLists.txt")
+    add_subdirectory(apps)
+else()
+    message(STATUS "apps/ not found; building CLI/runtime targets only")
+endif()
 
 find_program(DETECTED_OBJCOPY
     NAMES objcopy
