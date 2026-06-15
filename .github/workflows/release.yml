@@ -1,0 +1,198 @@
+name: Build Muplar release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Release version/name, for example v0.1.0-dev"
+        required: true
+        default: "v0.1.0-dev"
+      prerelease:
+        description: "Mark GitHub release as prerelease"
+        required: true
+        default: "true"
+        type: boolean
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build-macos-arm64:
+    # macos-15 is Apple Silicon on current GitHub-hosted runner images.
+    # For the full Wine/DXMT build, a self-hosted Apple Silicon runner with
+    # Rosetta + x86_64 Homebrew is more reliable and usually much faster.
+    runs-on: macos-15
+    timeout-minutes: 360
+
+    env:
+      DEVELOPER_DIR: /Applications/Xcode.app/Contents/Developer
+      ANDROID_NDK_HOME: /opt/homebrew/share/android-ndk
+
+      # Native Apple Silicon Homebrew.
+      HOMEBREW_ARM_PREFIX: /opt/homebrew
+
+      # Intel Homebrew under Rosetta, used only for Wine/DXMT x86_64 tooling.
+      HOMEBREW_X86_PREFIX: /usr/local
+
+      HOMEBREW_NO_AUTO_UPDATE: "1"
+      HOMEBREW_NO_INSTALL_CLEANUP: "1"
+      CMAKE_BUILD_PARALLEL_LEVEL: "3"
+
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          fetch-depth: 0
+
+      - name: Make SSH-style submodule URLs work without SSH keys
+        run: |
+          git config --global url."https://github.com/".insteadOf "git@github.com:"
+          git submodule sync --recursive
+          git submodule update --init --recursive --depth 1
+
+      - name: Install build dependencies
+        run: |
+          brew install \
+            cmake ninja pkg-config meson rust \
+            android-ndk aarch64-elf-binutils \
+            bison flex freetype libpng zlib bzip2 sdl2 gnutls \
+            pixman libxkbcommon openssl@3 lz4 zstd gnutls \
+            llvm
+
+      - name: Verify bundled binary prerequisites
+        run: |
+          test -d third_party/angle-bin || { echo "ERROR: third_party/angle-bin missing. Commit/download ANGLE libEGL.dylib and libGLESv2.dylib before release."; exit 1; }
+          test -d third_party/angle-include || { echo "ERROR: third_party/angle-include missing. Commit/download ANGLE headers before release."; exit 1; }
+
+      - name: Install Rosetta for x86_64 Windows compatibility build
+        run: |
+          sudo softwareupdate --install-rosetta --agree-to-license || true
+          arch -x86_64 /usr/bin/true
+
+      - name: Download prebuilt Wine runtime
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+
+          mkdir -p .wine-runtime build
+
+          gh release download wine-runtime-latest \
+            --pattern "muplar-wine-runtime-macos-arm64-x86_64.tar.gz" \
+            --dir .wine-runtime \
+            --clobber
+
+          tar -xzf .wine-runtime/muplar-wine-runtime-macos-arm64-x86_64.tar.gz \
+            -C build
+
+          test -x build/wine-prefix/bin/wine || {
+            echo "ERROR: prebuilt Wine runtime was not restored."
+            exit 1
+          }
+
+          test -f build/wine-prefix/lib/wine/x86_64-unix/winemetal.so || {
+            echo "ERROR: prebuilt DXMT runtime was not restored."
+            exit 1
+          }
+
+      - name: Download prebuilt JDK runtime
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+
+          mkdir -p .jdk-runtime build
+
+          gh release download jdk-runtime-latest \
+            --pattern "muplar-jdk-runtime-macos-arm64-x86_64.tar.gz" \
+            --dir .jdk-runtime \
+            --clobber
+
+          tar -xzf .jdk-runtime/muplar-jdk-runtime-macos-arm64-x86_64.tar.gz
+
+          test -x third_party/jdk-bin || {
+            echo "ERROR: prebuilt JDK runtime was not restored."
+            exit 1
+          }
+
+      - name: Configure CMake
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+          echo "Configuring source code..."
+          $SCRIPT=$ROOT_DIR/tools/configure-build.sh
+          chmod +x ${SCRIPT}
+          sh $SCRIPT
+
+      - name: Build Muplar app bundle
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          cmake --build build --parallel 3
+
+          test -d "build/bin/Muplar Instance Manager.app" || {
+            echo "ERROR: app bundle was not created:"
+            echo "  build/bin/Muplar Instance Manager.app"
+            exit 1
+          }
+
+          ls -la "build/bin/Muplar Instance Manager.app/Contents"
+          ls -la "build/bin/Muplar Instance Manager.app/Contents/Frameworks"
+          ls -la "build/bin/Muplar Instance Manager.app/Contents/MacOS"
+
+      - name: Package release zip
+        run: |
+          VERSION="${{ github.event.inputs.version || github.ref_name }}"
+          tools/package-release-macos.sh "$VERSION"
+
+      - name: Upload workflow artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Muplar-macos-arm64
+          path: |
+            dist/*.zip
+            dist/*.sha256
+          if-no-files-found: error
+
+      - name: Create or update GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          VERSION="${{ steps.release_vars.outputs.version }}"
+          PRERELEASE="${{ steps.release_vars.outputs.prerelease }}"
+
+          args=(
+            --title "Muplar ${VERSION}"
+            --notes "Automated Muplar macOS Apple Silicon build."
+          )
+
+          if [ "$PRERELEASE" = "true" ]; then
+            args+=(--prerelease)
+          fi
+
+          # For manual workflow_dispatch, create the release tag at this commit.
+          # For tag push, GITHUB_REF_NAME already points to the pushed tag.
+          if [ "${GITHUB_EVENT_NAME}" = "workflow_dispatch" ]; then
+            args+=(--target "$GITHUB_SHA")
+          fi
+
+          if gh release view "$VERSION" >/dev/null 2>&1; then
+            echo "Release ${VERSION} already exists. Uploading assets with --clobber."
+            gh release upload "$VERSION" dist/*.zip dist/*.sha256 --clobber
+          else
+            gh release create "$VERSION" dist/*.zip dist/*.sha256 "${args[@]}"
+          fi

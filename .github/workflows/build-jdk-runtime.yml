@@ -1,0 +1,96 @@
+name: Build Muplar JDK runtime
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "JDK runtime version label"
+        required: true
+        default: "jdk-runtime-latest"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: jdk-runtime-${{ inputs.version }}
+  cancel-in-progress: false
+
+jobs:
+  build-jdk-runtime:
+    runs-on: macos-15
+    timeout-minutes: 360
+
+    env:
+      DEVELOPER_DIR: /Applications/Xcode.app/Contents/Developer
+      HOMEBREW_ARM_PREFIX: /opt/homebrew
+      HOMEBREW_X86_PREFIX: /usr/local
+      HOMEBREW_NO_AUTO_UPDATE: "1"
+      HOMEBREW_NO_INSTALL_CLEANUP: "1"
+      HOMEBREW_NO_PATH_SHADOW_CHECK: "1"
+      HOMEBREW_NO_ENV_HINTS: "1"
+
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          fetch-depth: 0
+
+      - name: Make SSH-style submodule URLs work without SSH keys
+        run: |
+          git config --global url."https://github.com/".insteadOf "git@github.com:"
+          git submodule sync --recursive
+          git submodule update --init --recursive --depth 1
+
+      - name: Prepare JDK runtime
+        run: |
+          tools/setup-jdk.sh --arch aarch64 --jdk-version 21
+
+      - name: Archive jdk runtime
+        run: |
+          set -euo pipefail
+
+          ROOT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
+          JDK_OUT_BIN_DIR="$ROOT_DIR/third_party/jdk-bin
+
+          mkdir -p dist
+
+          tar -C build \
+            -czf dist/muplar-jdk-runtime-macos-arm64-x86_64.tar.gz \
+            ${JDK_OUT_BIN_DIR}
+
+          shasum -a 256 dist/muplar-jdk-runtime-macos-arm64-x86_64.tar.gz \
+            > dist/muplar-jdk-runtime-macos-arm64-x86_64.tar.gz.sha256
+
+      - name: Upload workflow artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: muplar-jdk-runtime
+          path: |
+            dist/muplar-jdk-runtime-macos-arm64-x86_64.tar.gz
+            dist/muplar-jdk-runtime-macos-arm64-x86_64.tar.gz.sha256
+          retention-days: 30
+          if-no-files-found: error
+
+      - name: Create or update JDK runtime release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+
+          TAG="${{ inputs.version }}"
+
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" \
+              dist/muplar-jdk-runtime-macos-arm64-x86_64.tar.gz \
+              dist/muplar-jdk-runtime-macos-arm64-x86_64.tar.gz.sha256 \
+              --clobber
+          else
+            gh release create "$TAG" \
+              dist/muplar-jdk-runtime-macos-arm64-x86_64.tar.gz \
+              dist/muplar-jdk-runtime-macos-arm64-x86_64.tar.gz.sha256 \
+              --title "Muplar JDK runtime" \
+              --notes "Prebuilt JDK runtime for Muplar macOS Apple Silicon release builds." \
+              --prerelease \
+              --latest=false
+          fi

@@ -1,0 +1,256 @@
+name: Build Muplar Wine runtime
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Wine runtime version label"
+        required: true
+        default: "wine-runtime-latest"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: wine-runtime-${{ inputs.version }}
+  cancel-in-progress: false
+
+jobs:
+  build-wine-runtime:
+    runs-on: macos-15
+    timeout-minutes: 360
+
+    env:
+      DEVELOPER_DIR: /Applications/Xcode.app/Contents/Developer
+      HOMEBREW_ARM_PREFIX: /opt/homebrew
+      HOMEBREW_X86_PREFIX: /usr/local
+      HOMEBREW_NO_AUTO_UPDATE: "1"
+      HOMEBREW_NO_INSTALL_CLEANUP: "1"
+      HOMEBREW_NO_PATH_SHADOW_CHECK: "1"
+      HOMEBREW_NO_ENV_HINTS: "1"
+
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          fetch-depth: 0
+
+      - name: Make SSH-style submodule URLs work without SSH keys
+        run: |
+          git config --global url."https://github.com/".insteadOf "git@github.com:"
+          git submodule sync --recursive
+          git submodule update --init --recursive --depth 1
+
+      - name: Install Rosetta for x86_64 Windows compatibility build
+        run: |
+          sudo softwareupdate --install-rosetta --agree-to-license || true
+          arch -x86_64 /usr/bin/true
+      
+      - name: Prepare x86_64 Homebrew under Rosetta
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          if [ ! -x "${HOMEBREW_X86_PREFIX}/bin/brew" ]; then
+            echo "Installing x86_64 Homebrew into ${HOMEBREW_X86_PREFIX}"
+
+            sudo mkdir -p "${HOMEBREW_X86_PREFIX}"
+            sudo chown -R "$(whoami)":admin "${HOMEBREW_X86_PREFIX}"
+
+            curl -fsSL \
+              https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh \
+              -o /tmp/install-homebrew-x86.sh
+
+            NONINTERACTIVE=1 arch -x86_64 /bin/bash /tmp/install-homebrew-x86.sh
+          fi
+
+          arch -x86_64 "${HOMEBREW_X86_PREFIX}/bin/brew" --prefix
+          arch -x86_64 "${HOMEBREW_X86_PREFIX}/bin/brew" --version
+
+      - name: Install x86_64 Homebrew dependencies for Wine and DXMT
+        shell: bash
+        env:
+          HOMEBREW_NO_PATH_SHADOW_CHECK: "1"
+          HOMEBREW_NO_ENV_HINTS: "1"
+        run: |
+          set -euo pipefail
+
+          X86_BREW="${HOMEBREW_X86_PREFIX}/bin/brew"
+
+          sudo mkdir -p \
+            /usr/local/Homebrew \
+            /usr/local/bin \
+            /usr/local/etc \
+            /usr/local/include \
+            /usr/local/lib \
+            /usr/local/opt \
+            /usr/local/sbin \
+            /usr/local/share/zsh/site-functions \
+            /usr/local/var
+
+          sudo chown -R "$(whoami)":admin \
+            /usr/local/Homebrew \
+            /usr/local/bin \
+            /usr/local/etc \
+            /usr/local/include \
+            /usr/local/lib \
+            /usr/local/opt \
+            /usr/local/sbin \
+            /usr/local/share \
+            /usr/local/var 2>/dev/null || true
+
+          chmod -R u+rwX /usr/local/share/zsh || true
+
+          # GitHub runner may already have Python.framework symlinks in /usr/local/bin.
+          # They block x86_64 Homebrew python@3.14 link.
+          for f in \
+            idle3 idle3.14 \
+            pip3 pip3.14 \
+            pydoc3 pydoc3.14 \
+            python3 python3-config \
+            python3.14 python3.14-config
+          do
+            if [ -L "/usr/local/bin/$f" ]; then
+              target="$(readlink "/usr/local/bin/$f" || true)"
+              if echo "$target" | grep -q "/Library/Frameworks/Python.framework/Versions/3.14"; then
+                echo "Removing conflicting Python.framework symlink: /usr/local/bin/$f -> $target"
+                rm -f "/usr/local/bin/$f"
+              fi
+            fi
+          done
+
+          set +e
+          arch -x86_64 "$X86_BREW" install \
+            bison \
+            flex \
+            pkg-config \
+            mingw-w64 \
+            freetype \
+            gettext \
+            gnutls \
+            zlib \
+            bzip2 \
+            libpng \
+            sdl2 \
+            meson \
+            llvm \
+            vulkan-headers \
+            vulkan-loader \
+            molten-vk \
+            vulkan-tools
+          BREW_STATUS=$?
+          set -e
+
+          if [ "$BREW_STATUS" -ne 0 ]; then
+            echo "x86_64 brew install failed with status ${BREW_STATUS}."
+            echo "Trying known python@3.14 link fix, then retrying."
+
+            if arch -x86_64 "$X86_BREW" list python@3.14 >/dev/null 2>&1; then
+              arch -x86_64 "$X86_BREW" link --overwrite --force python@3.14 || true
+            fi
+
+            arch -x86_64 "$X86_BREW" install \
+              bison \
+              flex \
+              pkg-config \
+              mingw-w64 \
+              freetype \
+              gettext \
+              gnutls \
+              zlib \
+              bzip2 \
+              libpng \
+              sdl2 \
+              meson \
+              llvm \
+              vulkan-headers \
+              vulkan-loader \
+              molten-vk \
+              vulkan-tools
+          fi
+
+          arch -x86_64 "$X86_BREW" link --overwrite --force python@3.14 || true
+
+          arch -x86_64 "$X86_BREW" --prefix
+          arch -x86_64 "$X86_BREW" list --versions \
+            bison flex pkg-config mingw-w64 freetype gnutls zlib bzip2 \
+            libpng sdl2 meson llvm vulkan-loader molten-vk vulkan-tools
+
+      - name: Install native ARM64 build tools
+        run: |
+          set -euo pipefail
+          "${HOMEBREW_ARM_PREFIX}/bin/brew" install cmake ninja
+
+      - name: Configure CMake
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+          echo "Configuring source code..."
+          $SCRIPT=$ROOT_DIR/tools/configure-build.sh
+          chmod +x ${SCRIPT}
+          sh $SCRIPT
+
+      - name: Build Wine and DXMT only
+        run: |
+          set -euo pipefail
+
+          cmake --build build --target dxmt_lib --parallel 3
+
+          test -x build/wine-prefix/bin/wine || {
+            echo "ERROR: Wine was not built."
+            exit 1
+          }
+
+          test -f build/wine-prefix/lib/wine/x86_64-unix/winemetal.so || {
+            echo "ERROR: DXMT winemetal.so was not installed."
+            exit 1
+          }
+
+      - name: Archive Wine runtime
+        run: |
+          set -euo pipefail
+
+          mkdir -p dist
+
+          tar -C build \
+            -czf dist/muplar-wine-runtime-macos-arm64-x86_64.tar.gz \
+            wine-prefix
+
+          shasum -a 256 dist/muplar-wine-runtime-macos-arm64-x86_64.tar.gz \
+            > dist/muplar-wine-runtime-macos-arm64-x86_64.tar.gz.sha256
+
+      - name: Upload workflow artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: muplar-wine-runtime
+          path: |
+            dist/muplar-wine-runtime-macos-arm64-x86_64.tar.gz
+            dist/muplar-wine-runtime-macos-arm64-x86_64.tar.gz.sha256
+          retention-days: 30
+          if-no-files-found: error
+
+      - name: Create or update Wine runtime release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+
+          TAG="${{ inputs.version }}"
+
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" \
+              dist/muplar-wine-runtime-macos-arm64-x86_64.tar.gz \
+              dist/muplar-wine-runtime-macos-arm64-x86_64.tar.gz.sha256 \
+              --clobber
+          else
+            gh release create "$TAG" \
+              dist/muplar-wine-runtime-macos-arm64-x86_64.tar.gz \
+              dist/muplar-wine-runtime-macos-arm64-x86_64.tar.gz.sha256 \
+              --title "Muplar Wine runtime" \
+              --notes "Prebuilt Wine/DXMT runtime for Muplar macOS Apple Silicon release builds." \
+              --prerelease \
+              --latest=false
+          fi
