@@ -50,13 +50,12 @@ jobs:
         run: |
           set -euo pipefail
 
-          ROOT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
-          JDK_OUT_BIN_DIR="$ROOT_DIR/third_party/jdk-bin
+          ROOT_DIR="${GITHUB_WORKSPACE:-$(pwd)}"
+          JDK_OUT_BIN_DIR="third_party/jdk-bin"
 
           mkdir -p dist
 
-          tar -C build \
-            -czf dist/muplar-jdk-runtime-macos-arm64-x86_64.tar.gz \
+          tar -czf dist/muplar-jdk-runtime-macos-arm64-x86_64.tar.gz \
             ${JDK_OUT_BIN_DIR}
 
           shasum -a 256 dist/muplar-jdk-runtime-macos-arm64-x86_64.tar.gz \

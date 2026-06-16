@@ -134,7 +134,7 @@ jobs:
             libpng \
             sdl2 \
             meson \
-            llvm \
+            llvm llvm@15 \
             vulkan-headers \
             vulkan-loader \
             molten-vk \
@@ -151,19 +151,11 @@ jobs:
             fi
 
             arch -x86_64 "$X86_BREW" install \
-              bison \
-              flex \
-              pkg-config \
-              mingw-w64 \
-              freetype \
-              gettext \
-              gnutls \
-              zlib \
-              bzip2 \
-              libpng \
-              sdl2 \
+              bison flex pkg-config mingw-w64 \
+              freetype gettext gnutls zlib \
+              bzip2 libpng sdl2 \
               meson \
-              llvm \
+              llvm llvm@15 \
               vulkan-headers \
               vulkan-loader \
               molten-vk \
@@ -187,35 +179,92 @@ jobs:
         run: |
           set -euo pipefail
 
-          ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+          ROOT_DIR="${GITHUB_WORKSPACE:-$(pwd)}"
           echo "Configuring source code..."
-          $SCRIPT=$ROOT_DIR/tools/configure-build.sh
+          SCRIPT=$ROOT_DIR/tools/configure-build.sh
           chmod +x ${SCRIPT}
-          sh $SCRIPT
+          zsh $SCRIPT
 
-      - name: Build Wine and DXMT only
+      - name: Build Wine
+        shell: bash
         run: |
           set -euo pipefail
 
-          cmake --build build --target dxmt_lib --parallel 3
+          ROOT_DIR="${GITHUB_WORKSPACE:-$(pwd)}"
+          mkdir -p "${ROOT_DIR}/logs"
 
-          test -x build/wine-prefix/bin/wine || {
-            echo "ERROR: Wine was not built."
+          echo "Building Wine target: wine_lib"
+
+          if ! cmake --build "${ROOT_DIR}/build" --target wine_lib --parallel 3 \
+              > "${ROOT_DIR}/logs/build-wine.log" 2>&1; then
+            echo "ERROR: Wine build failed."
+            echo ""
+            echo "===== Last 300 lines of Wine build log ====="
+            tail -n 300 "${ROOT_DIR}/logs/build-wine.log" || true
+            echo "===== End Wine build log ====="
+            exit 1
+          fi
+
+          test -x "${ROOT_DIR}/build/wine-prefix/bin/wine" || {
+            echo "ERROR: Wine build finished but wine binary was not found:"
+            echo "  ${ROOT_DIR}/build/wine-prefix/bin/wine"
+            echo ""
+            echo "===== Last 300 lines of Wine build log ====="
+            tail -n 300 "${ROOT_DIR}/logs/build-wine.log" || true
             exit 1
           }
 
-          test -f build/wine-prefix/lib/wine/x86_64-unix/winemetal.so || {
-            echo "ERROR: DXMT winemetal.so was not installed."
+          "${ROOT_DIR}/build/wine-prefix/bin/wine" --version || true
+
+      - name: Build DXMT
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          ROOT_DIR="${GITHUB_WORKSPACE:-$(pwd)}"
+          mkdir -p "${ROOT_DIR}/logs"
+
+          echo "Building DXMT target: dxmt_lib"
+
+          if ! cmake --build "${ROOT_DIR}/build" --target dxmt_lib --parallel 3 \
+              > "${ROOT_DIR}/logs/build-dxmt.log" 2>&1; then
+            echo "ERROR: DXMT build failed."
+            echo ""
+            echo "===== Last 300 lines of DXMT build log ====="
+            tail -n 300 "${ROOT_DIR}/logs/build-dxmt.log" || true
+            echo "===== End DXMT build log ====="
+            exit 1
+          fi
+
+          test -f "${ROOT_DIR}/build/wine-prefix/lib/wine/x86_64-unix/winemetal.so" || {
+            echo "ERROR: DXMT build finished but winemetal.so was not found:"
+            echo "  ${ROOT_DIR}/build/wine-prefix/lib/wine/x86_64-unix/winemetal.so"
+            echo ""
+            echo "===== Last 300 lines of DXMT build log ====="
+            tail -n 300 "${ROOT_DIR}/logs/build-dxmt.log" || true
             exit 1
           }
+
+      - name: Upload Wine and DXMT build logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: wine-dxmt-build-logs
+          path: |
+            logs/build-wine.log
+            logs/build-dxmt.log
+          retention-days: 14
+          if-no-files-found: ignore
 
       - name: Archive Wine runtime
         run: |
           set -euo pipefail
 
+          ROOT_DIR="${GITHUB_WORKSPACE:-$(pwd)}"
+
           mkdir -p dist
 
-          tar -C build \
+          tar -C ${ROOT_DIR}/build \
             -czf dist/muplar-wine-runtime-macos-arm64-x86_64.tar.gz \
             wine-prefix
 
