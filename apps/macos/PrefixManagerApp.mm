@@ -2352,6 +2352,8 @@ static NSString* MapLinuxIconToSFSymbol(NSString* icon)
     NSString* execLine = nil;
     NSString* icon = nil;
     BOOL terminal = NO;
+    BOOL noDisplay = NO;
+    BOOL hidden = NO;
 
     NSArray* lines = [content componentsSeparatedByString:@"\n"];
     for (NSString* line in lines) {
@@ -2370,9 +2372,20 @@ static NSString* MapLinuxIconToSFSymbol(NSString* icon)
             terminal = [value isEqualToString:@"true"] ||
                        [value isEqualToString:@"1"] ||
                        [value isEqualToString:@"yes"];
+        } else if ([trimmed hasPrefix:@"NoDisplay="]) {
+            NSString* value = [[trimmed substringFromIndex:10] lowercaseString];
+            noDisplay = [value isEqualToString:@"true"] ||
+                        [value isEqualToString:@"1"] ||
+                        [value isEqualToString:@"yes"];
+        } else if ([trimmed hasPrefix:@"Hidden="]) {
+            NSString* value = [[trimmed substringFromIndex:7] lowercaseString];
+            hidden = [value isEqualToString:@"true"] ||
+                     [value isEqualToString:@"1"] ||
+                     [value isEqualToString:@"yes"];
         }
     }
 
+    if (noDisplay || hidden) return nil;
     if (!execLine) return nil;
 
     NSString* rawExec = nil;
@@ -3109,10 +3122,18 @@ static NSString* MapLinuxIconToSFSymbol(NSString* icon)
         [prefixHandle seekToEndOfFile];
     }
 
+    prefix::PrefixKind kind = selected->kind;
+
     pipe.fileHandleForReading.readabilityHandler = ^(NSFileHandle* handle) {
         NSData* data = [handle availableData];
-        if (data.length == 0) return;
-        if (selected->kind == prefix::PrefixKind::Wine) {
+        if (data.length == 0) {
+            handle.readabilityHandler = nil;
+            if (prefixHandle) {
+                @try { [prefixHandle closeFile]; } @catch (NSException* __unused e) {}
+            }
+            return;
+        }
+        if (kind == prefix::PrefixKind::Wine) {
             data = SanitizeWindowsCompatibilityLogData(data);
         }
         if (prefixHandle) {
@@ -3736,7 +3757,7 @@ int main(int argc, char* argv[])
         NSString* home = NSHomeDirectory();
         NSString* muplarLogsDir = [[home stringByAppendingPathComponent:@".muplar"] stringByAppendingPathComponent:@"logs"];
         [[NSFileManager defaultManager] createDirectoryAtPath:muplarLogsDir withIntermediateDirectories:YES attributes:nil error:nil];
-        NSString* logPath = [muplarLogsDir stringByAppendingPathComponent:@"manager.log"];
+        NSString* logPath = [muplarLogsDir stringByAppendingPathComponent:@"muplar.log"];
 
         const char* logPathStr = [logPath UTF8String];
         std::freopen(logPathStr, "a", stdout);

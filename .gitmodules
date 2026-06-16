@@ -1,13 +1,13 @@
 [submodule "third_party/elfuse"]
 	path = third_party/elfuse
-	url = https://github.com/open-sources-port/elfuse.git
+	url = git@github.com:open-sources-port/elfuse.git
 	branch = main
 [submodule "third_party/dxmt"]
 	path = third_party/dxmt
-	url = https://github.com/3Shain/dxmt.git
+	url = git@github.com:open-sources-port/muplar-dxmt.git
 [submodule "third_party/wine"]
 	path = third_party/wine
 	url = https://gitlab.winehq.org/wine/wine.git
 [submodule "third_party/muplar-wayland-compo"]
 	path = third_party/muplar-wayland
-	url = https://github.com/open-sources-port/muplar-wayland.git
+	url = git@github.com:open-sources-port/muplar-wayland.git

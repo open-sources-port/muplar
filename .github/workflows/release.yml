@@ -60,12 +60,40 @@ jobs:
 
       - name: Install build dependencies
         run: |
-          brew install \
-            cmake ninja pkg-config meson rust \
-            android-ndk aarch64-elf-binutils \
+          brew install cmake ninja pkg-config meson rust \
             bison flex freetype libpng zlib bzip2 sdl2 gnutls \
-            pixman libxkbcommon openssl@3 lz4 zstd gnutls \
-            llvm
+            pixman libxkbcommon openssl@3 lz4 zstd gnutls llvm
+
+          export PATH="/opt/homebrew/opt/llvm/bin:/opt/homebrew/opt/bison/bin:/opt/homebrew/opt/flex/bin:$PATH"
+
+          echo "/opt/homebrew/opt/llvm/bin" >> "$GITHUB_PATH"
+          echo "/opt/homebrew/opt/bison/bin" >> "$GITHUB_PATH"
+          echo "/opt/homebrew/opt/flex/bin" >> "$GITHUB_PATH"
+
+          echo "/opt/homebrew/opt/llvm/bin" >> "$GITHUB_PATH"
+          which llvm-objcopy
+          llvm-objcopy --version
+
+      - name: Install Android NDK
+        shell: bash
+        run: |
+          set -euxo pipefail
+          brew install --cask android-ndk
+          test -d /opt/homebrew/share/android-ndk
+          test -x /opt/homebrew/bin/ndk-build
+          echo "ANDROID_NDK_HOME=/opt/homebrew/share/android-ndk" >> "$GITHUB_ENV"
+
+      - name: Install binutils
+        shell: bash
+        run: |
+          set -euxo pipefail
+          brew install aarch64-elf-binutils
+          brew --prefix aarch64-elf-binutils
+          ls -la /opt/homebrew/opt/aarch64-elf-binutils/bin
+      - name: Install GNU binutils
+        run: |
+          brew install binutils
+          echo "$(brew --prefix binutils)/bin" >> "$GITHUB_PATH"
 
       - name: Verify bundled binary prerequisites
         run: |
@@ -77,28 +105,149 @@ jobs:
           sudo softwareupdate --install-rosetta --agree-to-license || true
           arch -x86_64 /usr/bin/true
 
-      - name: Download prebuilt Wine runtime
-        env:
-          GH_TOKEN: ${{ github.token }}
+      - name: Prepare x86_64 Homebrew under Rosetta
+        shell: bash
         run: |
           set -euo pipefail
 
+          if [ ! -x "${HOMEBREW_X86_PREFIX}/bin/brew" ]; then
+            echo "Installing x86_64 Homebrew into ${HOMEBREW_X86_PREFIX}"
+
+            sudo mkdir -p "${HOMEBREW_X86_PREFIX}"
+            sudo chown -R "$(whoami)":admin "${HOMEBREW_X86_PREFIX}"
+
+            curl -fsSL \
+              https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh \
+              -o /tmp/install-homebrew-x86.sh
+
+            NONINTERACTIVE=1 arch -x86_64 /bin/bash /tmp/install-homebrew-x86.sh
+          fi
+
+          arch -x86_64 "${HOMEBREW_X86_PREFIX}/bin/brew" --prefix
+          arch -x86_64 "${HOMEBREW_X86_PREFIX}/bin/brew" --version
+
+      - name: Install x86_64 Homebrew dependencies for Wine and DXMT
+        shell: bash
+        env:
+          HOMEBREW_NO_PATH_SHADOW_CHECK: "1"
+          HOMEBREW_NO_ENV_HINTS: "1"
+        run: |
+          set -euo pipefail
+
+          X86_BREW="${HOMEBREW_X86_PREFIX}/bin/brew"
+
+          sudo mkdir -p \
+            /usr/local/Homebrew \
+            /usr/local/bin \
+            /usr/local/etc \
+            /usr/local/include \
+            /usr/local/lib \
+            /usr/local/opt \
+            /usr/local/sbin \
+            /usr/local/share/zsh/site-functions \
+            /usr/local/var
+
+          sudo chown -R "$(whoami)":admin \
+            /usr/local/Homebrew \
+            /usr/local/bin \
+            /usr/local/etc \
+            /usr/local/include \
+            /usr/local/lib \
+            /usr/local/opt \
+            /usr/local/sbin \
+            /usr/local/share \
+            /usr/local/var 2>/dev/null || true
+
+          chmod -R u+rwX /usr/local/share/zsh || true
+
+          # GitHub runner may already have Python.framework symlinks in /usr/local/bin.
+          # They block x86_64 Homebrew python@3.14 link.
+          for f in \
+            idle3 idle3.14 \
+            pip3 pip3.14 \
+            pydoc3 pydoc3.14 \
+            python3 python3-config \
+            python3.14 python3.14-config
+          do
+            if [ -L "/usr/local/bin/$f" ]; then
+              target="$(readlink "/usr/local/bin/$f" || true)"
+              if echo "$target" | grep -q "/Library/Frameworks/Python.framework/Versions/3.14"; then
+                echo "Removing conflicting Python.framework symlink: /usr/local/bin/$f -> $target"
+                rm -f "/usr/local/bin/$f"
+              fi
+            fi
+          done
+
+          set +e
+          arch -x86_64 "$X86_BREW" install bison \
+            flex pkg-config \
+            mingw-w64 freetype \
+            gettext \
+            gnutls \
+            zlib \
+            bzip2 \
+            libpng \
+            sdl2 \
+            meson \
+            llvm llvm@15 \
+            vulkan-headers \
+            vulkan-loader \
+            molten-vk \
+            vulkan-tools
+          BREW_STATUS=$?
+          set -e
+
+          if [ "$BREW_STATUS" -ne 0 ]; then
+            echo "x86_64 brew install failed with status ${BREW_STATUS}."
+            echo "Trying known python@3.14 link fix, then retrying."
+
+            if arch -x86_64 "$X86_BREW" list python@3.14 >/dev/null 2>&1; then
+              arch -x86_64 "$X86_BREW" link --overwrite --force python@3.14 || true
+            fi
+
+            arch -x86_64 "$X86_BREW" install \
+              bison flex pkg-config mingw-w64 \
+              freetype gettext gnutls zlib \
+              bzip2 libpng sdl2 \
+              meson \
+              llvm llvm@15 \
+              vulkan-headers \
+              vulkan-loader \
+              molten-vk \
+              vulkan-tools
+          fi
+
+          arch -x86_64 "$X86_BREW" link --overwrite --force python@3.14 || true
+
+          arch -x86_64 "$X86_BREW" --prefix
+          arch -x86_64 "$X86_BREW" list --versions \
+            bison flex pkg-config mingw-w64 freetype gnutls zlib bzip2 \
+            libpng sdl2 meson llvm vulkan-loader molten-vk vulkan-tools
+
+      - name: Download prebuilt Wine runtime
+        env:
+          GH_TOKEN: ${{ github.token }}
+          WINE_RUNTIME_VERSION: ${{ github.event.inputs.wine_runtime_version || '001' }}
+          WINE_RUNTIME_PREFIX: ${{ github.event.inputs.wine_runtime_prefix || 'wine-runtime-' }}
+        run: |
+          set -euo pipefail
+          ROOT_DIR="${GITHUB_WORKSPACE:-$(pwd)}"
           mkdir -p .wine-runtime build
 
-          gh release download wine-runtime-latest \
+          gh release download ${WINE_RUNTIME_PREFIX}${WINE_RUNTIME_VERSION} \
             --pattern "muplar-wine-runtime-macos-arm64-x86_64.tar.gz" \
             --dir .wine-runtime \
             --clobber
 
           tar -xzf .wine-runtime/muplar-wine-runtime-macos-arm64-x86_64.tar.gz \
-            -C build
+            -C ${ROOT_DIR}/build
 
-          test -x build/wine-prefix/bin/wine || {
+          test -x ${ROOT_DIR}/build/wine-prefix/bin/wine || {
             echo "ERROR: prebuilt Wine runtime was not restored."
             exit 1
           }
 
-          test -f build/wine-prefix/lib/wine/x86_64-unix/winemetal.so || {
+          test -f ${ROOT_DIR}/build/wine-prefix/lib/wine/x86_64-unix/winemetal.so || {
             echo "ERROR: prebuilt DXMT runtime was not restored."
             exit 1
           }
@@ -106,19 +255,50 @@ jobs:
       - name: Download prebuilt JDK runtime
         env:
           GH_TOKEN: ${{ github.token }}
+          JDK_RUNTIME_VERSION: ${{ github.event.inputs.jdk_runtime_version || '001' }}
+          JDK_RUNTIME_PREFIX: ${{ github.event.inputs.jdk_runtime_prefix || 'jdk-runtime' }}
+          JDK_VERSION: ${{ github.event.inputs.jdk_version || '21' }}
         run: |
           set -euo pipefail
+          umask 022
+          ROOT_DIR="${GITHUB_WORKSPACE:-$(pwd)}"
+          JDK_OUT_DIR="${ROOT_DIR}/third_party/jdk-bin"
 
+          normalize_tree_permissions() {
+              local path="$1"
+
+              [ -e "$path" ] || return 0
+
+              # macOS-specific cleanup. Ignore errors on Linux or unsupported files.
+              chmod -RN "$path" 2>/dev/null || true
+              chflags -R nouchg "$path" 2>/dev/null || true
+              xattr -cr "$path" 2>/dev/null || true
+
+              # Make the tree readable/traversable by the signing step.
+              chmod -R u+rwX,go+rX "$path"
+
+              # Keep directories traversable and files readable.
+              find "$path" -type d -exec chmod 755 {} +
+              find "$path" -type f -exec chmod u+rw,go+r {} +
+          }
           mkdir -p .jdk-runtime build
 
-          gh release download jdk-runtime-latest \
+          gh release download ${JDK_RUNTIME_PREFIX}-${JDK_VERSION}-${JDK_RUNTIME_VERSION} \
             --pattern "muplar-jdk-runtime-macos-arm64-x86_64.tar.gz" \
             --dir .jdk-runtime \
             --clobber
 
-          tar -xzf .jdk-runtime/muplar-jdk-runtime-macos-arm64-x86_64.tar.gz
+          echo "[setup-jdk] Extracting..."
+          tar -xzvf .jdk-runtime/muplar-jdk-runtime-macos-arm64-x86_64.tar.gz -C ${ROOT_DIR}
 
-          test -x third_party/jdk-bin || {
+          echo "[setup-jdk] normalizing JDK permissions..."
+          normalize_tree_permissions "${JDK_OUT_DIR}"
+          if [ -f "$JDK_OUT_DIR/lib/server/classes.jsa" ]; then
+              echo "[setup-jdk] classes.jsa permissions:"
+              ls -lOe "$JDK_OUT_DIR/lib/server/classes.jsa"
+          fi
+
+          test -x ${JDK_OUT_DIR} || {
             echo "ERROR: prebuilt JDK runtime was not restored."
             exit 1
           }
@@ -128,28 +308,36 @@ jobs:
         run: |
           set -euo pipefail
 
-          ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+          ROOT_DIR="${GITHUB_WORKSPACE:-$(pwd)}"
           echo "Configuring source code..."
-          $SCRIPT=$ROOT_DIR/tools/configure-build.sh
+          SCRIPT=$ROOT_DIR/tools/configure-build.sh
           chmod +x ${SCRIPT}
           sh $SCRIPT
+
+      - name: Build elfuse
+        run: ninja -C build elfuse_external -v
+
+      - name: Build Wawona
+        run: ninja -C build wawona_external -v
 
       - name: Build Muplar app bundle
         shell: bash
         run: |
           set -euo pipefail
 
-          cmake --build build --parallel 3
+          ROOT_DIR="${GITHUB_WORKSPACE:-$(pwd)}"
 
-          test -d "build/bin/Muplar Instance Manager.app" || {
+          cmake --build build
+
+          test -d "${ROOT_DIR}/build/bin/Muplar Instance Manager.app" || {
             echo "ERROR: app bundle was not created:"
-            echo "  build/bin/Muplar Instance Manager.app"
+            echo "  ${ROOT_DIR}/build/bin/Muplar Instance Manager.app"
             exit 1
           }
 
-          ls -la "build/bin/Muplar Instance Manager.app/Contents"
-          ls -la "build/bin/Muplar Instance Manager.app/Contents/Frameworks"
-          ls -la "build/bin/Muplar Instance Manager.app/Contents/MacOS"
+          ls -la "${ROOT_DIR}/build/bin/Muplar Instance Manager.app/Contents"
+          ls -la "${ROOT_DIR}/build/bin/Muplar Instance Manager.app/Contents/Frameworks"
+          ls -la "${ROOT_DIR}/build/bin/Muplar Instance Manager.app/Contents/MacOS"
 
       - name: Package release zip
         run: |
@@ -165,15 +353,51 @@ jobs:
             dist/*.sha256
           if-no-files-found: error
 
+  release:
+    name: Create GitHub release
+    runs-on: ubuntu-latest
+    needs:
+      - build-macos-arm64
+
+    permissions:
+      contents: write
+
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+
+    steps:
+      - name: Download release artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: Muplar-macos-arm64
+          path: dist
+
+      - name: Show release files
+        shell: bash
+        run: |
+          set -euo pipefail
+          ls -lh dist
+
       - name: Create or update GitHub release
-        env:
-          GH_TOKEN: ${{ github.token }}
         shell: bash
         run: |
           set -euo pipefail
 
-          VERSION="${{ steps.release_vars.outputs.version }}"
-          PRERELEASE="${{ steps.release_vars.outputs.prerelease }}"
+          if [ "${GITHUB_EVENT_NAME}" = "workflow_dispatch" ]; then
+            VERSION="${{ github.event.inputs.version }}"
+            PRERELEASE="${{ github.event.inputs.prerelease }}"
+          else
+            VERSION="${GITHUB_REF_NAME}"
+            PRERELEASE="false"
+          fi
+
+          if [ -z "$VERSION" ]; then
+            echo "ERROR: VERSION is empty"
+            echo "GITHUB_EVENT_NAME=${GITHUB_EVENT_NAME}"
+            echo "GITHUB_REF_NAME=${GITHUB_REF_NAME:-}"
+            exit 1
+          fi
 
           args=(
             --title "Muplar ${VERSION}"
@@ -184,8 +408,6 @@ jobs:
             args+=(--prerelease)
           fi
 
-          # For manual workflow_dispatch, create the release tag at this commit.
-          # For tag push, GITHUB_REF_NAME already points to the pushed tag.
           if [ "${GITHUB_EVENT_NAME}" = "workflow_dispatch" ]; then
             args+=(--target "$GITHUB_SHA")
           fi

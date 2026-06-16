@@ -14,7 +14,7 @@ chmod +x ${SCRIPT}
 sh $SCRIPT
 
 echo "Configuring source code..."
-$SCRIPT=$ROOT_DIR/tools/configure-build.sh
+SCRIPT=$ROOT_DIR/tools/configure-build.sh
 chmod +x ${SCRIPT}
 sh $SCRIPT
 
