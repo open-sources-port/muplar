@@ -134,6 +134,7 @@ add_custom_target(populate_manager_bundle ALL
     COMMAND ${CMAKE_COMMAND} -E make_directory
         "${APP_CONTENTS}/MacOS"
         "${APP_CONTENTS}/Resources"
+        "${APP_CONTENTS}/Resources/tools"
         "${APP_CONTENTS}/Frameworks"
         "${APP_CONTENTS}/Frameworks/aarch64"
         "${APP_CONTENTS}/Frameworks/x86_64"
@@ -141,6 +142,12 @@ add_custom_target(populate_manager_bundle ALL
         "${APP_CONTENTS}/Frameworks/wine/bin"
         "${APP_CONTENTS}/Frameworks/wine/lib"
         "${APP_CONTENTS}/Frameworks/wine/share/wine"
+
+    # ── Linux rootfs provisioner script → Resources/tools/ ─────────────────────
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        "${CMAKE_SOURCE_DIR}/tools/provision-linux-rootfs.sh"
+        "${APP_CONTENTS}/Resources/tools/provision-linux-rootfs.sh"
+    COMMAND chmod 755 "${APP_CONTENTS}/Resources/tools/provision-linux-rootfs.sh"
 
     # ── Windows compatibility defaults → Resources/ ─────────────────────────
     COMMAND ${CMAKE_COMMAND} -E copy_if_different
@@ -164,7 +171,11 @@ add_custom_target(populate_manager_bundle ALL
 
     # ── Wawona Dependencies → Frameworks/ (with dependency bundling) ──────────
     COMMAND bash -c
-        "brew_prefix=''; \
+        "if [ -f '${CMAKE_BINARY_DIR}/bin/wawona' ]; then \
+             cp -f '${CMAKE_BINARY_DIR}/bin/wawona' '${APP_CONTENTS}/Frameworks/wawona'; \
+             chmod 755 '${APP_CONTENTS}/Frameworks/wawona'; \
+         fi; \
+         brew_prefix=''; \
          for prefix in /opt/homebrew /usr/local; do \
              if [ -d \"\$prefix\" ]; then \
                  brew_prefix=\"\$prefix\"; \
@@ -204,6 +215,7 @@ add_custom_target(populate_manager_bundle ALL
                  fi; \
              }; \
              patch_deps '${APP_CONTENTS}/MacOS/${APP_BUNDLE_NAME}' '@loader_path/../Frameworks/'; \
+             patch_deps '${APP_CONTENTS}/Frameworks/wawona' '@loader_path/'; \
              patch_deps '${APP_CONTENTS}/Frameworks/libssl.3.dylib' '@loader_path/'; \
              patch_deps '${APP_CONTENTS}/Frameworks/libcrypto.3.dylib' '@loader_path/'; \
              patch_deps '${APP_CONTENTS}/Frameworks/libxkbcommon.0.dylib' '@loader_path/'; \
@@ -213,6 +225,9 @@ add_custom_target(populate_manager_bundle ALL
                      codesign --force -s - '${APP_CONTENTS}/Frameworks/'\"\$lib\" 2>/dev/null || true; \
                  fi; \
              done; \
+             if [ -f '${APP_CONTENTS}/Frameworks/wawona' ]; then \
+                 codesign --force -s - '${APP_CONTENTS}/Frameworks/wawona' 2>/dev/null || true; \
+             fi; \
          fi"
 
     # ── Guest EGL/GLESv2 Stubs → Frameworks/ ─────────────────────────────────
