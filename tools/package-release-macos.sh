@@ -9,6 +9,24 @@ APP_SRC="${MUPLAR_APP_PATH:-$BUILD_DIR/bin/$APP_NAME.app}"
 APP_EXECUTABLE="${MUPLAR_APP_EXECUTABLE:-}"
 ARCH="${MUPLAR_RELEASE_ARCH:-$(uname -m)}"
 
+normalize_tree_permissions() {
+    local path="$1"
+
+    [ -e "$path" ] || return 0
+
+    # macOS-specific cleanup. Ignore errors on Linux or unsupported files.
+    chmod -RN "$path" 2>/dev/null || true
+    chflags -R nouchg "$path" 2>/dev/null || true
+    xattr -cr "$path" 2>/dev/null || true
+
+    # Make the tree readable/traversable by the signing step.
+    chmod -R u+rwX,go+rX "$path"
+
+    # Keep directories traversable and files readable.
+    find "$path" -type d -exec chmod 755 {} +
+    find "$path" -type f -exec chmod u+rw,go+r {} +
+}
+
 case "$ARCH" in
   arm64|aarch64) ARCH_NAME="arm64" ;;
   x86_64) ARCH_NAME="x86_64" ;;
@@ -66,13 +84,14 @@ else
   echo "WARN: $JDK_BIN_SRC not found; Java-only APK bootstrap will be disabled." >&2
 fi
 
+normalize_tree_permissions "${JDK_BIN_DST}"
+
 # Basic release sanity checks based on the current Muplar bundle layout.
 required_paths=(
   "$APP_STAGE/Contents/MacOS/$APP_EXECUTABLE"
   "$APP_STAGE/Contents/Frameworks/angle"
   "$APP_STAGE/Contents/Frameworks/wine"
   "$APP_STAGE/Contents/Frameworks/wawona"
-  "$APP_STAGE/Contents/Frameworks/muplar-wayland"
   "$APP_STAGE/Contents/Frameworks/aarch64"
   "$APP_STAGE/Contents/Frameworks/x86_64"
 )

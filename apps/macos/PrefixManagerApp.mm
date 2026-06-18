@@ -2798,28 +2798,6 @@ static NSString* MapLinuxIconToSFSymbol(NSString* icon)
     return nil;
 }
 
-- (NSString*)wawonaBinPath
-{
-    NSString* bundleWawona = [[[NSBundle mainBundle] privateFrameworksPath]
-        stringByAppendingPathComponent:@"wawona"];
-    if ([[NSFileManager defaultManager] isExecutableFileAtPath:bundleWawona])
-        return bundleWawona;
-
-    NSString* parentDir = [[NSBundle mainBundle] bundlePath].stringByDeletingLastPathComponent;
-    NSString* siblingWawona = [parentDir stringByAppendingPathComponent:@"wawona"];
-    if ([[NSFileManager defaultManager] isExecutableFileAtPath:siblingWawona])
-        return siblingWawona;
-
-    NSString* workspaceRoot = FindWorkspaceRoot();
-    if (workspaceRoot) {
-        NSString* devWawona = [[workspaceRoot stringByAppendingPathComponent:@"build/bin"]
-            stringByAppendingPathComponent:@"wawona"];
-        if ([[NSFileManager defaultManager] isExecutableFileAtPath:devWawona])
-            return devWawona;
-    }
-    return nil;
-}
-
 - (NSString*)angleLibraryDir
 {
     NSString* bundleAngle = [[[NSBundle mainBundle] privateFrameworksPath]

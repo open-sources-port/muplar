@@ -146,6 +146,17 @@ path-exclude=/lib/terminfo/*/*[A-Z]*
 EOF
 }
 
+ensure_apt_cache_config() {
+    local root="$1"
+    if [[ "$DISTRO" == "ubuntu" || "$DISTRO" == "debian" ]]; then
+        local dir="$root/etc/apt/apt.conf.d"
+        mkdir -p "$dir"
+        cat >"$dir/99cache-limit" <<'EOF'
+APT::Cache-Start "100000000";
+EOF
+    fi
+}
+
 ensure_arch_mirror_config() {
     local root="$1"
     local mirrorlist="$root/etc/pacman.d/mirrorlist"
@@ -939,6 +950,7 @@ chmod 1777 "$rootfs/tmp" "$rootfs/var/tmp"
 ensure_resolver_config "$rootfs"
 ensure_certificate_symlink_config "$rootfs"
 ensure_dpkg_casefold_config "$rootfs"
+ensure_apt_cache_config "$rootfs"
 if [[ "$DISTRO" == "arch" ]]; then
     ensure_arch_pacman_trust_config "$rootfs"
     ensure_arch_pacman_local_db_config "$rootfs"
