@@ -3383,8 +3383,15 @@ static NSString* MapLinuxIconToSFSymbol(NSString* icon)
     }
 
     NSString* x11Error = nil;
+    NSMutableArray<NSString*>* guestEnvironmentArguments =
+        [NSMutableArray arrayWithArray:@[@"/usr/bin/env",
+                                         @"HOME=/home/muplar",
+                                         @"USER=muplar",
+                                         @"LOGNAME=muplar",
+                                         @"PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"]];
+    [guestEnvironmentArguments addObjectsFromArray:guestArguments];
     NSArray<NSString*>* actualGuestArguments =
-        [self wrapGuestArgumentsForX11IfNeeded:guestArguments
+        [self wrapGuestArgumentsForX11IfNeeded:guestEnvironmentArguments
                                         prefix:selected
                                   errorMessage:&x11Error];
     if (!actualGuestArguments) {
@@ -3395,8 +3402,8 @@ static NSString* MapLinuxIconToSFSymbol(NSString* icon)
     NSMutableDictionary<NSString*, NSString*>* env =
         [NSProcessInfo.processInfo.environment mutableCopy];
     ApplyDefaultLinuxDisplayEnvironment(env);
-    env[@"ELFUSE_GUEST_UID"] = @"0";
-    env[@"ELFUSE_GUEST_GID"] = @"0";
+    env[@"ELFUSE_GUEST_UID"] = @"1000";
+    env[@"ELFUSE_GUEST_GID"] = @"1000";
     NSString* angleDir = [self angleLibraryDir];
     if (angleDir.length > 0) {
         NSString* existingDyld = env[@"DYLD_LIBRARY_PATH"];
@@ -3539,8 +3546,8 @@ static NSString* MapLinuxIconToSFSymbol(NSString* icon)
     NSString* command = [NSString stringWithFormat:
         @"MUP=%@\n"
         @"PREFIX=%@\n"
-        @"export ELFUSE_GUEST_UID=0\n"
-        @"export ELFUSE_GUEST_GID=0\n"
+        @"export ELFUSE_GUEST_UID=1000\n"
+        @"export ELFUSE_GUEST_GID=1000\n"
         @"LOG=%@\n"
         @"LOGGING=%@\n"
         @"clear\n"
@@ -3561,10 +3568,10 @@ static NSString* MapLinuxIconToSFSymbol(NSString* icon)
         @"  esac\n"
         @"  if [ \"$LOGGING\" = 1 ]; then printf '\\n$ %%s\\n' \"$line\" >> \"$LOG\"; fi\n"
         @"  if [ \"$LOGGING\" = 1 ]; then\n"
-        @"    \"$MUP\" --quiet --prefix \"$PREFIX\" /bin/sh -c \"$line\"\n"
+        @"    \"$MUP\" --quiet --prefix \"$PREFIX\" /usr/bin/env HOME=/home/muplar USER=muplar LOGNAME=muplar PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin /bin/sh -c \"$line\"\n"
         @"    rc=$?\n"
         @"  else\n"
-        @"    \"$MUP\" --quiet --prefix \"$PREFIX\" /bin/sh -c \"$line\"\n"
+        @"    \"$MUP\" --quiet --prefix \"$PREFIX\" /usr/bin/env HOME=/home/muplar USER=muplar LOGNAME=muplar PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin /bin/sh -c \"$line\"\n"
         @"    rc=$?\n"
         @"  fi\n"
         @"  if [ $rc -ne 0 ]; then printf '[exit %%d]\\n' \"$rc\"; fi\n"

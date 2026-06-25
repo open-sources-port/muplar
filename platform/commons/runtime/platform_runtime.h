@@ -23,6 +23,7 @@ struct RuntimeJniCallConfig {
 struct PlatformLaunchConfig {
     std::string input_path;
     std::vector<std::string> guest_args;
+    std::vector<std::string> guest_env;
     std::string sysroot;
     bool verbose = false;
     bool quiet = false;

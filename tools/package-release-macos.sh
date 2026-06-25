@@ -91,7 +91,6 @@ required_paths=(
   "$APP_STAGE/Contents/MacOS/$APP_EXECUTABLE"
   "$APP_STAGE/Contents/Frameworks/angle"
   "$APP_STAGE/Contents/Frameworks/wine"
-  "$APP_STAGE/Contents/Frameworks/wawona"
   "$APP_STAGE/Contents/Frameworks/aarch64"
   "$APP_STAGE/Contents/Frameworks/x86_64"
 )

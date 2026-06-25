@@ -35,6 +35,38 @@ public final class ArtApkMain {
                     Class.forName(activityClassName, false, loader);
                 System.out.println("[Muplar/ART] loaded activity class="
                     + activityClass.getName());
+
+                // Instantiate activity (possibly private constructor)
+                java.lang.reflect.Constructor<?> ctor = activityClass.getDeclaredConstructor();
+                ctor.setAccessible(true);
+                Object activityObj = ctor.newInstance();
+                System.out.println("[Muplar/ART] instantiated activity class");
+
+                // Call onCreate lifecycle method using reflection
+                try {
+                    java.lang.reflect.Method onCreateMethod = null;
+                    Class<?> curr = activityClass;
+                    while (curr != null) {
+                        try {
+                            onCreateMethod = curr.getDeclaredMethod("onCreate", Class.forName("android.os.Bundle", false, loader));
+                            break;
+                        } catch (NoSuchMethodException e) {
+                            curr = curr.getSuperclass();
+                        }
+                    }
+                    if (onCreateMethod != null) {
+                        onCreateMethod.setAccessible(true);
+                        Class<?> bundleClass = Class.forName("android.os.Bundle", false, loader);
+                        Object bundleObj = bundleClass.getDeclaredConstructor().newInstance();
+                        onCreateMethod.invoke(activityObj, bundleObj);
+                        System.out.println("[Muplar/ART] onCreate completed successfully");
+                    } else {
+                        System.out.println("[Muplar/ART] onCreate method not found");
+                    }
+                } catch (Exception e) {
+                    System.err.println("[Muplar/ART] failed to invoke onCreate: " + e.getMessage());
+                    e.printStackTrace();
+                }
             }
         } catch (Throwable t) {
             System.err.println("[Muplar/ART] bootstrap failed: "

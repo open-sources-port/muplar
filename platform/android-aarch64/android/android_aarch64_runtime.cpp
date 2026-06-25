@@ -96,52 +96,6 @@ void copy_jni_call_config(const RuntimeJniCallConfig& from,
     to.receiver_static = from.receiver_static;
 }
 
-void set_guest_env(std::vector<std::string>& env,
-                   const std::string& key,
-                   const std::string& value)
-{
-    std::string prefix = key + "=";
-    for (std::string& entry : env) {
-        if (entry.rfind(prefix, 0) == 0) {
-            entry = prefix + value;
-            return;
-        }
-    }
-    env.push_back(prefix + value);
-}
-
-bool guest_env_has_key(const std::vector<std::string>& env,
-                       const std::string& key)
-{
-    const std::string prefix = key + "=";
-    for (const std::string& entry : env) {
-        if (entry.rfind(prefix, 0) == 0)
-            return true;
-    }
-    return false;
-}
-
-void set_guest_env_if_missing(std::vector<std::string>& env,
-                              const std::string& key,
-                              const std::string& value)
-{
-    if (!value.empty() && !guest_env_has_key(env, key))
-        env.push_back(key + "=" + value);
-}
-
-void pass_host_env_if_set(std::vector<std::string>& env, const char* name)
-{
-    const char* value = std::getenv(name);
-    if (value && value[0])
-        set_guest_env(env, name, value);
-}
-
-std::string default_wawona_runtime_dir()
-{
-    return "/tmp/wawona-" +
-           std::to_string(static_cast<unsigned long>(getuid()));
-}
-
 void ensure_linux_guest_x11_socket_dir(const prefix::PrefixLayout& active_prefix)
 {
     if (active_prefix.kind != prefix::PrefixKind::Linux)
@@ -153,38 +107,6 @@ void ensure_linux_guest_x11_socket_dir(const prefix::PrefixLayout& active_prefix
         std::filesystem::remove(x11_dir, ec);
     if (!std::filesystem::exists(x11_dir, ec))
         std::filesystem::create_directories(x11_dir, ec);
-}
-
-void pass_linux_display_environment(std::vector<std::string>& env)
-{
-    // Keep prefix launches isolated, but allow Linux Wayland clients to find
-    // the host Wawona compositor. X11 is intentionally guest-owned: the UI
-    // starts guest Xwayland inside the rootfs for X11 apps such as xterm.
-    static constexpr const char* kDisplayEnv[] = {
-        "WAYLAND_DISPLAY",
-        "XDG_RUNTIME_DIR",
-        "DBUS_SESSION_BUS_ADDRESS",
-        "XDG_SESSION_TYPE",
-        "GDK_BACKEND",
-        "QT_QPA_PLATFORM",
-        "SDL_VIDEODRIVER",
-        "CLUTTER_BACKEND",
-        "EGL_PLATFORM",
-        "LIBGL_ALWAYS_INDIRECT",
-    };
-
-    for (const char* name : kDisplayEnv)
-        pass_host_env_if_set(env, name);
-
-    set_guest_env_if_missing(env, "XDG_RUNTIME_DIR",
-                             default_wawona_runtime_dir());
-    set_guest_env_if_missing(env, "WAYLAND_DISPLAY", "wayland-0");
-    set_guest_env_if_missing(env, "XDG_SESSION_TYPE", "wayland");
-    set_guest_env_if_missing(env, "GDK_BACKEND", "wayland,x11");
-    set_guest_env_if_missing(env, "QT_QPA_PLATFORM", "wayland;xcb");
-    set_guest_env_if_missing(env, "SDL_VIDEODRIVER", "wayland");
-    set_guest_env_if_missing(env, "CLUTTER_BACKEND", "wayland");
-    set_guest_env_if_missing(env, "EGL_PLATFORM", "wayland");
 }
 
 std::vector<std::string> default_guest_environment(
@@ -203,22 +125,7 @@ std::vector<std::string> default_guest_environment(
             "USER=shell",
             "TERM=xterm-256color",
         };
-    case prefix::PrefixKind::Linux: {
-        std::string home_dir = "/home/muplar";
-        std::vector<std::string> env = {
-            "PATH=/bin:/usr/bin:/sbin:/usr/sbin",
-            "HOME=" + home_dir,
-            "LOGNAME=muplar",
-            "PWD=" + home_dir,
-            "SHELL=/bin/sh",
-            "TMPDIR=/tmp",
-            "USER=muplar",
-            "TERM=xterm-256color",
-        };
-        pass_linux_display_environment(env);
-        return env;
-    }
-    case prefix::PrefixKind::Wine:
+    default:
         return {
             "PATH=/bin:/usr/bin",
             "HOME=/home/muplar",
@@ -228,7 +135,6 @@ std::vector<std::string> default_guest_environment(
             "TERM=xterm-256color",
         };
     }
-    return {};
 }
 
 std::filesystem::path default_host_cwd(
@@ -237,11 +143,9 @@ std::filesystem::path default_host_cwd(
     switch (active_prefix.kind) {
     case prefix::PrefixKind::Android:
         return active_prefix.rootfs / "data/local/tmp";
-    case prefix::PrefixKind::Linux:
-    case prefix::PrefixKind::Wine:
+    default:
         return active_prefix.rootfs / "home/muplar";
     }
-    return active_prefix.rootfs;
 }
 
 void inspect_elf(const std::string& elf_path)
@@ -434,7 +338,11 @@ int AndroidAarch64Runtime::run(const PlatformLaunchConfig& config)
     if (config.active_prefix) {
         ensure_linux_guest_x11_socket_dir(*config.active_prefix);
         guest_cfg.inherit_host_env = false;
-        guest_cfg.env = default_guest_environment(*config.active_prefix);
+        if (!config.guest_env.empty()) {
+            guest_cfg.env = config.guest_env;
+        } else {
+            guest_cfg.env = default_guest_environment(*config.active_prefix);
+        }
         guest_cfg.host_cwd = default_host_cwd(*config.active_prefix).string();
     }
     
