@@ -71,3 +71,4 @@ third_party/jdk-bin/
 # Keep pre-built ANGLE dylibs tracked (overrides the *.dylib rule above)
 !third_party/angle-bin/*.dylib
 **/.cache
+control.tar.zst

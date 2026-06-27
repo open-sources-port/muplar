@@ -6,6 +6,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <fstream>
+#include <iterator>
 #include <sstream>
 #include <stdexcept>
 #include <vector>
@@ -476,6 +477,343 @@ static void write_text_file_if_missing_or_empty(const std::filesystem::path& pat
     std::ofstream out(path, std::ios::trunc);
     if (out)
         out << content;
+}
+
+static void ensure_deb_noninteractive_compat(
+    const std::filesystem::path& rootfs,
+    const std::string& distro)
+{
+    std::string normalized = distro;
+    std::transform(normalized.begin(), normalized.end(), normalized.begin(),
+                   [](unsigned char c) { return std::tolower(c); });
+    if (normalized != "ubuntu" && normalized != "debian")
+        return;
+
+    write_text_file_if_missing(
+        rootfs / "etc" / "profile.d" / "muplar-debconf.sh",
+        "# Muplar shells currently have no controlling Linux tty.\n"
+        "export DEBIAN_FRONTEND=${DEBIAN_FRONTEND:-noninteractive}\n"
+        "export DEBCONF_NONINTERACTIVE_SEEN=true\n");
+
+    const auto prepare_script =
+        rootfs / "usr" / "local" / "sbin" / "muplar-prepare-dpkg";
+    write_text_file_if_missing(
+        prepare_script,
+        "#!/bin/sh\n"
+        "set -e\n"
+        "ca_file=/var/lib/dpkg/info/ca-certificates.postinst\n"
+        "ca_marker='# Muplar noninteractive ca-certificates compatibility'\n"
+        "if [ -f \"$ca_file\" ] && ! grep -Fq \"$ca_marker\" \"$ca_file\"; then\n"
+        "  ca_tmp=\"$ca_file.muplar.$$\"\n"
+        "  awk '\n"
+        "  !done && $0 ~ /^[[:space:]]*dpkg-trigger --no-await update-ca-certificates/ {\n"
+        "    print \"    # Muplar noninteractive ca-certificates compatibility\"\n"
+        "    print \"    exit 0\"\n"
+        "    done=1\n"
+        "  }\n"
+        "  { print }\n"
+        "  END { if (!done) exit 2 }\n"
+        "  ' \"$ca_file\" >\"$ca_tmp\"\n"
+        "  cat \"$ca_tmp\" >\"$ca_file\"\n"
+        "  rm -f \"$ca_tmp\"\n"
+        "fi\n"
+        "file=/var/lib/dpkg/info/tzdata.postinst\n"
+        "marker='# Muplar noninteractive tzdata compatibility'\n"
+        "[ -f \"$file\" ] || exit 0\n"
+        "grep -Fq \"$marker\" \"$file\" && exit 0\n"
+        "tmp=\"$file.muplar.$$\"\n"
+        "awk '\n"
+        "{ print }\n"
+        "!done && $0 == \"set -e\" {\n"
+        "  print \"\"\n"
+        "  print \"# Muplar noninteractive tzdata compatibility\"\n"
+        "  print \"if [ \\\"${DEBIAN_FRONTEND:-}\\\" = noninteractive ]; then\"\n"
+        "  print \"  if [ ! -e \\\"${DPKG_ROOT:-}/etc/localtime\\\" ]; then\"\n"
+        "  print \"    ln -snf /usr/share/zoneinfo/Etc/UTC \\\"${DPKG_ROOT:-}/etc/localtime\\\"\"\n"
+        "  print \"  fi\"\n"
+        "  print \"  exit 0\"\n"
+        "  print \"fi\"\n"
+        "  done=1\n"
+        "}\n"
+        "END { if (!done) exit 2 }\n"
+        "' \"$file\" >\"$tmp\"\n"
+        "cat \"$tmp\" >\"$file\"\n"
+        "rm -f \"$tmp\"\n");
+    std::error_code permissions_ec;
+    std::filesystem::permissions(
+        prepare_script,
+        std::filesystem::perms::owner_all |
+            std::filesystem::perms::group_read |
+            std::filesystem::perms::group_exec |
+            std::filesystem::perms::others_read |
+            std::filesystem::perms::others_exec,
+        std::filesystem::perm_options::replace, permissions_ec);
+
+    write_text_file_if_missing(
+        rootfs / "etc" / "apt" / "apt.conf.d" /
+            "00muplar-noninteractive",
+        "DPkg::Pre-Invoke {\"/usr/local/sbin/muplar-prepare-dpkg\";};\n");
+
+    const auto ca_postinst = rootfs / "var" / "lib" / "dpkg" / "info" /
+                             "ca-certificates.postinst";
+    std::ifstream ca_in(ca_postinst);
+    if (ca_in) {
+        std::string ca_content((std::istreambuf_iterator<char>(ca_in)),
+                               std::istreambuf_iterator<char>());
+        const std::string ca_marker =
+            "# Muplar noninteractive ca-certificates compatibility";
+        const std::string ca_anchor =
+            "dpkg-trigger --no-await update-ca-certificates\n";
+        if (ca_content.find(ca_marker) == std::string::npos) {
+            const auto ca_pos = ca_content.find(ca_anchor);
+            if (ca_pos != std::string::npos) {
+                ca_content.insert(
+                    ca_pos,
+                    "\t    # Muplar noninteractive ca-certificates compatibility\n"
+                    "\t    exit 0\n");
+                std::ofstream ca_out(ca_postinst, std::ios::trunc);
+                if (ca_out)
+                    ca_out << ca_content;
+            }
+        }
+    }
+
+    const auto postinst = rootfs / "var" / "lib" / "dpkg" / "info" /
+                          "tzdata.postinst";
+    std::ifstream in(postinst);
+    if (!in)
+        return;
+
+    std::string content((std::istreambuf_iterator<char>(in)),
+                        std::istreambuf_iterator<char>());
+    const std::string marker = "# Muplar noninteractive tzdata compatibility";
+    if (content.find(marker) != std::string::npos)
+        return;
+
+    const std::string anchor = "set -e\n";
+    const auto pos = content.find(anchor);
+    if (pos == std::string::npos)
+        return;
+
+    const std::string guard =
+        "\n# Muplar noninteractive tzdata compatibility\n"
+        "if [ \"${DEBIAN_FRONTEND:-}\" = noninteractive ]; then\n"
+        "\tif [ ! -e \"${DPKG_ROOT:-}/etc/localtime\" ]; then\n"
+        "\t\tln -snf /usr/share/zoneinfo/Etc/UTC "
+        "\"${DPKG_ROOT:-}/etc/localtime\"\n"
+        "\tfi\n"
+        "\texit 0\n"
+        "fi\n";
+    content.insert(pos + anchor.size(), guard);
+
+    std::ofstream out(postinst, std::ios::trunc);
+    if (out)
+        out << content;
+}
+
+static void ensure_linux_machine_id(const std::filesystem::path& rootfs)
+{
+    const auto path = rootfs / "etc" / "machine-id";
+    std::error_code ec;
+    if (std::filesystem::is_regular_file(path, ec) &&
+        std::filesystem::file_size(path, ec) >= 32)
+        return;
+
+    unsigned char bytes[16];
+    arc4random_buf(bytes, sizeof(bytes));
+    static constexpr char hex[] = "0123456789abcdef";
+    char id[34];
+    for (size_t i = 0; i < sizeof(bytes); ++i) {
+        id[i * 2] = hex[bytes[i] >> 4];
+        id[i * 2 + 1] = hex[bytes[i] & 0x0f];
+    }
+    id[32] = '\n';
+    id[33] = '\0';
+
+    std::filesystem::create_directories(path.parent_path(), ec);
+    std::ofstream out(path, std::ios::trunc);
+    if (out)
+        out << id;
+}
+
+static void rename_linux_account_entry(const std::filesystem::path& path,
+                                       const std::string& id,
+                                       bool passwd_file)
+{
+    std::ifstream in(path);
+    if (!in)
+        return;
+
+    std::vector<std::string> lines;
+    std::string line;
+    bool changed = false;
+    while (std::getline(in, line)) {
+        std::vector<std::string> fields;
+        std::stringstream stream(line);
+        std::string field;
+        while (std::getline(stream, field, ':'))
+            fields.push_back(field);
+        if ((passwd_file && fields.size() >= 7 && fields[2] == id) ||
+            (!passwd_file && fields.size() >= 3 && fields[2] == id)) {
+            fields[0] = "muplar";
+            if (passwd_file) {
+                fields[4] = "Muplar user";
+                fields[5] = "/home/muplar";
+            }
+            line.clear();
+            for (size_t i = 0; i < fields.size(); ++i) {
+                if (i != 0)
+                    line += ':';
+                line += fields[i];
+            }
+            changed = true;
+        }
+        lines.push_back(line);
+    }
+    if (!changed)
+        return;
+
+    std::ofstream out(path, std::ios::trunc);
+    for (const auto& output_line : lines)
+        out << output_line << '\n';
+}
+
+static void rename_linux_account_by_name(const std::filesystem::path& path,
+                                         const std::string& old_name)
+{
+    std::ifstream in(path);
+    if (!in)
+        return;
+
+    std::vector<std::string> lines;
+    std::string line;
+    bool changed = false;
+    while (std::getline(in, line)) {
+        if (line.rfind(old_name + ":", 0) == 0) {
+            line.replace(0, old_name.size(), "muplar");
+            if (path.filename() == "shadow") {
+                const auto password_end = line.find(':', 7);
+                if (password_end != std::string::npos)
+                    line.replace(7, password_end - 7, "");
+            }
+            changed = true;
+        }
+        lines.push_back(line);
+    }
+    if (!changed)
+        return;
+
+    std::ofstream out(path, std::ios::trunc);
+    for (const auto& output_line : lines)
+        out << output_line << '\n';
+}
+
+static void ensure_linux_unprivileged_user(const std::filesystem::path& rootfs)
+{
+    std::string old_name = "user";
+    {
+        std::ifstream passwd(rootfs / "etc" / "passwd");
+        std::string line;
+        while (std::getline(passwd, line)) {
+            std::stringstream stream(line);
+            std::string name, password, uid;
+            std::getline(stream, name, ':');
+            std::getline(stream, password, ':');
+            std::getline(stream, uid, ':');
+            if (uid == "1000") {
+                old_name = name;
+                break;
+            }
+        }
+    }
+
+    rename_linux_account_entry(rootfs / "etc" / "passwd", "1000", true);
+    rename_linux_account_entry(rootfs / "etc" / "group", "1000", false);
+    rename_linux_account_by_name(rootfs / "etc" / "shadow", old_name);
+    rename_linux_account_by_name(rootfs / "etc" / "gshadow", old_name);
+
+    auto has_id = [](const std::filesystem::path& path, const char* id) {
+        std::ifstream in(path);
+        std::string line;
+        const std::string marker = std::string(":") + id + ":";
+        while (std::getline(in, line)) {
+            if (line.find(marker) != std::string::npos)
+                return true;
+        }
+        return false;
+    };
+    if (!has_id(rootfs / "etc" / "passwd", "1000")) {
+        std::ofstream passwd(rootfs / "etc" / "passwd", std::ios::app);
+        passwd << "muplar:x:1000:1000:Muplar user:/home/muplar:/bin/sh\n";
+    }
+    if (!has_id(rootfs / "etc" / "group", "1000")) {
+        std::ofstream group(rootfs / "etc" / "group", std::ios::app);
+        group << "muplar:x:1000:\n";
+    }
+    {
+        std::ifstream shadow_in(rootfs / "etc" / "shadow");
+        std::string shadow_content((std::istreambuf_iterator<char>(shadow_in)),
+                                   std::istreambuf_iterator<char>());
+        if (!shadow_content.empty() &&
+            shadow_content.find("muplar:") == std::string::npos) {
+            std::ofstream shadow(rootfs / "etc" / "shadow", std::ios::app);
+            shadow << "muplar::20000:0:99999:7:::\n";
+        }
+    }
+
+    {
+        const auto hosts_path = rootfs / "etc" / "hosts";
+        std::ifstream hosts_in(hosts_path);
+        std::string hosts_content((std::istreambuf_iterator<char>(hosts_in)),
+                                  std::istreambuf_iterator<char>());
+        if (hosts_content.find("elfuse") == std::string::npos) {
+            std::ofstream hosts(hosts_path, std::ios::app);
+            hosts << "127.0.0.1 elfuse\n";
+        }
+    }
+
+    const auto sudoers = rootfs / "etc" / "sudoers.d" / "90-muplar";
+    write_text_file_if_missing(sudoers,
+                               "muplar ALL=(ALL:ALL) NOPASSWD: ALL\n");
+    std::error_code ec;
+    std::filesystem::permissions(
+        sudoers,
+        std::filesystem::perms::owner_read |
+            std::filesystem::perms::group_read,
+        std::filesystem::perm_options::replace, ec);
+    ec.clear();
+    std::filesystem::permissions(
+        rootfs / "home" / "muplar",
+        std::filesystem::perms::owner_all |
+            std::filesystem::perms::group_all |
+            std::filesystem::perms::others_all,
+        std::filesystem::perm_options::replace, ec);
+
+    const auto sudo_compat = rootfs / "usr" / "local" / "bin" / "sudo";
+    write_text_file_if_missing(
+        sudo_compat,
+        "#!/bin/sh\n"
+        "while [ $# -gt 0 ]; do\n"
+        "  case \"$1\" in\n"
+        "    -n|-E|-H|-S) shift ;;\n"
+        "    -u) [ \"${2:-root}\" = root ] || { echo 'sudo: only root is supported' >&2; exit 1; }; shift 2 ;;\n"
+        "    --) shift; break ;;\n"
+        "    -*) echo \"sudo: unsupported option: $1\" >&2; exit 1 ;;\n"
+        "    *) break ;;\n"
+        "  esac\n"
+        "done\n"
+        "[ $# -gt 0 ] || exec /bin/sh\n"
+        "exec \"$@\"\n");
+    ec.clear();
+    std::filesystem::permissions(
+        sudo_compat,
+        std::filesystem::perms::owner_all |
+            std::filesystem::perms::set_uid |
+            std::filesystem::perms::group_read |
+            std::filesystem::perms::group_exec |
+            std::filesystem::perms::others_read |
+            std::filesystem::perms::others_exec,
+        std::filesystem::perm_options::replace, ec);
 }
 
 static std::string join_strings(const std::vector<std::string>& values,
@@ -1345,6 +1683,10 @@ void ensure_layout_dirs(const PrefixLayout& layout)
         std::filesystem::create_directories(layout.rootfs / "data" / "system");
         std::filesystem::create_directories(layout.rootfs / "system" / "bin");
         std::filesystem::create_directories(layout.rootfs / "system" / "xbin");
+        std::filesystem::create_directories(layout.rootfs / "cache");
+        std::filesystem::create_directories(layout.rootfs / "sdcard");
+        std::filesystem::create_directories(layout.rootfs / "storage");
+        std::filesystem::create_directories(layout.rootfs / "mnt");
         {
             std::error_code ec;
             auto sh_path = find_guest_sh();
@@ -1382,6 +1724,9 @@ void ensure_layout_dirs(const PrefixLayout& layout)
                                        linux_common::os_release_content(profile));
             write_text_file_if_missing(layout.rootfs / "etc" / "hostname",
                                        layout.name + "\n");
+            write_text_file_if_missing(layout.rootfs / "etc" / "hosts",
+                                       "127.0.0.1 localhost elfuse\n"
+                                       "::1 localhost elfuse\n");
             write_text_file_if_missing_or_empty(
                 layout.rootfs / "etc" / "resolv.conf",
                 "nameserver 1.1.1.1\n"
@@ -1498,22 +1843,27 @@ void ensure_layout_dirs(const PrefixLayout& layout)
                 }
             }
 
-            // Expose libEGL.so and libGLESv2.so stubs
+            // Expose libEGL.so and libGLESv2.so stubs to /vendor/lib
+            // to prevent guest package managers from replacing them
             {
-                std::filesystem::create_directories(layout.rootfs / "usr" / "lib");
+                std::filesystem::create_directories(layout.rootfs / "vendor" / "lib");
                 auto egl_path = find_guest_stub("libEGL.so", layout.arch);
                 if (!egl_path.empty()) {
-                    auto dest = layout.rootfs / "usr" / "lib" / "libEGL.so";
+                    auto dest = layout.rootfs / "vendor" / "lib" / "libEGL.so";
                     copy_file_if_changed(egl_path, dest, ec);
-                    ensure_relative_symlink(layout.rootfs / "usr" / "lib" / "libEGL.so.1", "libEGL.so");
+                    ensure_relative_symlink(layout.rootfs / "vendor" / "lib" / "libEGL.so.1", "libEGL.so");
                 }
                 auto gles_path = find_guest_stub("libGLESv2.so", layout.arch);
                 if (!gles_path.empty()) {
-                    auto dest = layout.rootfs / "usr" / "lib" / "libGLESv2.so";
+                    auto dest = layout.rootfs / "vendor" / "lib" / "libGLESv2.so";
                     copy_file_if_changed(gles_path, dest, ec);
-                    ensure_relative_symlink(layout.rootfs / "usr" / "lib" / "libGLESv2.so.2", "libGLESv2.so");
+                    ensure_relative_symlink(layout.rootfs / "vendor" / "lib" / "libGLESv2.so.2", "libGLESv2.so");
                 }
             }
+
+            ensure_linux_machine_id(layout.rootfs);
+            ensure_deb_noninteractive_compat(layout.rootfs, layout.distro);
+            ensure_linux_unprivileged_user(layout.rootfs);
         }
         break;
     case PrefixKind::Wine:
@@ -2088,6 +2438,98 @@ PrefixState query_prefix_state(const PrefixLayout& layout)
     std::error_code ec;
     std::filesystem::remove(pid_file_path(layout), ec);
     return PrefixState::Stopped;
+}
+
+static void set_guest_env(std::vector<std::string>& env,
+                          const std::string& key,
+                          const std::string& value)
+{
+    std::string prefix = key + "=";
+    for (std::string& entry : env) {
+        if (entry.rfind(prefix, 0) == 0) {
+            entry = prefix + value;
+            return;
+        }
+    }
+    env.push_back(prefix + value);
+}
+
+static bool guest_env_has_key(const std::vector<std::string>& env,
+                              const std::string& key)
+{
+    const std::string prefix = key + "=";
+    for (const std::string& entry : env) {
+        if (entry.rfind(prefix, 0) == 0)
+            return true;
+    }
+    return false;
+}
+
+static void set_guest_env_if_missing(std::vector<std::string>& env,
+                                     const std::string& key,
+                                     const std::string& value)
+{
+    if (!value.empty() && !guest_env_has_key(env, key))
+        env.push_back(key + "=" + value);
+}
+
+static void pass_host_env_if_set(std::vector<std::string>& env, const char* name)
+{
+    const char* value = std::getenv(name);
+    if (value && value[0])
+        set_guest_env(env, name, value);
+}
+
+static void pass_linux_display_environment(std::vector<std::string>& env)
+{
+    static constexpr const char* kDisplayEnv[] = {
+        "WAYLAND_DISPLAY",
+        "XDG_RUNTIME_DIR",
+        "DBUS_SESSION_BUS_ADDRESS",
+        "XDG_SESSION_TYPE",
+        "GDK_BACKEND",
+        "QT_QPA_PLATFORM",
+        "SDL_VIDEODRIVER",
+        "CLUTTER_BACKEND",
+        "EGL_PLATFORM",
+        "LIBGL_ALWAYS_INDIRECT",
+    };
+
+    for (const char* name : kDisplayEnv)
+        pass_host_env_if_set(env, name);
+
+    set_guest_env_if_missing(env, "XDG_RUNTIME_DIR",
+                             default_wawona_runtime_dir().string());
+    set_guest_env_if_missing(env, "WAYLAND_DISPLAY", "wayland-0");
+    set_guest_env_if_missing(env, "XDG_SESSION_TYPE", "wayland");
+    set_guest_env_if_missing(env, "GDK_BACKEND", "wayland,x11");
+    set_guest_env_if_missing(env, "QT_QPA_PLATFORM", "wayland;xcb");
+    set_guest_env_if_missing(env, "SDL_VIDEODRIVER", "wayland");
+    set_guest_env_if_missing(env, "CLUTTER_BACKEND", "wayland");
+    set_guest_env_if_missing(env, "EGL_PLATFORM", "wayland");
+}
+
+std::vector<std::string> default_linux_guest_environment(const PrefixLayout& /*layout*/)
+{
+    std::string home_dir = "/home/muplar";
+    std::vector<std::string> env = {
+        "PATH=/bin:/usr/bin:/sbin:/usr/sbin",
+        "LD_LIBRARY_PATH=/vendor/lib",
+        "HOME=" + home_dir,
+        "LOGNAME=muplar",
+        "PWD=" + home_dir,
+        "SHELL=/bin/sh",
+        "TMPDIR=/tmp",
+        "USER=muplar",
+        "TERM=xterm-256color",
+    };
+    pass_linux_display_environment(env);
+    return env;
+}
+
+std::filesystem::path default_linux_host_cwd(const PrefixLayout& layout)
+{
+    return layout.rootfs / "home" / "muplar";
 }
 
 } // namespace muplar::runtime::prefix

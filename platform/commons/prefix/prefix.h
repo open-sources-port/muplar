@@ -88,5 +88,7 @@ PrefixLayout clone_prefix_to_root(const std::string& source_spec,
                                   const std::filesystem::path& dest_root,
                                   bool replace_existing = false);
 void delete_prefix(const std::string& spec);
+std::vector<std::string> default_linux_guest_environment(const PrefixLayout& layout);
+std::filesystem::path default_linux_host_cwd(const PrefixLayout& layout);
 
 } // namespace muplar::runtime::prefix

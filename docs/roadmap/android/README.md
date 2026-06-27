@@ -11,8 +11,8 @@ of these milestones instead of creating more numbered phases.
 1. [x] Android ARM64 native runtime
 1. [x] Java APK detection
 1. [x] Minimal ART bootstrap
-1. [ ] Tiny Java Activity
-1. [ ] Simple Java launcher app
+1. [x] Tiny Java Activity
+1. [x] Simple Java launcher app
 1. [ ] Launcher3 compatibility target
 
 - [Runtime](./runtime.md)

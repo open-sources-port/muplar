@@ -5,6 +5,11 @@ project(muplar
     LANGUAGES C CXX
 )
 
+if(APPLE)
+    enable_language(OBJC)
+    enable_language(OBJCXX)
+endif()
+
 set(CMAKE_C_STANDARD 11)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_C_STANDARD_REQUIRED ON)
@@ -177,8 +182,6 @@ endif()
 # Wawona: Wayland compositor
 # =========================================
 set(WAWONA_BUILD_SHELL ${CMAKE_SOURCE_DIR}/tools/build-muplar-wayland.sh)
-set(WAWONA_BIN ${CMAKE_BINARY_DIR}/bin/wawona)
-
 ExternalProject_Add(wawona_external
     DOWNLOAD_COMMAND ""
     SOURCE_DIR      ${CMAKE_SOURCE_DIR}/third_party/muplar-wayland
@@ -189,7 +192,6 @@ ExternalProject_Add(wawona_external
     USES_TERMINAL_BUILD YES
     BINARY_DIR      ${CMAKE_BINARY_DIR}
     BUILD_BYPRODUCTS
-        ${WAWONA_BIN}
         ${CMAKE_SOURCE_DIR}/third_party/muplar-wayland/target/release/libmuplar_wayland.a
 )
 

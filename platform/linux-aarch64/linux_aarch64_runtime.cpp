@@ -25,6 +25,9 @@ int LinuxAarch64Runtime::run(const PlatformLaunchConfig& config)
 
     PlatformLaunchConfig linux_config = config;
     linux_config.linux_guest = true;
+    if (config.active_prefix && config.guest_env.empty()) {
+        linux_config.guest_env = prefix::default_linux_guest_environment(*config.active_prefix);
+    }
 
     android::AndroidAarch64Runtime runtime;
     return runtime.run(linux_config);

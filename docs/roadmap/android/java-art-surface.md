@@ -25,13 +25,13 @@ the eventual ART-facing compatibility layer.
 - [x] Run the tiny Java Activity fixture through `app_process64` and record
       first Java/framework method gaps. Use `tools/run-tiny-java-activity-art.sh`
       once the sysroot is ready and `d8` is available.
+- [x] Run a simple Java launcher app with enough Activity/framework surface to
+      display and launch one installed package.
+- [x] Add Java-side API stubs only when tied to a real startup failure or focused fixture.
 
 ## Next
-- [ ] Run a simple Java launcher app with enough Activity/framework surface to
-      display and launch one installed package.
 - [ ] Use Launcher3 as the compatibility target after the simple launcher path
       is stable.
-- [ ] Add Java-side API stubs only when tied to a real startup failure or focused fixture.
 - [ ] Keep Java/ART expansion separate from native dependency closure work.
 
 ## Later

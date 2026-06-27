@@ -157,6 +157,58 @@ EOF
     fi
 }
 
+run_guest_root() {
+    ELFUSE_GUEST_UID=0 ELFUSE_GUEST_GID=0 "$MUP" --quiet --prefix "$PREFIX" \
+        /bin/sh -c "$1"
+}
+
+install_sudo() {
+    echo "[linux-rootfs] Installing sudo"
+    local rc=0
+    case "$DISTRO" in
+        ubuntu|debian)
+            run_guest_root \
+                'export DEBIAN_FRONTEND=noninteractive; apt-get update && apt-get install -y sudo' || rc=$?
+            run_guest_root \
+                'export DEBIAN_FRONTEND=noninteractive; apt-get install -y foot' || true
+            ;;
+        alpine)
+            run_guest_root \
+                'apk add --no-cache sudo' || rc=$?
+            run_guest_root \
+                'apk add --no-cache foot' || true
+            ;;
+
+        arch)
+            run_guest_root \
+                'pacman -Sy --needed --noconfirm sudo' || rc=$?
+            run_guest_root \
+                'pacman -Sy --needed --noconfirm foot' || true
+            ;;
+
+        fedora)
+            run_guest_root \
+                'dnf -y install sudo' || rc=$?
+            run_guest_root \
+                'dnf -y install foot' || true
+            ;;
+
+        opensuse)
+            run_guest_root \
+                'zypper --non-interactive install sudo' || rc=$?
+            run_guest_root \
+                'zypper --non-interactive install foot' || true
+            ;;
+        *)
+            echo "[linux-rootfs] WARNING: unsupported distro: $DISTRO" >&2
+            return 0
+            ;;
+    esac
+    if [[ "$rc" -ne 0 ]]; then
+        echo "[linux-rootfs] WARNING: distro sudo package failed to install; Muplar compatibility sudo remains available" >&2
+    fi
+}
+
 ensure_arch_mirror_config() {
     local root="$1"
     local mirrorlist="$root/etc/pacman.d/mirrorlist"
@@ -972,6 +1024,8 @@ if [[ "$DISTRO" == "arch" ]]; then
     ensure_arch_mirror_config "$rootfs"
     ensure_arch_profile_config "$rootfs"
 fi
+
+install_sudo
 
 cat >"$rootfs/etc/muplar-provisioned" <<EOF
 distro=$DISTRO

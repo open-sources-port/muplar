@@ -57,10 +57,9 @@ case "$OUT" in
     *) OUT="$ROOT_DIR/$OUT" ;;
 esac
 
-SRC_DIR="$ROOT_DIR/tests/assets/java/art-bootstrap"
+SRC_DIR="$ROOT_DIR/platform/android-aarch64/java-bootstrap"
 BUILD_DIR="$ROOT_DIR/build/java/art-bootstrap"
 CLASSES_DIR="$BUILD_DIR/classes"
-SOURCE_FILE="$SRC_DIR/com/muplar/runtime/ArtApkMain.java"
 
 JAVAC_BIN="${JAVAC:-javac}"
 JAR_BIN="${JAR:-jar}"
@@ -78,14 +77,17 @@ fi
 rm -rf "$CLASSES_DIR"
 mkdir -p "$CLASSES_DIR" "$(dirname "$OUT")"
 
+# Find all Java files recursively
+find "$SRC_DIR" -name "*.java" > "$BUILD_DIR/sources.txt"
+
 if "$JAVAC_BIN" --help 2>&1 | grep -q -- '--release'; then
-    "$JAVAC_BIN" -Xlint:-options --release 8 -d "$CLASSES_DIR" "$SOURCE_FILE"
+    "$JAVAC_BIN" -Xlint:-options --release 8 -d "$CLASSES_DIR" @"$BUILD_DIR/sources.txt"
 else
     "$JAVAC_BIN" -Xlint:-options -source 8 -target 8 \
-        -d "$CLASSES_DIR" "$SOURCE_FILE"
+        -d "$CLASSES_DIR" @"$BUILD_DIR/sources.txt"
 fi
 
-(cd "$CLASSES_DIR" && "$JAR_BIN" cf "$OUT" com)
+(cd "$CLASSES_DIR" && "$JAR_BIN" cf "$OUT" com android)
 
 echo "[ART] Built bootstrap jar: $OUT"
 file "$OUT"

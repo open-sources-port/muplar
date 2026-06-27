@@ -7,35 +7,9 @@ set(APP_CONTENTS "${APP_BUNDLE}/Contents")
 set(WINE_PREFIX_DIR "${CMAKE_BINARY_DIR}/wine-prefix")
 
 set(WAWONA_DIR "${CMAKE_SOURCE_DIR}/third_party/muplar-wayland")
-set(WAWONA_SOURCES
-    ${WAWONA_DIR}/src/platform/macos/WWNCompositorBridge.m
-    ${WAWONA_DIR}/src/platform/macos/WWNSettings.m
-    ${WAWONA_DIR}/src/platform/macos/WWNPlatformCallbacks.m
-    ${WAWONA_DIR}/src/platform/macos/ui/Helpers/WWNImageLoader.m
-    ${WAWONA_DIR}/src/platform/macos/ui/Machines/WWNMachineProfileStore.m
-    ${WAWONA_DIR}/src/platform/macos/ui/Machines/WWNMachinesCoordinator.m
-    ${WAWONA_DIR}/src/platform/macos/ui/Settings/WWNPreferences.m
-    ${WAWONA_DIR}/src/platform/macos/ui/Settings/WWNPreferencesManager.m
-    ${WAWONA_DIR}/src/platform/macos/ui/About/WWNAboutPanel.m
-    ${WAWONA_DIR}/src/platform/macos/ui/Settings/WWNSettingsModel.m
-    ${WAWONA_DIR}/src/platform/macos/ui/Settings/WWNWaypipeRunner.m
-    ${WAWONA_DIR}/src/platform/macos/ui/Settings/WWNSSHClient.m
-    ${WAWONA_DIR}/src/platform/macos/ui/Settings/WWNSettingsSplitViewController.m
-    ${WAWONA_DIR}/src/platform/macos/ui/Settings/WWNSettingsSidebarViewController.m
-    ${WAWONA_DIR}/src/platform/macos/WWNWindow.m
-    ${WAWONA_DIR}/src/platform/macos/WWNPopupWindow.m
-    ${WAWONA_DIR}/src/platform/macos/WWNSettings.c
-)
-
-foreach(src ${WAWONA_SOURCES})
-    if(src MATCHES "\\.m$")
-        set_source_files_properties(${src} PROPERTIES LANGUAGE OBJC)
-    endif()
-endforeach()
 
 add_executable(muplar_prefix_manager MACOSX_BUNDLE
     PrefixManagerApp.mm
-    ${WAWONA_SOURCES}
 )
 
 set_target_properties(muplar_prefix_manager PROPERTIES
@@ -46,51 +20,16 @@ set_target_properties(muplar_prefix_manager PROPERTIES
     BUILD_WITH_INSTALL_RPATH TRUE
 )
 
-target_link_directories(muplar_prefix_manager PRIVATE
-    /opt/homebrew/lib
-    /opt/homebrew/opt/openssl@3/lib
-)
-
 target_link_libraries(muplar_prefix_manager
     PRIVATE
         muplar_runtime_prefix
         muplar_runtime_supervisor
-        "${WAWONA_DIR}/target/release/libmuplar_wayland.a"
-        pixman-1
-        xkbcommon
-        ssl
-        crypto
-        z
-        "-framework AppKit"
-        "-framework UniformTypeIdentifiers"
-        "-framework Cocoa"
-        "-framework QuartzCore"
-        "-framework CoreVideo"
-        "-framework CoreMedia"
-        "-framework CoreGraphics"
-        "-framework ColorSync"
-        "-framework Metal"
-        "-framework MetalKit"
-        "-framework IOSurface"
-        "-framework VideoToolbox"
-        "-framework AVFoundation"
-        "-framework Network"
-        "-framework Security"
-        "-ObjC"
 )
 
 target_include_directories(muplar_prefix_manager
     PRIVATE
         ${CMAKE_SOURCE_DIR}/platform/commons/prefix
         ${CMAKE_SOURCE_DIR}/platform/commons/supervisor
-        ${WAWONA_DIR}/src
-        ${WAWONA_DIR}/src/util
-        ${WAWONA_DIR}/src/platform/macos
-        ${WAWONA_DIR}/src/platform/macos/ui
-        ${WAWONA_DIR}/src/platform/macos/ui/Helpers
-        ${WAWONA_DIR}/src/platform/macos/ui/Machines
-        ${WAWONA_DIR}/src/platform/macos/ui/Settings
-        /opt/homebrew/include
 )
 
 target_compile_definitions(muplar_prefix_manager PRIVATE
@@ -161,8 +100,6 @@ add_custom_target(populate_manager_bundle ALL
              codesign --entitlements '${CMAKE_SOURCE_DIR}/mup.entitlements' --force -s - '${APP_CONTENTS}/MacOS/mup'; \
          fi"
 
-
-
     # ── Linux Bootstrap Rootfs → Frameworks/ ─────────────────────────────────
     COMMAND bash -c
         "if [ -d '${LINUX_BOOTSTRAP_DIR}' ]; then \
@@ -171,11 +108,7 @@ add_custom_target(populate_manager_bundle ALL
 
     # ── Wawona Dependencies → Frameworks/ (with dependency bundling) ──────────
     COMMAND bash -c
-        "if [ -f '${CMAKE_BINARY_DIR}/bin/wawona' ]; then \
-             cp -f '${CMAKE_BINARY_DIR}/bin/wawona' '${APP_CONTENTS}/Frameworks/wawona'; \
-             chmod 755 '${APP_CONTENTS}/Frameworks/wawona'; \
-         fi; \
-         brew_prefix=''; \
+        "brew_prefix=''; \
          for prefix in /opt/homebrew /usr/local; do \
              if [ -d \"\$prefix\" ]; then \
                  brew_prefix=\"\$prefix\"; \
@@ -215,7 +148,7 @@ add_custom_target(populate_manager_bundle ALL
                  fi; \
              }; \
              patch_deps '${APP_CONTENTS}/MacOS/${APP_BUNDLE_NAME}' '@loader_path/../Frameworks/'; \
-             patch_deps '${APP_CONTENTS}/Frameworks/wawona' '@loader_path/'; \
+             patch_deps '${APP_CONTENTS}/MacOS/mup' '@loader_path/../Frameworks/'; \
              patch_deps '${APP_CONTENTS}/Frameworks/libssl.3.dylib' '@loader_path/'; \
              patch_deps '${APP_CONTENTS}/Frameworks/libcrypto.3.dylib' '@loader_path/'; \
              patch_deps '${APP_CONTENTS}/Frameworks/libxkbcommon.0.dylib' '@loader_path/'; \
@@ -225,9 +158,6 @@ add_custom_target(populate_manager_bundle ALL
                      codesign --force -s - '${APP_CONTENTS}/Frameworks/'\"\$lib\" 2>/dev/null || true; \
                  fi; \
              done; \
-             if [ -f '${APP_CONTENTS}/Frameworks/wawona' ]; then \
-                 codesign --force -s - '${APP_CONTENTS}/Frameworks/wawona' 2>/dev/null || true; \
-             fi; \
          fi"
 
     # ── Guest EGL/GLESv2 Stubs → Frameworks/ ─────────────────────────────────
