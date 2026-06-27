@@ -497,25 +497,33 @@ static void ensure_deb_noninteractive_compat(
 
     const auto prepare_script =
         rootfs / "usr" / "local" / "sbin" / "muplar-prepare-dpkg";
-    write_text_file_if_missing(
-        prepare_script,
+    {
+        std::filesystem::create_directories(prepare_script.parent_path());
+        std::ofstream prepare_out(prepare_script, std::ios::trunc);
+        prepare_out <<
         "#!/bin/sh\n"
         "set -e\n"
         "ca_file=/var/lib/dpkg/info/ca-certificates.postinst\n"
-        "ca_marker='# Muplar noninteractive ca-certificates compatibility'\n"
+        "ca_marker='# Muplar noninteractive ca-certificates compatibility v2'\n"
         "if [ -f \"$ca_file\" ] && ! grep -Fq \"$ca_marker\" \"$ca_file\"; then\n"
         "  ca_tmp=\"$ca_file.muplar.$$\"\n"
         "  awk '\n"
-        "  !done && $0 ~ /^[[:space:]]*dpkg-trigger --no-await update-ca-certificates/ {\n"
-        "    print \"    # Muplar noninteractive ca-certificates compatibility\"\n"
-        "    print \"    exit 0\"\n"
+        "  { print }\n"
+        "  !done && $0 == \"set -e\" {\n"
+        "    print \"# Muplar noninteractive ca-certificates compatibility v2\"\n"
+        "    print \"case \\\"$1\\\" in configure|triggered) [ \\\"${DEBIAN_FRONTEND:-}\\\" = noninteractive ] && exit 0 ;; esac\"\n"
         "    done=1\n"
         "  }\n"
-        "  { print }\n"
         "  END { if (!done) exit 2 }\n"
         "  ' \"$ca_file\" >\"$ca_tmp\"\n"
         "  cat \"$ca_tmp\" >\"$ca_file\"\n"
         "  rm -f \"$ca_tmp\"\n"
+        "fi\n"
+        "man_file=/var/lib/dpkg/info/man-db.postinst\n"
+        "if [ -f \"$man_file\" ]; then\n"
+        "  sed 's|setpriv --reuid man --regid man --init-groups -- /usr/bin/mandb \"$@\"|/usr/bin/mandb \"$@\"|' \"$man_file\" >\"$man_file.muplar.$$\"\n"
+        "  cat \"$man_file.muplar.$$\" >\"$man_file\"\n"
+        "  rm -f \"$man_file.muplar.$$\"\n"
         "fi\n"
         "file=/var/lib/dpkg/info/tzdata.postinst\n"
         "marker='# Muplar noninteractive tzdata compatibility'\n"
@@ -538,7 +546,8 @@ static void ensure_deb_noninteractive_compat(
         "END { if (!done) exit 2 }\n"
         "' \"$file\" >\"$tmp\"\n"
         "cat \"$tmp\" >\"$file\"\n"
-        "rm -f \"$tmp\"\n");
+        "rm -f \"$tmp\"\n";
+    }
     std::error_code permissions_ec;
     std::filesystem::permissions(
         prepare_script,
@@ -561,20 +570,41 @@ static void ensure_deb_noninteractive_compat(
         std::string ca_content((std::istreambuf_iterator<char>(ca_in)),
                                std::istreambuf_iterator<char>());
         const std::string ca_marker =
-            "# Muplar noninteractive ca-certificates compatibility";
-        const std::string ca_anchor =
-            "dpkg-trigger --no-await update-ca-certificates\n";
+            "# Muplar noninteractive ca-certificates compatibility v2";
+        const std::string ca_anchor = "set -e\n";
         if (ca_content.find(ca_marker) == std::string::npos) {
             const auto ca_pos = ca_content.find(ca_anchor);
             if (ca_pos != std::string::npos) {
                 ca_content.insert(
-                    ca_pos,
-                    "\t    # Muplar noninteractive ca-certificates compatibility\n"
-                    "\t    exit 0\n");
+                    ca_pos + ca_anchor.size(),
+                    "# Muplar noninteractive ca-certificates compatibility v2\n"
+                    "case \"$1\" in\n"
+                    "    configure|triggered)\n"
+                    "        [ \"${DEBIAN_FRONTEND:-}\" = noninteractive ] && exit 0\n"
+                    "        ;;\n"
+                    "esac\n");
                 std::ofstream ca_out(ca_postinst, std::ios::trunc);
                 if (ca_out)
                     ca_out << ca_content;
             }
+        }
+    }
+
+    const auto man_postinst = rootfs / "var" / "lib" / "dpkg" / "info" /
+                              "man-db.postinst";
+    std::ifstream man_in(man_postinst);
+    if (man_in) {
+        std::string man_content((std::istreambuf_iterator<char>(man_in)),
+                                std::istreambuf_iterator<char>());
+        const std::string setpriv =
+            "setpriv --reuid man --regid man --init-groups -- /usr/bin/mandb \"$@\"";
+        const auto man_pos = man_content.find(setpriv);
+        if (man_pos != std::string::npos) {
+            man_content.replace(man_pos, setpriv.size(),
+                                "/usr/bin/mandb \"$@\"");
+            std::ofstream man_out(man_postinst, std::ios::trunc);
+            if (man_out)
+                man_out << man_content;
         }
     }
 

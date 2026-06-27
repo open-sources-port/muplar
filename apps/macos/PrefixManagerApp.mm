@@ -3341,9 +3341,13 @@ static NSString* MapLinuxIconToSFSymbol(NSString* icon)
         [name isEqualToString:@"alacritty"]) {
         return @[terminal, @"--title", title, @"-e", shell];
     }
-    if ([name isEqualToString:@"gnome-terminal"] ||
-        [name isEqualToString:@"kgx"]) {
-        return @[terminal, @"--title", title, @"--", shell];
+    if ([name isEqualToString:@"gnome-terminal"]) {
+        return @[@"/usr/bin/dbus-run-session", @"--", terminal,
+                 @"--wait", @"--title", title, @"--", shell];
+    }
+    if ([name isEqualToString:@"kgx"]) {
+        return @[@"/usr/bin/dbus-run-session", @"--", terminal,
+                 @"--title", title, @"--", shell];
     }
     if ([name isEqualToString:@"xfce4-terminal"]) {
         return @[terminal, @"--title", title, @"--command", shell];
@@ -3383,27 +3387,37 @@ static NSString* MapLinuxIconToSFSymbol(NSString* icon)
     }
 
     NSString* x11Error = nil;
-    NSMutableArray<NSString*>* guestEnvironmentArguments =
+    NSArray<NSString*>* wrappedGuestArguments =
+        [self wrapGuestArgumentsForX11IfNeeded:guestArguments
+                                        prefix:selected
+                                  errorMessage:&x11Error];
+    if (!wrappedGuestArguments) {
+        [self showError:x11Error ?: @"Failed to prepare Linux X11 launch."];
+        return;
+    }
+
+    NSMutableArray<NSString*>* actualGuestArguments =
         [NSMutableArray arrayWithArray:@[@"/usr/bin/env",
                                          @"HOME=/home/muplar",
                                          @"USER=muplar",
                                          @"LOGNAME=muplar",
+                                         @"LANG=C.UTF-8",
+                                         @"LC_ALL=C.UTF-8",
+                                         @"NO_AT_BRIDGE=1",
+                                         @"GTK_A11Y=none",
+                                         @"GDK_DEBUG=no-portals",
+                                         @"GIO_USE_VFS=local",
+                                         @"DEBIAN_FRONTEND=noninteractive",
+                                         @"DEBCONF_NONINTERACTIVE_SEEN=true",
                                          @"PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"]];
-    [guestEnvironmentArguments addObjectsFromArray:guestArguments];
-    NSArray<NSString*>* actualGuestArguments =
-        [self wrapGuestArgumentsForX11IfNeeded:guestEnvironmentArguments
-                                        prefix:selected
-                                  errorMessage:&x11Error];
-    if (!actualGuestArguments) {
-        [self showError:x11Error ?: @"Failed to prepare Linux X11 launch."];
-        return;
-    }
+    [actualGuestArguments addObjectsFromArray:wrappedGuestArguments];
 
     NSMutableDictionary<NSString*, NSString*>* env =
         [NSProcessInfo.processInfo.environment mutableCopy];
     ApplyDefaultLinuxDisplayEnvironment(env);
     env[@"ELFUSE_GUEST_UID"] = @"1000";
     env[@"ELFUSE_GUEST_GID"] = @"1000";
+    env[@"MUPLAR_APP_PROCESS_GROUP"] = @"1";
     NSString* angleDir = [self angleLibraryDir];
     if (angleDir.length > 0) {
         NSString* existingDyld = env[@"DYLD_LIBRARY_PATH"];
@@ -3435,6 +3449,10 @@ static NSString* MapLinuxIconToSFSymbol(NSString* icon)
                                                     error:nil];
 
     task.terminationHandler = ^(NSTask* t) {
+        // Fork helpers outlive the top-level guest unless the complete launch
+        // group is reaped. They can otherwise retain Wayland sockets and keep
+        // already-exited terminal windows visible in Wawona.
+        kill(-t.processIdentifier, SIGKILL);
         [[NSFileManager defaultManager] removeItemAtPath:pidFile error:nil];
         dispatch_async(dispatch_get_main_queue(), ^{
             [self->_launchingAppPaths removeObject:key];
@@ -3568,10 +3586,10 @@ static NSString* MapLinuxIconToSFSymbol(NSString* icon)
         @"  esac\n"
         @"  if [ \"$LOGGING\" = 1 ]; then printf '\\n$ %%s\\n' \"$line\" >> \"$LOG\"; fi\n"
         @"  if [ \"$LOGGING\" = 1 ]; then\n"
-        @"    \"$MUP\" --quiet --prefix \"$PREFIX\" /usr/bin/env HOME=/home/muplar USER=muplar LOGNAME=muplar PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin /bin/sh -c \"$line\"\n"
+        @"    \"$MUP\" --quiet --prefix \"$PREFIX\" /usr/bin/env HOME=/home/muplar USER=muplar LOGNAME=muplar DEBIAN_FRONTEND=noninteractive DEBCONF_NONINTERACTIVE_SEEN=true PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin /bin/sh -c \"$line\"\n"
         @"    rc=$?\n"
         @"  else\n"
-        @"    \"$MUP\" --quiet --prefix \"$PREFIX\" /usr/bin/env HOME=/home/muplar USER=muplar LOGNAME=muplar PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin /bin/sh -c \"$line\"\n"
+        @"    \"$MUP\" --quiet --prefix \"$PREFIX\" /usr/bin/env HOME=/home/muplar USER=muplar LOGNAME=muplar DEBIAN_FRONTEND=noninteractive DEBCONF_NONINTERACTIVE_SEEN=true PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin /bin/sh -c \"$line\"\n"
         @"    rc=$?\n"
         @"  fi\n"
         @"  if [ $rc -ne 0 ]; then printf '[exit %%d]\\n' \"$rc\"; fi\n"

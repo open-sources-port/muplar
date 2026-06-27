@@ -772,6 +772,10 @@ int main(int argc, char** argv)
         return fork_child_main(fork_child_fd, vfork_notify_fd, verbose, timeout_sec);
     }
 
+    const char* app_process_group = std::getenv("MUPLAR_APP_PROCESS_GROUP");
+    if (app_process_group && app_process_group[0] == '1')
+        setpgid(0, 0);
+
     // Increase soft limit for open files descriptor limit from 256 to maximum allowed
     struct rlimit rl;
     if (getrlimit(RLIMIT_NOFILE, &rl) == 0) {
