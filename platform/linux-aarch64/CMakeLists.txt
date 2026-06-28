@@ -8,6 +8,7 @@ target_include_directories(muplar_runtime_linux_aarch64
         ${CMAKE_SOURCE_DIR}/platform/commons/runtime
         ${CMAKE_SOURCE_DIR}/platform/commons/prefix
         ${CMAKE_SOURCE_DIR}/platform/android-aarch64/android
+        ${CMAKE_SOURCE_DIR}/platform/android-aarch64/elf
 )
 
 target_link_libraries(muplar_runtime_linux_aarch64
@@ -15,6 +16,6 @@ target_link_libraries(muplar_runtime_linux_aarch64
         muplar_runtime_linux_common
         muplar_runtime_memory
         muplar_runtime_prefix
-        muplar_runtime_android
+        muplar_runtime_platform
         muplar_runtime_supervisor
 )

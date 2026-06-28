@@ -1,3 +1,4 @@
+#include "gpu_bridge.h"
 // platform/android-aarch64/elf/guest_runner.cpp
 //
 // GuestRunner::run() — wraps elfuse bootstrap and registers the HVC #6
@@ -1183,7 +1184,7 @@ static bool apply_direct_so_relocations(guest_t* g,
 
 struct MuplarCtx {
     jni::JniOnLoad*          jni_onload;
-    android::AndroidRuntime* art;
+    muplar::runtime::GpuBridge* gpu_bridge;
 };
 
 static uint64_t hvc6_handler(uint64_t call_nr, const uint64_t args[8], void* userdata)
@@ -1198,8 +1199,8 @@ static uint64_t hvc6_handler(uint64_t call_nr, const uint64_t args[8], void* use
         return out;
     }
     if (call_nr >= 0x2000 && call_nr <= 0x2FFF) {
-        if (ctx->art) {
-            ctx->art->try_dispatch(static_cast<uint32_t>(call_nr), args, &out);
+        if (ctx->gpu_bridge) {
+            ctx->gpu_bridge->try_dispatch(static_cast<uint32_t>(call_nr), args, &out);
         }
         return out;
     }
@@ -1397,7 +1398,7 @@ int GuestRunner::run(const GuestRunnerConfig& cfg)
     std::optional<jni::JniEnv>             opt_jni_env;
     std::optional<jni::JniBridge>          opt_jni_bridge;
     std::optional<jni::JniOnLoad>          opt_jni_onload;
-    std::optional<android::AndroidRuntime> opt_art;
+    std::unique_ptr<muplar::runtime::GpuBridge> gpu_bridge;
     std::optional<MuplarCtx>               ctx;
 
     uint64_t synthetic_arg_gpa = 0;
@@ -1433,16 +1434,17 @@ int GuestRunner::run(const GuestRunnerConfig& cfg)
 
             opt_jni_onload.emplace(&g, &*opt_jni_bridge, &*opt_jni_env, java_vm_gpa);
             opt_jni_onload->install();
-        }
 
-        opt_art.emplace(&g, android_stubs_gpa, cfg.host_window);
-        if (is_android_run) {
-            opt_art->set_asset_root(cfg.apk_assets_dir);
+            auto art = std::make_unique<android::AndroidRuntime>(&g, android_stubs_gpa, cfg.host_window);
+            art->set_asset_root(cfg.apk_assets_dir);
+            gpu_bridge = std::move(art);
+        } else {
+            gpu_bridge = std::make_unique<muplar::runtime::GpuBridge>(&g, android_stubs_gpa, cfg.host_window);
         }
-        opt_art->install();
+        gpu_bridge->install();
 
         // ── Register HVC #6 hook ──────────────────────────────────────────────────
-        ctx.emplace(MuplarCtx{ is_android_run ? &*opt_jni_onload : nullptr, &*opt_art });
+        ctx.emplace(MuplarCtx{ is_android_run ? &*opt_jni_onload : nullptr, gpu_bridge.get() });
         g.hvc6_handler  = hvc6_handler;
         g.hvc6_userdata = &*ctx;
     }
@@ -1511,7 +1513,9 @@ int GuestRunner::run(const GuestRunnerConfig& cfg)
         // For .so files: run Android/JNI entrypoints directly.
         std::printf("[Muplar] detected shared library — running Android .so path\n");
 
-        android::AndroidRuntime& art = *opt_art;
+        auto* art_ptr = dynamic_cast<android::AndroidRuntime*>(gpu_bridge.get());
+        if (!art_ptr) throw std::runtime_error("GuestRunner: GpuBridge is not AndroidRuntime in shared lib run");
+        android::AndroidRuntime& art = *art_ptr;
         jni::JniOnLoad& jni_onload = *opt_jni_onload;
         jni::JniEnv& jni_env = *opt_jni_env;
 
@@ -2149,7 +2153,7 @@ int GuestRunner::run(const GuestRunnerConfig& cfg)
     }
 
     if (is_android_run && cfg.host_window && !host_app_loop_ran)
-        opt_art->run_host_window_after_guest(cfg.host_window_linger_ms);
+        gpu_bridge->run_host_window_after_guest(cfg.host_window_linger_ms);
 
     if (!cfg.quiet)
         std::printf("[Muplar] exit code: %d\n", exit_code);

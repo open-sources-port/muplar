@@ -98,3 +98,31 @@ uint64_t eglSwapInterval(uint64_t a0, uint64_t a1, uint64_t a2, uint64_t a3, uin
 uint64_t eglTerminate(uint64_t a0, uint64_t a1, uint64_t a2, uint64_t a3, uint64_t a4, uint64_t a5, uint64_t a6, uint64_t a7) {
     return bridge_call(0x240E, a0, a1, a2, a3, a4, a5, a6, a7);
 }
+
+uint64_t eglGetConfigs(uint64_t a0, uint64_t a1, uint64_t a2, uint64_t a3, uint64_t a4, uint64_t a5, uint64_t a6, uint64_t a7) {
+    return bridge_call(0x2412, a0, a1, a2, a3, a4, a5, a6, a7);
+}
+
+uint64_t eglGetConfigAttrib(uint64_t a0, uint64_t a1, uint64_t a2, uint64_t a3, uint64_t a4, uint64_t a5, uint64_t a6, uint64_t a7) {
+    return bridge_call(0x2413, a0, a1, a2, a3, a4, a5, a6, a7);
+}
+
+uint64_t eglGetCurrentContext(uint64_t a0, uint64_t a1, uint64_t a2, uint64_t a3, uint64_t a4, uint64_t a5, uint64_t a6, uint64_t a7) {
+    return bridge_call(0x2414, a0, a1, a2, a3, a4, a5, a6, a7);
+}
+
+uint64_t eglCreateImage(uint64_t a0, uint64_t a1, uint64_t a2, uint64_t a3, uint64_t a4, uint64_t a5, uint64_t a6, uint64_t a7) {
+    return bridge_call(0x2415, a0, a1, a2, a3, a4, a5, a6, a7);
+}
+
+uint64_t eglDestroyImage(uint64_t a0, uint64_t a1, uint64_t a2, uint64_t a3, uint64_t a4, uint64_t a5, uint64_t a6, uint64_t a7) {
+    return bridge_call(0x2416, a0, a1, a2, a3, a4, a5, a6, a7);
+}
+
+uint64_t eglGetPlatformDisplay(uint64_t a0, uint64_t a1, uint64_t a2, uint64_t a3, uint64_t a4, uint64_t a5, uint64_t a6, uint64_t a7) {
+    return bridge_call(0x2417, a0, a1, a2, a3, a4, a5, a6, a7);
+}
+
+uint64_t eglQueryContext(uint64_t a0, uint64_t a1, uint64_t a2, uint64_t a3, uint64_t a4, uint64_t a5, uint64_t a6, uint64_t a7) {
+    return bridge_call(0x2418, a0, a1, a2, a3, a4, a5, a6, a7);
+}

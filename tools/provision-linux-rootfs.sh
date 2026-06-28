@@ -157,6 +157,25 @@ EOF
     fi
 }
 
+ensure_debconf_pipe_compat() {
+    local root="$1"
+    [[ "$DISTRO" == "ubuntu" || "$DISTRO" == "debian" ]] || return
+    local confmodule="$root/usr/share/debconf/confmodule"
+    [[ -f "$confmodule" && -n "$PYTHON3_BIN" ]] || return
+
+    "$PYTHON3_BIN" - "$confmodule" <<'PY'
+import pathlib
+import sys
+
+path = pathlib.Path(sys.argv[1])
+text = path.read_text()
+old = "\techo STOP >&3\n"
+new = "\techo STOP >&3 2>/dev/null || true\n"
+if old in text:
+    path.write_text(text.replace(old, new, 1))
+PY
+}
+
 run_guest_root() {
     ELFUSE_GUEST_UID=0 ELFUSE_GUEST_GID=0 "$MUP" --quiet --prefix "$PREFIX" \
         /bin/sh -c "$1"
@@ -167,37 +186,31 @@ install_sudo() {
     local rc=0
     case "$DISTRO" in
         ubuntu|debian)
-            run_guest_root \
-                'export DEBIAN_FRONTEND=noninteractive; apt-get update && apt-get install -y sudo' || rc=$?
-            run_guest_root \
-                'export DEBIAN_FRONTEND=noninteractive; apt-get install -y foot' || true
+            # The managed /usr/local/bin/sudo works without setuid or Linux
+            # capabilities. Installing distro sudo here replaces files while
+            # dpkg is still bootstrapping and can leave a fresh rootfs in a
+            # half-configured state before the terminal transaction starts.
+            echo "[linux-rootfs] Using Muplar compatibility sudo"
+            return 0
             ;;
         alpine)
             run_guest_root \
                 'apk add --no-cache sudo' || rc=$?
-            run_guest_root \
-                'apk add --no-cache foot' || true
             ;;
 
         arch)
             run_guest_root \
                 'pacman -Sy --needed --noconfirm sudo' || rc=$?
-            run_guest_root \
-                'pacman -Sy --needed --noconfirm foot' || true
             ;;
 
         fedora)
             run_guest_root \
                 'dnf -y install sudo' || rc=$?
-            run_guest_root \
-                'dnf -y install foot' || true
             ;;
 
         opensuse)
             run_guest_root \
                 'zypper --non-interactive install sudo' || rc=$?
-            run_guest_root \
-                'zypper --non-interactive install foot' || true
             ;;
         *)
             echo "[linux-rootfs] WARNING: unsupported distro: $DISTRO" >&2
@@ -206,6 +219,53 @@ install_sudo() {
     esac
     if [[ "$rc" -ne 0 ]]; then
         echo "[linux-rootfs] WARNING: distro sudo package failed to install; Muplar compatibility sudo remains available" >&2
+    fi
+}
+
+install_terminal() {
+    echo "[linux-rootfs] Installing terminal emulator"
+
+    local rc=0
+    local terminal_pkg="gnome-terminal"
+
+    case "$DISTRO" in
+        ubuntu|debian)
+            run_guest_root \
+                "export DEBIAN_FRONTEND=noninteractive; apt-get update && apt-get install -y $terminal_pkg" || rc=$?
+            ;;
+
+        alpine)
+            terminal_pkg="foot"
+            run_guest_root \
+                "apk add --no-cache $terminal_pkg" || rc=$?
+            ;;
+
+        arch)
+            terminal_pkg="foot"
+            run_guest_root \
+                "pacman -Sy --needed --noconfirm $terminal_pkg" || rc=$?
+            ;;
+
+        fedora)
+            terminal_pkg="ptyxis"
+            run_guest_root \
+                "dnf -y install $terminal_pkg" || rc=$?
+            ;;
+
+        opensuse)
+            terminal_pkg="gnome-terminal"
+            run_guest_root \
+                "zypper --non-interactive install $terminal_pkg" || rc=$?
+            ;;
+
+        *)
+            echo "[linux-rootfs] WARNING: unsupported distro for terminal install: $DISTRO" >&2
+            return 0
+            ;;
+    esac
+
+    if [[ "$rc" -ne 0 ]]; then
+        echo "[linux-rootfs] WARNING: terminal emulator failed to install" >&2
     fi
 }
 
@@ -1003,6 +1063,7 @@ ensure_resolver_config "$rootfs"
 ensure_certificate_symlink_config "$rootfs"
 ensure_dpkg_casefold_config "$rootfs"
 ensure_apt_cache_config "$rootfs"
+ensure_debconf_pipe_compat "$rootfs"
 if [[ "$DISTRO" == "arch" ]]; then
     ensure_arch_pacman_trust_config "$rootfs"
     ensure_arch_pacman_local_db_config "$rootfs"
@@ -1014,6 +1075,7 @@ echo "[linux-rootfs] Refreshing Muplar scaffold"
 MUPLAR_SKIP_LINUX_BOOTSTRAP=1 "$MUP" "${prefix_create_args[@]}" >/dev/null
 ensure_resolver_config "$rootfs"
 ensure_certificate_symlink_config "$rootfs"
+ensure_debconf_pipe_compat "$rootfs"
 if [[ "$DISTRO" == "debian" ]]; then
     ensure_debian_dpkg_deb_config "$rootfs"
 fi
@@ -1026,6 +1088,7 @@ if [[ "$DISTRO" == "arch" ]]; then
 fi
 
 install_sudo
+install_terminal
 
 cat >"$rootfs/etc/muplar-provisioned" <<EOF
 distro=$DISTRO

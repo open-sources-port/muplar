@@ -452,6 +452,16 @@ static void write_text_file_if_missing(const std::filesystem::path& path,
         out << content;
 }
 
+static void write_managed_text_file(const std::filesystem::path& path,
+                                    const std::string& content)
+{
+    std::error_code ec;
+    std::filesystem::create_directories(path.parent_path(), ec);
+    std::ofstream out(path, std::ios::trunc);
+    if (out)
+        out << content;
+}
+
 static void write_text_file_if_missing_or_empty(const std::filesystem::path& path,
                                                 const std::string& content)
 {
@@ -839,6 +849,136 @@ static void ensure_linux_unprivileged_user(const std::filesystem::path& rootfs)
         sudo_compat,
         std::filesystem::perms::owner_all |
             std::filesystem::perms::set_uid |
+            std::filesystem::perms::group_read |
+            std::filesystem::perms::group_exec |
+            std::filesystem::perms::others_read |
+            std::filesystem::perms::others_exec,
+        std::filesystem::perm_options::replace, ec);
+
+    // GTK 4 delegates SVG decoding to Glycin, which normally invokes its
+    // loader through bubblewrap. Elfuse does not provide Linux namespaces, so
+    // retain the loader process boundary while omitting the unsupported
+    // bubblewrap setup.
+    const auto bwrap_compat = rootfs / "usr" / "local" / "bin" / "bwrap";
+    write_text_file_if_missing(
+        bwrap_compat,
+        "#!/bin/sh\n"
+        "while [ $# -gt 0 ]; do\n"
+        "  case \"$1\" in\n"
+        "    /usr/libexec/glycin-loaders/*) exec \"$@\" ;;\n"
+        "  esac\n"
+        "  shift\n"
+        "done\n"
+        "echo 'bwrap: no supported guest command found' >&2\n"
+        "exit 127\n");
+    ec.clear();
+    std::filesystem::permissions(
+        bwrap_compat,
+        std::filesystem::perms::owner_all |
+            std::filesystem::perms::group_read |
+            std::filesystem::perms::group_exec |
+            std::filesystem::perms::others_read |
+            std::filesystem::perms::others_exec,
+        std::filesystem::perm_options::replace, ec);
+
+    // Desktop portal activation pulls in mount namespaces and FUSE. Terminal
+    // applications only need a private session bus and their own service.
+    const auto dbus_config = rootfs / "etc" / "dbus-1" /
+                             "muplar-session.conf";
+    std::filesystem::create_directories(dbus_config.parent_path(), ec);
+    std::ofstream dbus_out(dbus_config, std::ios::trunc);
+    if (dbus_out)
+        dbus_out <<
+        "<!DOCTYPE busconfig PUBLIC \"-//freedesktop//DTD D-Bus Bus Configuration 1.0//EN\"\n"
+        " \"http://www.freedesktop.org/standards/dbus/1.0/busconfig.dtd\">\n"
+        "<busconfig>\n"
+        "  <type>session</type>\n"
+        "  <keep_umask/>\n"
+        "  <listen>unix:tmpdir=/tmp</listen>\n"
+        "  <auth>EXTERNAL</auth>\n"
+        "  <servicedir>/usr/local/share/dbus-1/muplar-services</servicedir>\n"
+        "  <policy context=\"default\">\n"
+        "    <allow send_destination=\"*\" eavesdrop=\"true\"/>\n"
+        "    <allow eavesdrop=\"true\"/>\n"
+        "    <allow own=\"*\"/>\n"
+        "  </policy>\n"
+        "</busconfig>\n";
+    write_text_file_if_missing(
+        rootfs / "usr" / "local" / "share" / "dbus-1" /
+            "muplar-services" / "org.gnome.Terminal.service",
+        "[D-BUS Service]\n"
+        "Name=org.gnome.Terminal\n"
+        "Exec=/usr/libexec/gnome-terminal-server\n");
+
+    const auto session_launcher =
+        rootfs / "usr" / "local" / "libexec" / "muplar-session-launcher";
+    write_managed_text_file(
+        session_launcher,
+        "#!/bin/sh\n"
+        "session_dir=/tmp/muplar-session\n"
+        "requests_dir=$session_dir/requests\n"
+        "host_pids_dir=$session_dir/host-pids\n"
+        "fifo=$session_dir/commands\n"
+        "rm -rf \"$session_dir\"\n"
+        "mkdir -p \"$requests_dir\" \"$host_pids_dir\" || exit 1\n"
+        "chmod 700 \"$session_dir\" \"$requests_dir\" \"$host_pids_dir\" "
+            "2>/dev/null || true\n"
+        "mkfifo \"$fifo\" || exit 1\n"
+        "dbus_pid=\n"
+        "if command -v dbus-daemon >/dev/null 2>&1 && "
+            "[ -f /etc/dbus-1/muplar-session.conf ]; then\n"
+        "  address_file=$session_dir/dbus-address\n"
+        "  rm -f \"$address_file\"\n"
+        "  dbus-daemon --nofork --config-file=/etc/dbus-1/muplar-session.conf "
+            "--print-address=3 3>\"$address_file\" >\"$session_dir/dbus.log\" 2>&1 &\n"
+        "  dbus_pid=$!\n"
+        "  i=0\n"
+        "  while [ ! -s \"$address_file\" ] && "
+            "kill -0 \"$dbus_pid\" 2>/dev/null && [ \"$i\" -lt 100 ]; do\n"
+        "    sleep .02\n"
+        "    i=$((i + 1))\n"
+        "  done\n"
+        "  if [ -s \"$address_file\" ]; then\n"
+        "    DBUS_SESSION_BUS_ADDRESS=$(cat \"$address_file\")\n"
+        "    export DBUS_SESSION_BUS_ADDRESS\n"
+        "  fi\n"
+        "fi\n"
+        "cleanup() {\n"
+        "  rm -f \"$session_dir/ready\" \"$fifo\"\n"
+        "  [ -n \"$dbus_pid\" ] && kill \"$dbus_pid\" 2>/dev/null || true\n"
+        "}\n"
+        "trap cleanup EXIT INT TERM HUP\n"
+        "run_request() {\n"
+        "  request=$1\n"
+        "  status_file=${request%.request}.status\n"
+        "  log_file=${request%.request}.log\n"
+        "  . \"$request\"\n"
+        "  \"$@\" >>\"$log_file\" 2>&1 &\n"
+        "  child=$!\n"
+        "  printf '%s\\n' \"$child\" >\"${request%.request}.pid\"\n"
+        "  trap 'kill -TERM \"$child\" 2>/dev/null; wait \"$child\" 2>/dev/null' "
+            "INT TERM HUP\n"
+        "  wait \"$child\"\n"
+        "  code=$?\n"
+        "  printf '%s\\n' \"$code\" >\"$status_file.tmp\"\n"
+        "  mv \"$status_file.tmp\" \"$status_file\"\n"
+        "}\n"
+        ": >\"$session_dir/ready\"\n"
+        "while :; do\n"
+        "  while IFS= read -r request; do\n"
+        "    case \"$request\" in\n"
+        "      $requests_dir/*.request)\n"
+        "        if [ -f \"$request\" ]; then\n"
+        "          run_request \"$request\" &\n"
+        "        fi\n"
+        "        ;;\n"
+        "    esac\n"
+        "  done <\"$fifo\"\n"
+        "done\n");
+    ec.clear();
+    std::filesystem::permissions(
+        session_launcher,
+        std::filesystem::perms::owner_all |
             std::filesystem::perms::group_read |
             std::filesystem::perms::group_exec |
             std::filesystem::perms::others_read |
@@ -2552,6 +2692,8 @@ std::vector<std::string> default_linux_guest_environment(const PrefixLayout& /*l
         "TMPDIR=/tmp",
         "USER=muplar",
         "TERM=xterm-256color",
+        "LANG=C.UTF-8",
+        "LC_ALL=C.UTF-8",
     };
     pass_linux_display_environment(env);
     return env;
