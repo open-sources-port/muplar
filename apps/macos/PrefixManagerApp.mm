@@ -508,6 +508,7 @@ static NSString* ParseLnkFile(const std::filesystem::path& lnkPath)
 - (void)setupMenu;
 - (BOOL)ensureLinuxSessionForPrefix:(prefix::PrefixLayout*)selected
                        errorMessage:(NSString**)errorMessage;
+- (void)prestartLinuxSessionIfNeeded:(prefix::PrefixLayout*)selected;
 - (void)waitForLinuxWindowForKey:(NSString*)key
                            token:(NSUUID*)token
            baselineWindowNumbers:(NSSet<NSNumber*>*)baselineWindowNumbers;
@@ -718,6 +719,11 @@ static NSString* ParseLnkFile(const std::filesystem::path& lnkPath)
     [self installTerminationSignalHandler];
     [self buildWindow];
     [self reloadPrefixes:nil];
+    for (size_t i = 0; i < _prefixes.size(); ++i) {
+        if (_prefixes[i].kind == prefix::PrefixKind::Linux) {
+            [self prestartLinuxSessionIfNeeded:&_prefixes[i]];
+        }
+    }
     [_window makeKeyAndOrderFront:nil];
     [NSApp activateIgnoringOtherApps:YES];
 
@@ -2716,6 +2722,7 @@ static NSString* MapLinuxIconToSFSymbol(NSString* icon)
         [self scanWineApps:selected];
     } else if (selected->kind == prefix::PrefixKind::Linux) {
         [self scanLinuxApps:selected];
+        [self prestartLinuxSessionIfNeeded:selected];
     } else {
         [self scanAndroidApps:selected];
     }
@@ -2925,6 +2932,32 @@ static NSString* MapLinuxIconToSFSymbol(NSString* icon)
     }
 
     return YES;
+}
+
+- (void)prestartLinuxSessionIfNeeded:(prefix::PrefixLayout*)selected
+{
+    if (!selected || selected->kind != prefix::PrefixKind::Linux)
+        return;
+
+    NSString* key = NSStringFromStdString(selected->name);
+    NSTask* existing = _linuxSessionTasks[key];
+    if (existing && existing.isRunning)
+        return;
+
+    if (!_supervisor)
+        _supervisor = std::make_unique<supervisor::SupervisorService>();
+    if (!_supervisor->is_running())
+        _supervisor->start();
+
+    dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
+        BOOL wawonaReady = self->_supervisor->wawona().wait_for_socket(5000);
+        if (wawonaReady) {
+            dispatch_async(dispatch_get_main_queue(), ^{
+                NSString* sessionError = nil;
+                [self ensureLinuxSessionForPrefix:selected errorMessage:&sessionError];
+            });
+        }
+    });
 }
 
 - (BOOL)ensureLinuxSessionForPrefix:(prefix::PrefixLayout*)selected
