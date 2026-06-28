@@ -18,7 +18,7 @@
 }
 @end
 
-namespace muplar::runtime::android {
+namespace muplar::runtime {
 
 struct HostWindow::Impl {
     NSWindow* window = nil;
@@ -245,4 +245,4 @@ void HostWindow::run_until_closed()
     }
 }
 
-} // namespace muplar::runtime::android
+} // namespace muplar::runtime

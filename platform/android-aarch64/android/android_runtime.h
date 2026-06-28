@@ -1,16 +1,3 @@
-// platform/android-aarch64/android/android_runtime.h
-//
-// Phase 4 — Android Runtime Stubs
-//
-// HVC call number ranges:
-//   0x2000–0x20FF : libc stubs  (malloc, free, pthread_*, etc.)
-//   0x2100–0x21FF : liblog      (__android_log_print, etc.)
-//   0x2200–0x22FF : libandroid  (ALooper, AChoreographer, ANativeWindow, etc.)
-//   0x2300–0x23FF : libdl       (dlopen, dlsym, dlclose, dlerror)
-//   0x2400–0x24FF : libEGL      (eglGetDisplay, eglInitialize, …)
-//   0x2500–0x25FF : libGLESv2   (eglGetProcAddress passthrough + GLES dispatch)
-//   0x2600–0x26FF : libc++ / NDK C++ runtime (operator new/delete, guards, atexit)
-//   0x2700–0x27FF : libbinder_ndk (AServiceManager/AIBinder basics)
 #pragma once
 
 #include <cstdint>
@@ -22,12 +9,7 @@
 #include <optional>
 #include <vector>
 
-#include "host_window.h"
-
-// ANGLE / EGL / GLES headers (macOS host-side)
-#include <EGL/egl.h>
-#include <EGL/eglext.h>
-#include <GLES3/gl3.h>
+#include "gpu_bridge.h"
 
 extern "C" {
     #include "core/guest.h"
@@ -48,7 +30,7 @@ struct StubEntry {
     StubHandler  handler;
 };
 
-class AndroidRuntime {
+class AndroidRuntime : public GpuBridge {
 public:
     struct PendingPthreadCall {
         uint64_t handle = 0;
@@ -80,14 +62,12 @@ public:
     void set_guest_function_invoker(GuestFunctionInvoker invoker);
 
     // Write HVC shim stubs into guest memory and build the symbol tables.
-    void install();
+    void install() override;
+
 
     // Return the builtin symbol map for a given soname.
-    BuiltinSymbols builtin_symbols(const std::string& soname) const;
+    BuiltinSymbols builtin_symbols(const std::string& soname) const override;
 
-    // Return a guest-callable trap stub for an unresolved direct .so import.
-    uint64_t unsupported_import_stub(const std::string& soname,
-                                     const std::string& symbol);
 
     static constexpr const char* KNOWN_SONAMES[] = {
         "libc.so", "libm.so", "libdl.so", "libdl_android.so", "liblog.so",
@@ -99,24 +79,24 @@ public:
     };
 
     // HVC dispatch — call from the HVC exit handler when X8 is in [0x2000, 0x2FFF].
-    bool try_dispatch(uint32_t hvc_nr, const uint64_t regs[8], uint64_t* x0_out);
+    bool try_dispatch(uint32_t hvc_nr, const uint64_t regs[8], uint64_t* x0_out) override;
 
     // EGL state accessors (used by NativeWindow bridge)
-    EGLDisplay egl_display() const { return egl_display_; }
-    EGLContext egl_context() const { return egl_context_; }
-    EGLSurface egl_surface() const { return egl_surface_; }
-    uint64_t native_window_handle() const { return GUEST_NATIVE_WINDOW; }
     uint64_t input_queue_handle() const { return GUEST_INPUT_QUEUE; }
     uint64_t asset_manager_handle() const { return GUEST_ASSET_MANAGER; }
-    bool host_window_active() const;
-    void run_host_window_after_guest(int linger_ms);
-    bool pump_host_app_events();
+    bool pump_host_app_events() override;
     void set_thread_yield_enabled(bool enabled);
     bool consume_thread_yield();
     std::vector<PendingPthreadCall> take_pending_pthread_calls();
     void complete_pthread_call(uint64_t handle, uint64_t retval);
     std::vector<PendingLooperCallback> take_pending_looper_callbacks();
     std::vector<PendingFrameCallback> take_pending_frame_callbacks();
+
+protected:
+    bool collect_host_input_events() override;
+
+private:
+    bool queue_ready_looper_callbacks();
 
 private:
     void register_libc_stubs();
@@ -126,31 +106,10 @@ private:
     void register_libdl_stubs();
     void register_libcxx_stubs();
     void register_libbinder_stubs();
-    void register_libegl_stubs();
-    void register_libgles_stubs();
-
-    // Load ANGLE dylibs from third_party/angle-bin/
-    bool load_angle();
-
-    // Write one 12-byte HVC shim stub (movz x8,#nr / hvc #6 / ret).
-    uint64_t write_stub(uint32_t hvc_nr);
 
     // Allocate a passthrough stub that saves/restores and calls a host fn ptr.
     // Used by eglGetProcAddress so the guest can resolve arbitrary GLES symbols.
     uint64_t alloc_passthrough_stub(void* host_fn, uint32_t hvc_nr);
-
-    uint64_t add(const std::string& soname,
-                 const std::string& symbol,
-                 uint32_t           hvc_nr,
-                 StubHandler        handler);
-
-    guest_t*  guest_;
-    uint64_t  arena_gpa_;
-    uint64_t  next_stub_gpa_ = 0;
-    bool      installed_     = false;
-
-    std::unordered_map<uint32_t, StubHandler> handlers_;
-    std::unordered_map<std::string, BuiltinSymbols> sym_tables_;
 
     // ── Bump allocator for malloc stubs ──────────────────────────────────────
     uint64_t heap_base_  = 0;
@@ -327,68 +286,11 @@ private:
     uint64_t next_binder_weak_handle_ = 0xB1D4'0001ULL;
     GuestFunctionInvoker guest_function_invoker_;
 
-    // ── Native window state ───────────────────────────────────────────────────
-    struct NativeWindowState {
-        int32_t width = 320;
-        int32_t height = 240;
-        int32_t stride = 320;
-        int32_t format = 1; // AHARDWAREBUFFER_FORMAT_R8G8B8A8_UNORM
-        uint64_t bits_gpa = 0;
-        uint64_t bits_size = 0;
-        uint32_t ref_count = 1;
-        bool locked = false;
-    };
-    NativeWindowState native_window_;
-    static constexpr uint64_t GUEST_NATIVE_WINDOW = 0xA11D0001ULL;
-    static constexpr int32_t MAX_NATIVE_WINDOW_WIDTH = 640;
-    static constexpr int32_t MAX_NATIVE_WINDOW_HEIGHT = 480;
-
-    // ── ANGLE / EGL host state ────────────────────────────────────────────────
-    void*      angle_egl_lib_  = nullptr;   // dlopen handle for libEGL.dylib
-    void*      angle_gles_lib_ = nullptr;   // dlopen handle for libGLESv2.dylib
-
-    // Host-side EGL objects created during eglInitialize / eglCreateContext
-    EGLDisplay egl_display_ = EGL_NO_DISPLAY;
-    EGLContext egl_context_ = EGL_NO_CONTEXT;
-    EGLSurface egl_surface_ = EGL_NO_SURFACE;
-    EGLConfig  egl_config_  = nullptr;
-
-    // Guest-side opaque handles (returned to the game as EGLDisplay*, etc.)
-    // We use small integers so they fit in 64-bit guest registers.
-    static constexpr uint64_t GUEST_EGL_DISPLAY = 0xE61D0001ULL;
-    static constexpr uint64_t GUEST_EGL_CONTEXT = 0xE61C0001ULL;
-    static constexpr uint64_t GUEST_EGL_SURFACE = 0xE615F001ULL;
-    static constexpr uint64_t GUEST_EGL_CONFIG  = 0xE61CF001ULL;
-    static constexpr uint64_t EGL_SUCCESS_VAL   = 0x3000ULL; // EGL_SUCCESS
-
-    // eglGetProcAddress dispatch: guest hvc_nr → host fn ptr
-    // Allocated dynamically in [HVC_GL_PROC_BASE, HVC_GL_PROC_LIMIT).
-    static constexpr uint32_t HVC_GL_PROC_BASE = 0x2800;
-    static constexpr uint32_t HVC_GL_PROC_LIMIT = 0x2E00;
-    std::unordered_map<uint32_t, void*> proc_addr_handlers_;
-    uint32_t next_proc_hvc_ = HVC_GL_PROC_BASE;
-
-    static constexpr uint32_t HVC_UNSUPPORTED_IMPORT_BASE = 0x2E00;
-    static constexpr uint32_t HVC_UNSUPPORTED_IMPORT_LIMIT = 0x3000;
-    std::unordered_map<std::string, uint64_t> unsupported_import_stubs_;
-    uint32_t next_unsupported_import_hvc_ = HVC_UNSUPPORTED_IMPORT_BASE;
-
-    // Helper: resolve a symbol from ANGLE (tries EGL then GLES lib)
-    void* angle_sym(const char* name) const;
-
-    void ensure_host_window();
-    bool collect_host_input_events();
-    bool queue_ready_looper_callbacks();
     void rearm_looper_fd(int32_t fd);
     HostPipe* pipe_for_fd(int32_t fd);
     const HostPipe* pipe_for_fd(int32_t fd) const;
     bool looper_fd_ready(int32_t fd) const;
-    void present_native_window_buffer();
-    void present_egl_surface();
     void release_binder_strong(uint64_t handle);
-
-    bool host_window_enabled_ = false;
-    std::unique_ptr<HostWindow> host_window_;
 };
 
 } // namespace muplar::runtime::android

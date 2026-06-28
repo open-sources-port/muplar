@@ -18,6 +18,7 @@
 #include "distro_profile.h"
 #include "supervisor_service.h"
 #import "WWNCompositorBridge.h"
+#import "WWNWindow.h"
 
 namespace prefix = muplar::runtime::prefix;
 namespace supervisor = muplar::supervisor;
@@ -79,6 +80,18 @@ static NSString* DefaultWawonaRuntimeDir()
 static NSString* DefaultWawonaDisplayName()
 {
     return @"wayland-0";
+}
+
+static NSSet<NSNumber*>* VisibleWawonaWindowNumbers()
+{
+    NSMutableSet<NSNumber*>* windowNumbers = [NSMutableSet set];
+    for (NSWindow* window in NSApp.windows) {
+        if ([window isKindOfClass:WWNWindow.class] && window.isVisible &&
+            !window.isMiniaturized && window.windowNumber > 0) {
+            [windowNumbers addObject:@(window.windowNumber)];
+        }
+    }
+    return windowNumbers;
 }
 
 static void EnsureWineSocketDirPrivate()
@@ -493,6 +506,11 @@ static NSString* ParseLnkFile(const std::filesystem::path& lnkPath)
 - (NSWindow*)beginBusySheetWithTitle:(NSString*)title message:(NSString*)message;
 - (void)endBusySheet:(NSWindow*)sheet;
 - (void)setupMenu;
+- (BOOL)ensureLinuxSessionForPrefix:(prefix::PrefixLayout*)selected
+                       errorMessage:(NSString**)errorMessage;
+- (void)waitForLinuxWindowForKey:(NSString*)key
+                           token:(NSUUID*)token
+           baselineWindowNumbers:(NSSet<NSNumber*>*)baselineWindowNumbers;
 @end
 
 @implementation PrefixManagerAppDelegate {
@@ -515,6 +533,8 @@ static NSString* ParseLnkFile(const std::filesystem::path& lnkPath)
     NSMutableArray<MuplarAppShortcut*>* _appsList;
     NSMutableDictionary<NSString*, NSTask*>* _runningTasks;
     NSMutableSet<NSString*>* _launchingAppPaths;
+    NSMutableDictionary<NSString*, NSUUID*>* _linuxLaunchTokens;
+    NSMutableDictionary<NSString*, NSTask*>* _linuxSessionTasks;
     NSTask* _wawonaTask;
     std::unique_ptr<supervisor::SupervisorService> _supervisor;
     dispatch_source_t _termSignalSource;
@@ -591,6 +611,8 @@ static NSString* ParseLnkFile(const std::filesystem::path& lnkPath)
         _appsList = [NSMutableArray array];
         _runningTasks = [NSMutableDictionary dictionary];
         _launchingAppPaths = [NSMutableSet set];
+        _linuxLaunchTokens = [NSMutableDictionary dictionary];
+        _linuxSessionTasks = [NSMutableDictionary dictionary];
         _supervisor = std::make_unique<supervisor::SupervisorService>();
     }
     return self;
@@ -699,6 +721,14 @@ static NSString* ParseLnkFile(const std::filesystem::path& lnkPath)
     [_window makeKeyAndOrderFront:nil];
     [NSApp activateIgnoringOtherApps:YES];
 
+    // Warm the shared compositor after the manager has had a chance to draw.
+    // Linux launches can then connect immediately instead of paying this cost
+    // while their application is starting.
+    dispatch_async(dispatch_get_main_queue(), ^{
+        if (self->_supervisor && !self->_supervisor->is_running())
+            self->_supervisor->start();
+    });
+
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1500 * NSEC_PER_MSEC)),
                    dispatch_get_main_queue(), ^{
         [self reloadPrefixes:nil];
@@ -724,6 +754,8 @@ static NSString* ParseLnkFile(const std::filesystem::path& lnkPath)
         }
     }
     [_runningTasks removeAllObjects];
+    NSDictionary<NSString*, NSTask*>* sessionTasksCopy = [_linuxSessionTasks copy];
+    [_linuxSessionTasks removeAllObjects];
 
     // Create a standalone progress window if the main window isn't available
     NSWindow* busyWindow = nil;
@@ -769,6 +801,18 @@ static NSString* ParseLnkFile(const std::filesystem::path& lnkPath)
     __weak PrefixManagerAppDelegate* weakSelf = self;
     dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
         PrefixManagerAppDelegate* strongSelf = weakSelf;
+        for (int i = 0; i < 20; ++i) {
+            BOOL clientsRunning = NO;
+            for (NSTask* task in tasksCopy.allValues)
+                clientsRunning = clientsRunning || task.isRunning;
+            if (!clientsRunning)
+                break;
+            usleep(100000);
+        }
+        for (NSTask* task in sessionTasksCopy.allValues) {
+            if (task.isRunning)
+                [task terminate];
+        }
         if (strongSelf && strongSelf->_supervisor) {
             strongSelf->_supervisor->stop();
         }
@@ -2061,6 +2105,14 @@ static NSString* MapLinuxIconToSFSymbol(NSString* icon)
         return;
 
     try {
+        NSString* sessionKey = NSStringFromStdString(selectedName);
+        NSTask* sessionTask = _linuxSessionTasks[sessionKey];
+        if (sessionTask && sessionTask.isRunning) {
+            [sessionTask terminate];
+            for (int i = 0; i < 20 && sessionTask.isRunning; ++i)
+                usleep(100000);
+        }
+        [_linuxSessionTasks removeObjectForKey:sessionKey];
         if (_supervisor)
             _supervisor->on_prefix_deleted(selectedName);
         prefix::delete_prefix(selectedRoot);
@@ -2783,6 +2835,35 @@ static NSString* MapLinuxIconToSFSymbol(NSString* icon)
     return @"Stopped";
 }
 
+- (void)waitForLinuxWindowForKey:(NSString*)key
+                           token:(NSUUID*)token
+           baselineWindowNumbers:(NSSet<NSNumber*>*)baselineWindowNumbers
+{
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 100 * NSEC_PER_MSEC),
+                   dispatch_get_main_queue(), ^{
+        if (![self->_linuxLaunchTokens[key] isEqual:token])
+            return;
+
+        NSTask* task = self->_runningTasks[key];
+        if (!task || !task.isRunning)
+            return;
+
+        NSMutableSet<NSNumber*>* newWindowNumbers =
+            [VisibleWawonaWindowNumbers() mutableCopy];
+        [newWindowNumbers minusSet:baselineWindowNumbers];
+        if (newWindowNumbers.count > 0) {
+            [self->_linuxLaunchTokens removeObjectForKey:key];
+            [self->_launchingAppPaths removeObject:key];
+            [self->_appsTableView reloadData];
+            return;
+        }
+
+        [self waitForLinuxWindowForKey:key
+                                 token:token
+                 baselineWindowNumbers:baselineWindowNumbers];
+    });
+}
+
 - (NSString* )mupBinPath
 {
     NSString* macosPath = [[NSBundle mainBundle] executablePath].stringByDeletingLastPathComponent;
@@ -2844,6 +2925,60 @@ static NSString* MapLinuxIconToSFSymbol(NSString* icon)
     }
 
     return YES;
+}
+
+- (BOOL)ensureLinuxSessionForPrefix:(prefix::PrefixLayout*)selected
+                       errorMessage:(NSString**)errorMessage
+{
+    if (!selected || selected->kind != prefix::PrefixKind::Linux)
+        return NO;
+
+    NSString* key = NSStringFromStdString(selected->name);
+    NSTask* existing = _linuxSessionTasks[key];
+    if (existing && existing.isRunning)
+        return YES;
+
+    NSString* mupBin = [self mupBinPath];
+    if (!mupBin || ![[NSFileManager defaultManager] isExecutableFileAtPath:mupBin]) {
+        if (errorMessage)
+            *errorMessage = @"mup binary is unavailable for the Linux session launcher.";
+        return NO;
+    }
+
+    NSTask* task = [[NSTask alloc] init];
+    task.launchPath = mupBin;
+    task.arguments = @[@"--quiet", @"--prefix", key,
+                       @"/usr/local/libexec/muplar-session-launcher"];
+    NSMutableDictionary<NSString*, NSString*>* env =
+        [NSProcessInfo.processInfo.environment mutableCopy];
+    ApplyDefaultLinuxDisplayEnvironment(env);
+    env[@"ELFUSE_GUEST_UID"] = @"1000";
+    env[@"ELFUSE_GUEST_GID"] = @"1000";
+    env[@"MUPLAR_APP_PROCESS_GROUP"] = @"1";
+    env[@"MUPLAR_SESSION_MAP_DIR"] =
+        [NSStringFromPath(selected->rootfs / "tmp" / "muplar-session")
+            stringByAppendingPathComponent:@"host-pids"];
+    task.environment = env;
+    task.standardOutput = [NSFileHandle fileHandleWithNullDevice];
+    task.standardError = [NSFileHandle fileHandleWithNullDevice];
+    task.terminationHandler = ^(NSTask* finished) {
+        dispatch_async(dispatch_get_main_queue(), ^{
+            if (self->_linuxSessionTasks[key] == finished)
+                [self->_linuxSessionTasks removeObjectForKey:key];
+        });
+    };
+
+    @try {
+        [task launch];
+        _linuxSessionTasks[key] = task;
+        return YES;
+    } @catch (NSException* ex) {
+        if (errorMessage) {
+            *errorMessage = [NSString stringWithFormat:
+                @"Failed to start Linux session launcher: %@", ex.reason];
+        }
+        return NO;
+    }
 }
 
 - (NSString*)linuxProvisionerScriptPath
@@ -3342,12 +3477,10 @@ static NSString* MapLinuxIconToSFSymbol(NSString* icon)
         return @[terminal, @"--title", title, @"-e", shell];
     }
     if ([name isEqualToString:@"gnome-terminal"]) {
-        return @[@"/usr/bin/dbus-run-session", @"--", terminal,
-                 @"--wait", @"--title", title, @"--", shell];
+        return @[terminal, @"--wait", @"--title", title, @"--", shell];
     }
     if ([name isEqualToString:@"kgx"]) {
-        return @[@"/usr/bin/dbus-run-session", @"--", terminal,
-                 @"--title", title, @"--", shell];
+        return @[terminal, @"--title", title, @"--", shell];
     }
     if ([name isEqualToString:@"xfce4-terminal"]) {
         return @[terminal, @"--title", title, @"--command", shell];
@@ -3383,6 +3516,12 @@ static NSString* MapLinuxIconToSFSymbol(NSString* icon)
     NSString* wawonaError = nil;
     if (![self ensureWawonaForLinuxPrefix:selected errorMessage:&wawonaError]) {
         [self showError:wawonaError ?: @"Failed to start Muplar display compositor."];
+        return;
+    }
+
+    NSString* sessionError = nil;
+    if (![self ensureLinuxSessionForPrefix:selected errorMessage:&sessionError]) {
+        [self showError:sessionError ?: @"Failed to start the Linux session launcher."];
         return;
     }
 
@@ -3428,17 +3567,19 @@ static NSString* MapLinuxIconToSFSymbol(NSString* icon)
 
     NSTask* task = [[NSTask alloc] init];
     task.launchPath = mupBin;
-    NSMutableArray<NSString*>* args = [NSMutableArray array];
-    if (quiet)
-        [args addObject:@"--quiet"];
-    [args addObjectsFromArray:@[@"--prefix", NSStringFromStdString(selected->name)]];
+    (void)quiet;
+    NSMutableArray<NSString*>* args = [NSMutableArray arrayWithArray:@[
+        @"linux-session-exec", NSStringFromStdString(selected->name), @"--"]];
     [args addObjectsFromArray:actualGuestArguments];
     task.arguments = args;
     task.environment = env;
     [self setupLoggingForTask:task prefix:selected appName:app.name];
 
     NSString* key = [self appKeyForApp:app];
+    NSSet<NSNumber*>* baselineWindowNumbers = VisibleWawonaWindowNumbers();
+    NSUUID* launchToken = NSUUID.UUID;
     [_launchingAppPaths addObject:key];
+    _linuxLaunchTokens[key] = launchToken;
     [_appsTableView reloadData];
 
     std::filesystem::path pidPath = prefix::pid_file_path(*selected);
@@ -3455,6 +3596,7 @@ static NSString* MapLinuxIconToSFSymbol(NSString* icon)
         kill(-t.processIdentifier, SIGKILL);
         [[NSFileManager defaultManager] removeItemAtPath:pidFile error:nil];
         dispatch_async(dispatch_get_main_queue(), ^{
+            [self->_linuxLaunchTokens removeObjectForKey:key];
             [self->_launchingAppPaths removeObject:key];
             [self->_runningTasks removeObjectForKey:key];
             [self loadAppsForSelectedPrefix];
@@ -3467,14 +3609,11 @@ static NSString* MapLinuxIconToSFSymbol(NSString* icon)
         _runningTasks[key] = task;
         NSString* pidContent = [NSString stringWithFormat:@"%d\n", task.processIdentifier];
         [pidContent writeToFile:pidFile atomically:YES encoding:NSUTF8StringEncoding error:nil];
-
-        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1500 * NSEC_PER_MSEC)),
-                       dispatch_get_main_queue(), ^{
-            [self->_launchingAppPaths removeObject:key];
-            [self loadAppsForSelectedPrefix];
-            [self reloadPrefixes:nil];
-        });
+        [self waitForLinuxWindowForKey:key
+                                 token:launchToken
+                 baselineWindowNumbers:baselineWindowNumbers];
     } @catch (NSException* ex) {
+        [_linuxLaunchTokens removeObjectForKey:key];
         [self->_launchingAppPaths removeObject:key];
         [_appsTableView reloadData];
         [self showError:[NSString stringWithFormat:@"Failed to launch Linux app: %@", ex.reason]];

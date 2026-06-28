@@ -11,13 +11,6 @@ if(MUPLAR_HAS_BUNDLED_JDK)
     list(APPEND MUPLAR_ANDROID_SOURCES host_jvm_launcher.cpp)
 endif()
 
-if(APPLE)
-    enable_language(OBJCXX)
-    list(APPEND MUPLAR_ANDROID_SOURCES host_window_mac.mm)
-else()
-    list(APPEND MUPLAR_ANDROID_SOURCES host_window_stub.cpp)
-endif()
-
 add_library(muplar_runtime_android STATIC
     ${MUPLAR_ANDROID_SOURCES}
 )
@@ -55,12 +48,8 @@ target_link_libraries(muplar_runtime_android
         ${ANGLE_LIB_DIR}/libGLESv2.dylib
 )
 
-if(APPLE)
-    target_link_libraries(muplar_runtime_android PRIVATE "-framework AppKit")
-    set_source_files_properties(host_window_mac.mm PROPERTIES
-        COMPILE_OPTIONS "-fobjc-arc"
-    )
-endif()
+
+
 
 # ── Bundled JDK (optional — enabled when tools/setup-jdk.sh has been run) ────
 if(MUPLAR_HAS_BUNDLED_JDK)

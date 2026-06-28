@@ -3,7 +3,7 @@
 #include <cstdint>
 #include <vector>
 
-namespace muplar::runtime::android {
+namespace muplar::runtime {
 
 struct HostInputEvent {
     int32_t type = 0;
@@ -41,4 +41,4 @@ private:
     Impl* impl_ = nullptr;
 };
 
-} // namespace muplar::runtime::android
+} // namespace muplar::runtime

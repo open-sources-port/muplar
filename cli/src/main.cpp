@@ -12,18 +12,26 @@
 
 #include <iostream>
 #include <algorithm>
+#include <chrono>
 #include <filesystem>
+#include <fstream>
 #include <iomanip>
 #include <optional>
+#include <sstream>
 #include <stdexcept>
 #include <string>
+#include <thread>
 #include <vector>
+#include <fcntl.h>
 #include <sys/resource.h>
 #include <sys/wait.h>
 #include <signal.h>
 #include <cerrno>
 #include <cstring>
 #include <unistd.h>
+#ifdef __APPLE__
+#include <libproc.h>
+#endif
 
 #include "android_aarch64_runtime.h"
 #include "linux_aarch64_runtime.h"
@@ -41,6 +49,203 @@ extern "C" {
 
 static constexpr const char* kRosettadTranslatorPath =
     "/Library/Apple/usr/libexec/oah/RosettaLinux/rosettad";
+
+static volatile sig_atomic_t g_session_client_cancelled = 0;
+
+static void session_client_signal_handler(int)
+{
+    g_session_client_cancelled = 1;
+}
+
+static std::string shell_single_quote(const std::string& value)
+{
+    std::string result = "'";
+    for (char ch : value) {
+        if (ch == '\n' || ch == '\r')
+            throw std::runtime_error("session arguments cannot contain newlines");
+        if (ch == '\'')
+            result += "'\\''";
+        else
+            result += ch;
+    }
+    result += "'";
+    return result;
+}
+
+static bool write_session_command(const std::filesystem::path& fifo,
+                                  const std::string& command)
+{
+    int fd = open(fifo.c_str(), O_WRONLY | O_NONBLOCK);
+    if (fd < 0)
+        return false;
+    std::string line = command + "\n";
+    ssize_t written = write(fd, line.data(), line.size());
+    close(fd);
+    return written == static_cast<ssize_t>(line.size());
+}
+
+static void stream_session_log(const std::filesystem::path& log_path,
+                               std::uintmax_t& offset)
+{
+    std::ifstream input(log_path, std::ios::binary);
+    if (!input)
+        return;
+    input.seekg(static_cast<std::streamoff>(offset));
+    char buffer[8192];
+    while (input) {
+        input.read(buffer, sizeof(buffer));
+        std::streamsize count = input.gcount();
+        if (count > 0) {
+            std::cout.write(buffer, count);
+            std::cout.flush();
+            offset += static_cast<std::uintmax_t>(count);
+        }
+    }
+}
+
+static void terminate_host_process_tree(pid_t pid)
+{
+#ifdef __APPLE__
+    pid_t children[1024];
+    int count = proc_listchildpids(pid, children, sizeof(children));
+    if (count > 0) {
+        for (int i = 0; i < count; ++i) {
+            if (children[i] > 0)
+                terminate_host_process_tree(children[i]);
+        }
+    }
+#endif
+    if (pid > 1)
+        kill(pid, SIGTERM);
+}
+
+static int handle_linux_session_exec(int argc, char** argv)
+{
+    if (argc < 5 || std::string(argv[3]) != "--") {
+        std::cerr << "Usage: " << argv[0]
+                  << " linux-session-exec PREFIX -- PROGRAM [ARGS...]\n";
+        return 2;
+    }
+
+    namespace fs = std::filesystem;
+    namespace prefix = muplar::runtime::prefix;
+    prefix::PrefixLayout layout;
+    try {
+        layout = prefix::open_prefix(argv[2], {}, true);
+    } catch (const std::exception& e) {
+        std::cerr << "Session prefix error: " << e.what() << "\n";
+        return 1;
+    }
+    if (layout.kind != prefix::PrefixKind::Linux) {
+        std::cerr << "linux-session-exec requires a Linux prefix\n";
+        return 2;
+    }
+
+    fs::path host_session_dir = layout.rootfs / "tmp" / "muplar-session";
+    fs::path host_requests_dir = host_session_dir / "requests";
+    fs::path host_pid_map_dir = host_session_dir / "host-pids";
+    fs::path fifo = host_session_dir / "commands";
+    for (int i = 0; i < 200; ++i) {
+        if (fs::exists(host_session_dir / "ready") && fs::exists(fifo))
+            break;
+        std::this_thread::sleep_for(std::chrono::milliseconds(50));
+    }
+    if (!fs::exists(host_session_dir / "ready") || !fs::exists(fifo)) {
+        std::cerr << "Linux session launcher did not become ready\n";
+        return 1;
+    }
+
+    std::ostringstream id_builder;
+    id_builder << getpid() << "-"
+               << std::chrono::steady_clock::now().time_since_epoch().count();
+    std::string id = id_builder.str();
+    fs::path request = host_requests_dir / (id + ".request");
+    fs::path request_tmp = host_requests_dir / (id + ".request.tmp");
+    fs::path status = host_requests_dir / (id + ".status");
+    fs::path log = host_requests_dir / (id + ".log");
+    fs::path pid = host_requests_dir / (id + ".pid");
+    std::string guest_request = "/tmp/muplar-session/requests/" + id + ".request";
+
+    try {
+        std::ofstream output(request_tmp, std::ios::trunc);
+        if (!output)
+            throw std::runtime_error("cannot create session request");
+        output << "set --";
+        for (int i = 4; i < argc; ++i)
+            output << " " << shell_single_quote(argv[i]);
+        output << "\n";
+        output.close();
+        fs::rename(request_tmp, request);
+    } catch (const std::exception& e) {
+        std::cerr << "Session request error: " << e.what() << "\n";
+        std::error_code ec;
+        fs::remove(request_tmp, ec);
+        return 1;
+    }
+
+    bool submitted = false;
+    for (int i = 0; i < 100 && !submitted; ++i) {
+        submitted = write_session_command(fifo, guest_request);
+        if (!submitted)
+            std::this_thread::sleep_for(std::chrono::milliseconds(20));
+    }
+    if (!submitted) {
+        std::cerr << "Linux session launcher is not accepting requests\n";
+        return 1;
+    }
+
+    struct sigaction action{};
+    action.sa_handler = session_client_signal_handler;
+    sigemptyset(&action.sa_mask);
+    sigaction(SIGTERM, &action, nullptr);
+    sigaction(SIGINT, &action, nullptr);
+
+    std::uintmax_t log_offset = 0;
+    while (!fs::exists(status)) {
+        stream_session_log(log, log_offset);
+        if (g_session_client_cancelled && fs::exists(pid)) {
+            long long guest_pid = 0;
+            std::ifstream pid_input(pid);
+            pid_input >> guest_pid;
+            fs::path host_pid_path =
+                host_pid_map_dir / (std::to_string(guest_pid) + ".hostpid");
+            long long host_pid = 0;
+            std::ifstream host_pid_input(host_pid_path);
+            host_pid_input >> host_pid;
+            if (host_pid > 1)
+                terminate_host_process_tree(static_cast<pid_t>(host_pid));
+            for (int i = 0; i < 20 && !fs::exists(status); ++i)
+                std::this_thread::sleep_for(std::chrono::milliseconds(25));
+            stream_session_log(log, log_offset);
+            std::error_code cancel_ec;
+            fs::remove(request, cancel_ec);
+            fs::remove(status, cancel_ec);
+            fs::remove(log, cancel_ec);
+            fs::remove(pid, cancel_ec);
+            fs::remove(host_pid_path, cancel_ec);
+            return 143;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(50));
+    }
+    stream_session_log(log, log_offset);
+
+    int exit_code = 1;
+    std::ifstream status_input(status);
+    status_input >> exit_code;
+    std::error_code ec;
+    long long guest_pid = 0;
+    std::ifstream pid_input(pid);
+    pid_input >> guest_pid;
+    if (guest_pid > 0) {
+        fs::remove(host_pid_map_dir /
+                       (std::to_string(guest_pid) + ".hostpid"), ec);
+    }
+    fs::remove(request, ec);
+    fs::remove(status, ec);
+    fs::remove(log, ec);
+    fs::remove(pid, ec);
+    return exit_code;
+}
 
 static void print_usage(const char* prog)
 {
@@ -72,6 +277,8 @@ static void print_usage(const char* prog)
               << "       " << prog << " instance stop  NAME [--force]\n"
               << "       " << prog << " instance status NAME\n"
               << "       " << prog << " instance list\n";
+    std::cerr << "       " << prog
+              << " linux-session-exec PREFIX -- PROGRAM [ARGS...]\n";
 }
 
 static int handle_rosettad_translate_command(int argc, char** argv)
@@ -771,6 +978,9 @@ int main(int argc, char** argv)
     if (fork_child_fd >= 0) {
         return fork_child_main(fork_child_fd, vfork_notify_fd, verbose, timeout_sec);
     }
+
+    if (argc >= 2 && std::string(argv[1]) == "linux-session-exec")
+        return handle_linux_session_exec(argc, argv);
 
     const char* app_process_group = std::getenv("MUPLAR_APP_PROCESS_GROUP");
     if (app_process_group && app_process_group[0] == '1')

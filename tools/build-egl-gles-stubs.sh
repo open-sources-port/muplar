@@ -39,19 +39,19 @@ mkdir -p "$OUTPUT_DIR/aarch64"
 mkdir -p "$OUTPUT_DIR/x86_64"
 
 echo "Compiling guest AArch64 libEGL.so..."
-"$CC_ARM64" -shared -fPIC -Wl,-soname,libEGL.so.1 -o "$OUTPUT_DIR/aarch64/libEGL.so" "$STUBS_DIR/libEGL.c"
+"$CC_ARM64" -shared -fPIC -nostdlib -Wl,-soname,libEGL.so.1 -o "$OUTPUT_DIR/aarch64/libEGL.so" "$STUBS_DIR/libEGL.c"
 "$STRIP" "$OUTPUT_DIR/aarch64/libEGL.so"
 
 echo "Compiling guest AArch64 libGLESv2.so..."
-"$CC_ARM64" -shared -fPIC -Wl,-soname,libGLESv2.so.2 -o "$OUTPUT_DIR/aarch64/libGLESv2.so" "$STUBS_DIR/libGLESv2.c"
+"$CC_ARM64" -shared -fPIC -nostdlib -Wl,-soname,libGLESv2.so.2 -o "$OUTPUT_DIR/aarch64/libGLESv2.so" "$STUBS_DIR/libGLESv2.c"
 "$STRIP" "$OUTPUT_DIR/aarch64/libGLESv2.so"
 
 echo "Compiling guest x86_64 libEGL.so..."
-"$CC_X64" -shared -fPIC -Wl,-soname,libEGL.so.1 -o "$OUTPUT_DIR/x86_64/libEGL.so" "$STUBS_DIR/libEGL.c"
+"$CC_X64" -shared -fPIC -nostdlib -Wl,-soname,libEGL.so.1 -o "$OUTPUT_DIR/x86_64/libEGL.so" "$STUBS_DIR/libEGL.c"
 "$STRIP" "$OUTPUT_DIR/x86_64/libEGL.so"
 
 echo "Compiling guest x86_64 libGLESv2.so..."
-"$CC_X64" -shared -fPIC -Wl,-soname,libGLESv2.so.2 -o "$OUTPUT_DIR/x86_64/libGLESv2.so" "$STUBS_DIR/libGLESv2.c"
+"$CC_X64" -shared -fPIC -nostdlib -Wl,-soname,libGLESv2.so.2 -o "$OUTPUT_DIR/x86_64/libGLESv2.so" "$STUBS_DIR/libGLESv2.c"
 "$STRIP" "$OUTPUT_DIR/x86_64/libGLESv2.so"
 
 echo "Successfully built guest AArch64 and x86_64 EGL/GLESv2 stubs."
