@@ -915,6 +915,10 @@ static void ensure_linux_unprivileged_user(const std::filesystem::path& rootfs)
     write_managed_text_file(
         session_launcher,
         "#!/bin/sh\n"
+        "export GTK_USE_PORTAL=0\n"
+        "export GDK_DEBUG=no-portals\n"
+        "export NO_AT_BRIDGE=1\n"
+        "export GTK_A11Y=none\n"
         "session_dir=/tmp/muplar-session\n"
         "requests_dir=$session_dir/requests\n"
         "host_pids_dir=$session_dir/host-pids\n"
