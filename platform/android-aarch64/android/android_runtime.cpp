@@ -383,21 +383,6 @@ static constexpr uint32_t HVC_ANDROID_CPUFAMILY    = 0x2641;
 static constexpr uint32_t HVC_ANDROID_CPUCOUNT     = 0x2642;
 
 // ── AArch64 HVC shim stub layout ─────────────────────────────────────────────
-//   movz x8, #<hvc_nr>   ; 4 bytes
-//   hvc  #6              ; 4 bytes
-//   ret                  ; 4 bytes
-static constexpr uint64_t HVC_STUB_SIZE = 12;
-
-static void encode_stub(uint8_t* out, uint32_t hvc_nr)
-{
-    uint32_t movz = 0xD2800008u | ((hvc_nr & 0xFFFF) << 5);
-    uint32_t hvc  = 0xD4000002u | (6u << 5);   // hvc #6
-    uint32_t ret  = 0xD65F03C0u;
-    memcpy(out + 0, &movz, 4);
-    memcpy(out + 4, &hvc,  4);
-    memcpy(out + 8, &ret,  4);
-}
-
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 static std::string guest_read_string(guest_t* g, uint64_t gpa)
@@ -406,30 +391,6 @@ static std::string guest_read_string(guest_t* g, uint64_t gpa)
     char buf[512] = {};
     guest_read_str(g, gpa, buf, sizeof(buf));
     return { buf };
-}
-
-static void guest_write_u64(guest_t* g, uint64_t gpa, uint64_t v)
-{
-    guest_write(g, gpa, &v, 8);
-}
-
-static uint64_t guest_read_u64(guest_t* g, uint64_t gpa)
-{
-    uint64_t v = 0;
-    guest_read(g, gpa, &v, 8);
-    return v;
-}
-
-static uint32_t guest_read_u32(guest_t* g, uint64_t gpa)
-{
-    uint32_t v = 0;
-    guest_read(g, gpa, &v, 4);
-    return v;
-}
-
-static void guest_write_u32(guest_t* g, uint64_t gpa, uint32_t v)
-{
-    guest_write(g, gpa, &v, 4);
 }
 
 static uint64_t guest_neg_errno(int err)

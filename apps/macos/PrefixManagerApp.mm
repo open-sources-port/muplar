@@ -508,10 +508,15 @@ static NSString* ParseLnkFile(const std::filesystem::path& lnkPath)
 - (void)setupMenu;
 - (BOOL)ensureLinuxSessionForPrefix:(prefix::PrefixLayout*)selected
                        errorMessage:(NSString**)errorMessage;
+- (void)launchLinuxDefaultPackageInstallForName:(NSString*)name
+                                         distro:(NSString*)distro
+                                            arch:(NSString*)arch
+                                      targetRoot:(NSString*)targetRoot;
 - (void)prestartLinuxSessionIfNeeded:(prefix::PrefixLayout*)selected;
 - (void)waitForLinuxWindowForKey:(NSString*)key
                            token:(NSUUID*)token
-           baselineWindowNumbers:(NSSet<NSNumber*>*)baselineWindowNumbers;
+           baselineWindowNumbers:(NSSet<NSNumber*>*)baselineWindowNumbers
+                        attempts:(NSUInteger)attempts;
 @end
 
 @implementation PrefixManagerAppDelegate {
@@ -536,6 +541,7 @@ static NSString* ParseLnkFile(const std::filesystem::path& lnkPath)
     NSMutableSet<NSString*>* _launchingAppPaths;
     NSMutableDictionary<NSString*, NSUUID*>* _linuxLaunchTokens;
     NSMutableDictionary<NSString*, NSTask*>* _linuxSessionTasks;
+    NSMutableDictionary<NSString*, NSTask*>* _packageInstallTasks;
     NSTask* _wawonaTask;
     std::unique_ptr<supervisor::SupervisorService> _supervisor;
     dispatch_source_t _termSignalSource;
@@ -614,6 +620,7 @@ static NSString* ParseLnkFile(const std::filesystem::path& lnkPath)
         _launchingAppPaths = [NSMutableSet set];
         _linuxLaunchTokens = [NSMutableDictionary dictionary];
         _linuxSessionTasks = [NSMutableDictionary dictionary];
+        _packageInstallTasks = [NSMutableDictionary dictionary];
         _supervisor = std::make_unique<supervisor::SupervisorService>();
     }
     return self;
@@ -760,6 +767,11 @@ static NSString* ParseLnkFile(const std::filesystem::path& lnkPath)
         }
     }
     [_runningTasks removeAllObjects];
+    for (NSTask* task in _packageInstallTasks.allValues) {
+        if (task.isRunning)
+            [task terminate];
+    }
+    [_packageInstallTasks removeAllObjects];
     NSDictionary<NSString*, NSTask*>* sessionTasksCopy = [_linuxSessionTasks copy];
     [_linuxSessionTasks removeAllObjects];
 
@@ -994,7 +1006,8 @@ static NSString* ParseLnkFile(const std::filesystem::path& lnkPath)
         choices = @[@"x64"];
     } else {
         // linux and any future types
-        choices = @[@"ARM64", @"x64"];
+       // choices = @[@"ARM64", @"x64"];
+       choices = @[@"ARM64"];
     }
 
     [archPopup removeAllItems];
@@ -1863,7 +1876,8 @@ static NSString* MapLinuxIconToSFSymbol(NSString* icon)
     NSPopUpButton* archPopup = [[NSPopUpButton alloc] init];
     [archPopup addItemsWithTitles:@[@"ARM64", @"x64"]];
     NSPopUpButton* distroPopup = [[NSPopUpButton alloc] init];
-    [distroPopup addItemsWithTitles:@[@"Ubuntu", @"Alpine", @"Debian", @"Fedora", @"Arch", @"openSUSE"]];
+    // [distroPopup addItemsWithTitles:@[@"Ubuntu", @"Alpine", @"Debian", @"Fedora", @"Arch", @"openSUSE"]];
+    [distroPopup addItemsWithTitles:@[@"Ubuntu"]];
     distroPopup.enabled = NO; // Android selected by default
     NSTextField* sysrootField = [NSTextField textFieldWithString:@"build/sysroot"];
     [self trackAutoNameField:nameField kindPopup:kindPopup archPopup:archPopup distroPopup:distroPopup sysrootField:sysrootField];
@@ -1987,6 +2001,12 @@ static NSString* MapLinuxIconToSFSymbol(NSString* icon)
             if (hasCreatedLayout && self->_supervisor)
                 self->_supervisor->on_prefix_created(createdLayout);
             [self reloadPrefixesSelectingName:name];
+            if (kind == "linux") {
+                [self launchLinuxDefaultPackageInstallForName:instanceName
+                                                       distro:distroTitle
+                                                          arch:archString
+                                                    targetRoot:targetRootString];
+            }
         });
     });
 }
@@ -2112,6 +2132,10 @@ static NSString* MapLinuxIconToSFSymbol(NSString* icon)
 
     try {
         NSString* sessionKey = NSStringFromStdString(selectedName);
+        NSTask* packageTask = _packageInstallTasks[sessionKey];
+        if (packageTask && packageTask.isRunning)
+            [packageTask terminate];
+        [_packageInstallTasks removeObjectForKey:sessionKey];
         NSTask* sessionTask = _linuxSessionTasks[sessionKey];
         if (sessionTask && sessionTask.isRunning) {
             [sessionTask terminate];
@@ -2845,6 +2869,7 @@ static NSString* MapLinuxIconToSFSymbol(NSString* icon)
 - (void)waitForLinuxWindowForKey:(NSString*)key
                            token:(NSUUID*)token
            baselineWindowNumbers:(NSSet<NSNumber*>*)baselineWindowNumbers
+                         attempts:(NSUInteger)attempts
 {
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 100 * NSEC_PER_MSEC),
                    dispatch_get_main_queue(), ^{
@@ -2854,6 +2879,15 @@ static NSString* MapLinuxIconToSFSymbol(NSString* icon)
         NSTask* task = self->_runningTasks[key];
         if (!task || !task.isRunning)
             return;
+
+        if (attempts >= 300) {
+            [self->_linuxLaunchTokens removeObjectForKey:key];
+            [self->_launchingAppPaths removeObject:key];
+            [self->_appsTableView reloadData];
+            kill(-task.processIdentifier, SIGKILL);
+            [self showError:@"The Linux application did not create a window within 30 seconds and was stopped."];
+            return;
+        }
 
         NSMutableSet<NSNumber*>* newWindowNumbers =
             [VisibleWawonaWindowNumbers() mutableCopy];
@@ -2867,7 +2901,8 @@ static NSString* MapLinuxIconToSFSymbol(NSString* icon)
 
         [self waitForLinuxWindowForKey:key
                                  token:token
-                 baselineWindowNumbers:baselineWindowNumbers];
+                 baselineWindowNumbers:baselineWindowNumbers
+                               attempts:attempts + 1];
     });
 }
 
@@ -2968,8 +3003,33 @@ static NSString* MapLinuxIconToSFSymbol(NSString* icon)
 
     NSString* key = NSStringFromStdString(selected->name);
     NSTask* existing = _linuxSessionTasks[key];
-    if (existing && existing.isRunning)
-        return YES;
+    if (existing && existing.isRunning) {
+        std::filesystem::path dbusBinary = selected->rootfs / "usr/bin/dbus-daemon";
+        std::filesystem::path dbusConfig =
+            selected->rootfs / "etc/dbus-1/muplar-session.conf";
+        std::filesystem::path dbusAddress =
+            selected->rootfs / "tmp/muplar-session/dbus-address";
+        std::error_code ec;
+        bool dbusExpected = std::filesystem::exists(dbusBinary, ec) &&
+                            std::filesystem::exists(dbusConfig, ec);
+        bool dbusReady = false;
+        if (std::filesystem::exists(dbusAddress, ec)) {
+            ec.clear();
+            auto addressSize = std::filesystem::file_size(dbusAddress, ec);
+            dbusReady = !ec && addressSize > 0;
+        }
+        if (!dbusExpected || dbusReady)
+            return YES;
+
+        // A session can be prestarted while default packages are still being
+        // installed. Replace that session once D-Bus becomes available.
+        [existing terminate];
+        for (int i = 0; i < 20 && existing.isRunning; ++i)
+            usleep(50000);
+        if (existing.isRunning)
+            kill(existing.processIdentifier, SIGKILL);
+        [_linuxSessionTasks removeObjectForKey:key];
+    }
 
     NSString* mupBin = [self mupBinPath];
     if (!mupBin || ![[NSFileManager defaultManager] isExecutableFileAtPath:mupBin]) {
@@ -3102,7 +3162,8 @@ static NSString* MapLinuxIconToSFSymbol(NSString* icon)
         @"--distro", distro.lowercaseString,
         @"--arch", arch,
         @"--root", targetRoot,
-        @"--download"
+        @"--download",
+        @"--base-only"
     ]];
     if (sysroot.length > 0) {
         [args addObjectsFromArray:@[@"--sysroot", sysroot]];
@@ -3167,6 +3228,177 @@ static NSString* MapLinuxIconToSFSymbol(NSString* icon)
         return NO;
     }
     return YES;
+}
+
+- (void)launchLinuxDefaultPackageInstallForName:(NSString*)name
+                                         distro:(NSString*)distro
+                                            arch:(NSString*)arch
+                                      targetRoot:(NSString*)targetRoot
+{
+    NSString* script = [self linuxProvisionerScriptPath];
+    NSString* mupBin = [self mupBinPath];
+    if (!script || !mupBin) {
+        [self showError:@"Default packages could not be started because the provisioner or mup binary is missing."];
+        return;
+    }
+
+    NSWindow* console = [[NSWindow alloc]
+        initWithContentRect:NSMakeRect(0, 0, 760, 480)
+                  styleMask:NSWindowStyleMaskTitled |
+                            NSWindowStyleMaskClosable |
+                            NSWindowStyleMaskMiniaturizable |
+                            NSWindowStyleMaskResizable
+                    backing:NSBackingStoreBuffered
+                      defer:NO];
+    console.title = [NSString stringWithFormat:@"Installing Defaults - %@", name];
+    console.releasedWhenClosed = NO;
+
+    NSView* content = console.contentView;
+    NSTextField* status = [NSTextField labelWithString:
+        @"Installing the default terminal and supporting packages..."];
+    status.font = [NSFont systemFontOfSize:13 weight:NSFontWeightMedium];
+    status.translatesAutoresizingMaskIntoConstraints = NO;
+
+    NSProgressIndicator* spinner = [[NSProgressIndicator alloc] init];
+    spinner.style = NSProgressIndicatorStyleSpinning;
+    spinner.controlSize = NSControlSizeSmall;
+    spinner.translatesAutoresizingMaskIntoConstraints = NO;
+    [spinner startAnimation:nil];
+
+    NSTextView* outputView = [[NSTextView alloc] initWithFrame:NSZeroRect];
+    outputView.editable = NO;
+    outputView.selectable = YES;
+    outputView.font = [NSFont monospacedSystemFontOfSize:11 weight:NSFontWeightRegular];
+    outputView.textColor = NSColor.textColor;
+    outputView.backgroundColor = NSColor.textBackgroundColor;
+    outputView.insertionPointColor = NSColor.textColor;
+    outputView.autoresizingMask = NSViewWidthSizable;
+    outputView.verticallyResizable = YES;
+    outputView.horizontallyResizable = NO;
+    outputView.minSize = NSMakeSize(0, 0);
+    outputView.maxSize = NSMakeSize(CGFLOAT_MAX, CGFLOAT_MAX);
+    outputView.textContainer.containerSize = NSMakeSize(CGFLOAT_MAX, CGFLOAT_MAX);
+    outputView.textContainer.widthTracksTextView = YES;
+    outputView.string = @"Starting package installation...\n";
+
+    NSScrollView* scroll = [[NSScrollView alloc] init];
+    scroll.translatesAutoresizingMaskIntoConstraints = NO;
+    scroll.hasVerticalScroller = YES;
+    scroll.hasHorizontalScroller = YES;
+    scroll.autohidesScrollers = YES;
+    scroll.borderType = NSBezelBorder;
+    scroll.documentView = outputView;
+    outputView.frame = scroll.contentView.bounds;
+
+    NSButton* actionButton = [NSButton buttonWithTitle:@"Close"
+                                                target:console
+                                                action:@selector(performClose:)];
+    actionButton.bezelStyle = NSBezelStyleRounded;
+    actionButton.translatesAutoresizingMaskIntoConstraints = NO;
+
+    [content addSubview:spinner];
+    [content addSubview:status];
+    [content addSubview:scroll];
+    [content addSubview:actionButton];
+    [NSLayoutConstraint activateConstraints:@[
+        [spinner.leadingAnchor constraintEqualToAnchor:content.leadingAnchor constant:16],
+        [spinner.centerYAnchor constraintEqualToAnchor:status.centerYAnchor],
+        [spinner.widthAnchor constraintEqualToConstant:16],
+        [spinner.heightAnchor constraintEqualToConstant:16],
+        [status.leadingAnchor constraintEqualToAnchor:spinner.trailingAnchor constant:8],
+        [status.trailingAnchor constraintEqualToAnchor:content.trailingAnchor constant:-16],
+        [status.topAnchor constraintEqualToAnchor:content.topAnchor constant:14],
+        [scroll.leadingAnchor constraintEqualToAnchor:content.leadingAnchor constant:16],
+        [scroll.trailingAnchor constraintEqualToAnchor:content.trailingAnchor constant:-16],
+        [scroll.topAnchor constraintEqualToAnchor:status.bottomAnchor constant:12],
+        [scroll.bottomAnchor constraintEqualToAnchor:actionButton.topAnchor constant:-12],
+        [actionButton.trailingAnchor constraintEqualToAnchor:content.trailingAnchor constant:-16],
+        [actionButton.bottomAnchor constraintEqualToAnchor:content.bottomAnchor constant:-14],
+        [actionButton.widthAnchor constraintEqualToConstant:88],
+    ]];
+
+    NSMutableDictionary<NSString*, NSString*>* env =
+        [NSProcessInfo.processInfo.environment mutableCopy];
+    env[@"MUP"] = mupBin;
+    env[@"MUPLAR_ROOTFS_CACHE"] = [self linuxRootfsCachePath];
+    NSString* finderSafePath = @"/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin";
+    NSString* existingPath = env[@"PATH"] ?: @"";
+    env[@"PATH"] = existingPath.length > 0
+        ? [finderSafePath stringByAppendingFormat:@":%@", existingPath]
+        : finderSafePath;
+
+    NSTask* task = [[NSTask alloc] init];
+    task.launchPath = @"/bin/bash";
+    task.arguments = @[script, @"--prefix", name,
+                       @"--distro", distro.lowercaseString,
+                       @"--arch", arch, @"--packages-only"];
+    task.environment = env;
+    NSPipe* pipe = [NSPipe pipe];
+    task.standardInput = [NSFileHandle fileHandleWithNullDevice];
+    task.standardOutput = pipe;
+    task.standardError = pipe;
+
+    NSString* logDir = [targetRoot stringByAppendingPathComponent:@"logs"];
+    [[NSFileManager defaultManager] createDirectoryAtPath:logDir
+                              withIntermediateDirectories:YES
+                                               attributes:nil
+                                                    error:nil];
+    NSString* logPath = [logDir stringByAppendingPathComponent:@"default-packages.log"];
+    [[NSFileManager defaultManager] createFileAtPath:logPath contents:[NSData data] attributes:nil];
+    NSFileHandle* logHandle = [NSFileHandle fileHandleForWritingAtPath:logPath];
+    [logHandle truncateFileAtOffset:0];
+
+    pipe.fileHandleForReading.readabilityHandler = ^(NSFileHandle* handle) {
+        NSData* data = [handle availableData];
+        if (data.length == 0) {
+            handle.readabilityHandler = nil;
+            return;
+        }
+        @try { [logHandle writeData:data]; } @catch (NSException* __unused e) {}
+        NSString* text = [[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding];
+        if (text.length == 0)
+            return;
+        dispatch_async(dispatch_get_main_queue(), ^{
+            NSDictionary<NSAttributedStringKey, id>* attributes = @{
+                NSFontAttributeName: outputView.font,
+                NSForegroundColorAttributeName: outputView.textColor,
+            };
+            [outputView.textStorage appendAttributedString:
+                [[NSAttributedString alloc] initWithString:text
+                                                attributes:attributes]];
+            [outputView scrollRangeToVisible:NSMakeRange(outputView.string.length, 0)];
+        });
+    };
+
+    task.terminationHandler = ^(NSTask* finished) {
+        dispatch_async(dispatch_get_main_queue(), ^{
+            [spinner stopAnimation:nil];
+            spinner.hidden = YES;
+            BOOL success = finished.terminationReason == NSTaskTerminationReasonExit &&
+                           finished.terminationStatus == 0;
+            status.stringValue = success
+                ? @"Default packages installed"
+                : [NSString stringWithFormat:@"Package installation stopped (exit %d)",
+                                                   finished.terminationStatus];
+            if (self->_packageInstallTasks[name] == finished)
+                [self->_packageInstallTasks removeObjectForKey:name];
+            [self loadAppsForSelectedPrefix];
+        });
+        @try { [logHandle closeFile]; } @catch (NSException* __unused e) {}
+    };
+
+    @try {
+        [task launch];
+        _packageInstallTasks[name] = task;
+        [console center];
+        [console makeKeyAndOrderFront:nil];
+    } @catch (NSException* ex) {
+        pipe.fileHandleForReading.readabilityHandler = nil;
+        [logHandle closeFile];
+        [console close];
+        [self showError:[NSString stringWithFormat:
+            @"Failed to start default package installation: %@", ex.reason]];
+    }
 }
 
 - (BOOL)isTerminalShortcut:(MuplarAppShortcut*)app
@@ -3644,7 +3876,8 @@ static NSString* MapLinuxIconToSFSymbol(NSString* icon)
         [pidContent writeToFile:pidFile atomically:YES encoding:NSUTF8StringEncoding error:nil];
         [self waitForLinuxWindowForKey:key
                                  token:launchToken
-                 baselineWindowNumbers:baselineWindowNumbers];
+                 baselineWindowNumbers:baselineWindowNumbers
+                               attempts:0];
     } @catch (NSException* ex) {
         [_linuxLaunchTokens removeObjectForKey:key];
         [self->_launchingAppPaths removeObject:key];

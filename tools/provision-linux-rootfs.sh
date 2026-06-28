@@ -34,6 +34,8 @@ FROM_TAR=""
 DOWNLOAD=false
 REPLACE_ROOTFS=false
 STRIP_COMPONENTS=0
+BASE_ONLY=false
+PACKAGES_ONLY=false
 
 usage() {
     cat <<EOF
@@ -41,13 +43,16 @@ Usage:
   $0 --prefix NAME --distro ubuntu|alpine|debian|fedora|arch|opensuse --arch aarch64|x86_64 \\
      (--download | --from-tar PATH) [--root PATH] [--sysroot PATH] [--replace-rootfs] [--strip-components N]
 
+  $0 --prefix NAME --distro DISTRO --arch ARCH --packages-only
+
 Examples:
   $0 --prefix ubuntu-arm64 --distro ubuntu --arch aarch64 --download
   $0 --prefix alpine-x64 --distro alpine --arch x86_64 --download
   $0 --prefix debian-arm64 --distro debian --arch aarch64 --from-tar ~/rootfs/debian-arm64.tar.xz
 
 Notes:
-  - Built-in downloads are currently wired for Ubuntu Base 24.04 and Alpine minirootfs.
+  - Built-in downloads are currently wired for Ubuntu Base 26.04 and Alpine minirootfs.
+  - Downloaded base images are shared across instances by distro and architecture.
   - Debian/Fedora/Arch/openSUSE can be imported from a local rootfs tarball.
   - Use --root to place the instance outside ~/.muplar/prefixes.
 EOF
@@ -91,7 +96,7 @@ EOF
 
 ensure_certificate_symlink_config() {
     local root="$1"
-    [[ -n "$PYTHON3_BIN" ]] || return
+    [[ -n "$PYTHON3_BIN" ]] || return 0
 
     "$PYTHON3_BIN" - "$root" <<'PY'
 import os
@@ -132,7 +137,7 @@ PY
 ensure_dpkg_casefold_config() {
     local root="$1"
     if ! is_case_insensitive_dir "$root"; then
-        return
+        return 0
     fi
     local dir="$root/etc/dpkg/dpkg.cfg.d"
     mkdir -p "$dir"
@@ -159,9 +164,9 @@ EOF
 
 ensure_debconf_pipe_compat() {
     local root="$1"
-    [[ "$DISTRO" == "ubuntu" || "$DISTRO" == "debian" ]] || return
+    [[ "$DISTRO" == "ubuntu" || "$DISTRO" == "debian" ]] || return 0
     local confmodule="$root/usr/share/debconf/confmodule"
-    [[ -f "$confmodule" && -n "$PYTHON3_BIN" ]] || return
+    [[ -f "$confmodule" && -n "$PYTHON3_BIN" ]] || return 0
 
     "$PYTHON3_BIN" - "$confmodule" <<'PY'
 import pathlib
@@ -169,15 +174,24 @@ import sys
 
 path = pathlib.Path(sys.argv[1])
 text = path.read_text()
-old = "\techo STOP >&3\n"
-new = "\techo STOP >&3 2>/dev/null || true\n"
-if old in text:
-    path.write_text(text.replace(old, new, 1))
+old_bodies = (
+    "\techo STOP >&3\n",
+    "\techo STOP >&3 2>/dev/null || true\n",
+)
+for old in old_bodies:
+    if old in text:
+        # elfuse does not provide a persistent debconf frontend pipe. Writing
+        # STOP to its closed fd delivers SIGPIPE before the shell can handle a
+        # failed redirection, leaving otherwise-configured packages broken.
+        path.write_text(text.replace(old, "\t:\n", 1))
+        break
 PY
 }
 
 run_guest_root() {
-    ELFUSE_GUEST_UID=0 ELFUSE_GUEST_GID=0 "$MUP" --quiet --prefix "$PREFIX" \
+    ELFUSE_GUEST_UID=0 ELFUSE_GUEST_GID=0 \
+        DEBIAN_FRONTEND=noninteractive DEBCONF_NONINTERACTIVE_SEEN=true \
+        TZ=Etc/UTC "$MUP" --quiet --prefix "$PREFIX" \
         /bin/sh -c "$1"
 }
 
@@ -220,6 +234,7 @@ install_sudo() {
     if [[ "$rc" -ne 0 ]]; then
         echo "[linux-rootfs] WARNING: distro sudo package failed to install; Muplar compatibility sudo remains available" >&2
     fi
+    return "$rc"
 }
 
 install_terminal() {
@@ -231,7 +246,7 @@ install_terminal() {
     case "$DISTRO" in
         ubuntu|debian)
             run_guest_root \
-                "export DEBIAN_FRONTEND=noninteractive; apt-get update && apt-get install -y $terminal_pkg" || rc=$?
+                "export DEBIAN_FRONTEND=noninteractive DEBCONF_NONINTERACTIVE_SEEN=true TZ=Etc/UTC; apt-get update && apt-get install -y $terminal_pkg" || rc=$?
             ;;
 
         alpine)
@@ -267,15 +282,16 @@ install_terminal() {
     if [[ "$rc" -ne 0 ]]; then
         echo "[linux-rootfs] WARNING: terminal emulator failed to install" >&2
     fi
+    return "$rc"
 }
 
 ensure_arch_mirror_config() {
     local root="$1"
     local mirrorlist="$root/etc/pacman.d/mirrorlist"
-    [[ -f "$mirrorlist" ]] || return
+    [[ -f "$mirrorlist" ]] || return 0
 
     if grep -q 'Muplar preferred mirrors' "$mirrorlist"; then
-        return
+        return 0
     fi
 
     local tmp
@@ -297,7 +313,7 @@ ensure_arch_pacman_keyring() {
     local root="$1"
     local keyring="$root/usr/share/pacman/keyrings/archlinuxarm.gpg"
     local gpgdir="$root/etc/pacman.d/gnupg"
-    [[ -f "$keyring" ]] || return
+    [[ -f "$keyring" ]] || return 0
 
     rm -rf "$gpgdir"
     mkdir -p "$gpgdir"
@@ -315,7 +331,7 @@ ensure_arch_pacman_keyring() {
 ensure_arch_pacman_trust_config() {
     local root="$1"
     local conf="$root/etc/pacman.conf"
-    [[ -f "$conf" ]] || return
+    [[ -f "$conf" ]] || return 0
 
     # gpg-agent cannot complete pacman-key's local-signing flow in Muplar yet.
     # Keep package signatures required, but trust keys already imported into
@@ -330,7 +346,7 @@ ensure_arch_pacman_trust_config() {
 ensure_arch_pacman_local_db_config() {
     local root="$1"
     local local_db="$root/var/lib/pacman/local"
-    [[ -d "$local_db" ]] || return
+    [[ -d "$local_db" ]] || return 0
 
     # A failed host-side extraction or interrupted pacman transaction can leave
     # empty package database directories behind. libalpm aborts later upgrades
@@ -342,7 +358,7 @@ ensure_arch_pacman_local_db_config() {
 ensure_arch_profile_config() {
     local root="$1"
     local gpm="$root/etc/profile.d/gpm.sh"
-    [[ -f "$gpm" ]] || return
+    [[ -f "$gpm" ]] || return 0
 
     # Muplar command launches do not currently expose a Linux ttyname. Arch's
     # gpm profile hook probes tty on every login shell, so silence only that
@@ -355,7 +371,7 @@ ensure_arch_profile_config() {
 install_debian_dpkg_deb_wrapper() {
     local root="$1"
     local dpkg_deb="$root/usr/bin/dpkg-deb"
-    [[ -x "$dpkg_deb" ]] || return
+    [[ -x "$dpkg_deb" ]] || return 0
 
     if [[ ! -x "$root/usr/bin/dpkg-deb.real" ]]; then
         mv "$dpkg_deb" "$root/usr/bin/dpkg-deb.real"
@@ -521,7 +537,7 @@ host_extract_deb_data() {
 
 ensure_debian_dpkg_deb_config() {
     local root="$1"
-    [[ "$DISTRO" == "debian" ]] || return
+    [[ "$DISTRO" == "debian" ]] || return 0
     [[ -n "$AR_BIN" ]] || fail "ar is required for Debian dpkg-deb bootstrap"
 
     local binutils_arch_pkg
@@ -642,6 +658,14 @@ while [[ $# -gt 0 ]]; do
             REPLACE_ROOTFS=true
             shift
             ;;
+        --base-only)
+            BASE_ONLY=true
+            shift
+            ;;
+        --packages-only)
+            PACKAGES_ONLY=true
+            shift
+            ;;
         --strip-components)
             need_arg "$1" "${2:-}"
             STRIP_COMPONENTS="$2"
@@ -666,14 +690,36 @@ done
 [[ -x "$MUP" ]] || fail "mup binary not found or not executable: $MUP"
 [[ -n "$TAR_BIN" ]] || fail "tar or bsdtar is required"
 
-if [[ "$DOWNLOAD" == true && -n "$FROM_TAR" ]]; then
+if [[ "$BASE_ONLY" == true && "$PACKAGES_ONLY" == true ]]; then
+    fail "choose either --base-only or --packages-only"
+fi
+if [[ "$PACKAGES_ONLY" != true && "$DOWNLOAD" == true && -n "$FROM_TAR" ]]; then
     fail "choose either --download or --from-tar, not both"
 fi
-if [[ "$DOWNLOAD" == false && -z "$FROM_TAR" ]]; then
+if [[ "$PACKAGES_ONLY" != true && "$DOWNLOAD" == false && -z "$FROM_TAR" ]]; then
     fail "choose --download or --from-tar PATH"
 fi
 
 mkdir -p "$CACHE_DIR"
+
+if [[ "$PACKAGES_ONLY" == true ]]; then
+    prefix_info="$("$MUP" prefix info "$PREFIX")"
+    rootfs="$(printf '%s\n' "$prefix_info" | sed -n 's/^Rootfs: //p' | head -n 1)"
+    [[ -n "$rootfs" && -d "$rootfs" ]] || fail "unable to find rootfs for $PREFIX"
+    ensure_resolver_config "$rootfs"
+    ensure_certificate_symlink_config "$rootfs"
+    ensure_debconf_pipe_compat "$rootfs"
+    package_rc=0
+    install_sudo || package_rc=$?
+    install_terminal || package_rc=$?
+    if [[ "$package_rc" -eq 0 ]]; then
+        rm -f "$rootfs/etc/muplar-default-packages-pending"
+        echo "[linux-rootfs] Default package installation finished"
+    else
+        echo "[linux-rootfs] Default package installation failed" >&2
+    fi
+    exit "$package_rc"
+fi
 
 download_alpine() {
     [[ -n "$CURL_BIN" ]] || fail "curl is required for --download"
@@ -761,6 +807,42 @@ download_ubuntu() {
     local base_url="https://cdimage.ubuntu.com/ubuntu-base/releases/26.04/release"
     local index="$CACHE_DIR/ubuntu-base-26.04-release.html"
     local sums="$CACHE_DIR/ubuntu-base-26.04-SHA256SUMS"
+
+    # Resolve an existing architecture-specific image before contacting the
+    # release server. SHA256SUMS is retained beside the archive, so repeated
+    # instance creation remains both offline-capable and verified.
+    local cached_tarball cached_filename cached_expected cached_actual
+    cached_tarball="$(find "$CACHE_DIR" -maxdepth 1 -type f \
+        -name "ubuntu-base-26.04*-base-${ubuntu_arch}.tar.gz" \
+        ! -name '*.part' | sort -V | tail -n 1)"
+    if [[ -n "$cached_tarball" && -s "$cached_tarball" ]]; then
+        cached_filename="$(basename "$cached_tarball")"
+        cached_expected=""
+        if [[ -s "$sums" ]]; then
+            cached_expected="$(awk -v f="$cached_filename" '
+                {
+                    name = $2
+                    sub(/^\*/, "", name)
+                    sub(/^\.\//, "", name)
+                    if (name == f) { print $1; exit }
+                }
+            ' "$sums")"
+        fi
+        if [[ -n "$cached_expected" ]]; then
+            cached_actual="$(shasum -a 256 "$cached_tarball" | awk '{print $1}')"
+            if [[ "$cached_actual" == "$cached_expected" ]]; then
+                echo "[linux-rootfs] Using verified cached $cached_filename"
+                FROM_TAR="$cached_tarball"
+                return
+            fi
+            echo "[linux-rootfs] Cached checksum failed; downloading a fresh image" >&2
+            rm -f "$cached_tarball"
+        else
+            echo "[linux-rootfs] Using cached $cached_filename"
+            FROM_TAR="$cached_tarball"
+            return
+        fi
+    fi
 
     echo "[linux-rootfs] Fetching Ubuntu Base release metadata"
     "$CURL_BIN" -fsSL "$base_url/" -o "$index"
@@ -1087,8 +1169,14 @@ if [[ "$DISTRO" == "arch" ]]; then
     ensure_arch_profile_config "$rootfs"
 fi
 
-install_sudo
-install_terminal
+if [[ "$BASE_ONLY" == true ]]; then
+    : >"$rootfs/etc/muplar-default-packages-pending"
+    echo "[linux-rootfs] Base instance ready; default packages deferred"
+else
+    install_sudo || true
+    install_terminal || true
+    rm -f "$rootfs/etc/muplar-default-packages-pending"
+fi
 
 cat >"$rootfs/etc/muplar-provisioned" <<EOF
 distro=$DISTRO
