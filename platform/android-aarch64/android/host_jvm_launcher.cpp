@@ -4,11 +4,14 @@
 #include <cstdint>
 #include <dlfcn.h>
 #include <filesystem>
+#include <fstream>
 #include <iostream>
 #include <string>
 #include <vector>
 
 #ifdef __APPLE__
+#import <AppKit/AppKit.h>
+#include <CoreFoundation/CoreFoundation.h>
 #include <mach-o/dyld.h>
 #endif
 
@@ -335,7 +338,31 @@ int host_jvm_launch(const HostJvmLaunchConfig& config)
     // java.home must point to the JDK root (parent of lib/) so that libjvm
     // can find lib/modules (JDK9+ boot image) and other support files.
     // We set both the JVM option and the JAVA_HOME env var.
-    std::filesystem::path jdk_home = libjvm.parent_path().parent_path(); // lib/server -> lib -> jdk_home
+    std::filesystem::path real_jdk_home =
+        libjvm.parent_path().parent_path().parent_path();
+    std::filesystem::path jdk_home = real_jdk_home;
+    std::error_code home_ec;
+    if (!std::filesystem::is_regular_file(
+            real_jdk_home / "conf" / "security" / "java.security", home_ec) &&
+        !config.scratch_dir.empty()) {
+        std::filesystem::path overlay = config.scratch_dir / "muplar-jdk-home";
+        std::filesystem::create_directories(overlay / "conf" / "security", home_ec);
+        if (!std::filesystem::exists(overlay / "lib", home_ec))
+            std::filesystem::create_directory_symlink(real_jdk_home / "lib",
+                                                      overlay / "lib", home_ec);
+        std::ofstream security_out(
+            overlay / "conf" / "security" / "java.security", std::ios::trunc);
+        if (security_out) {
+            security_out << "security.provider.1=SUN\n"
+                         << "security.provider.2=SunRsaSign\n"
+                         << "security.provider.3=SunEC\n"
+                         << "securerandom.source=file:/dev/urandom\n"
+                         << "policy.provider=sun.security.provider.PolicyFile\n"
+                         << "login.configuration.provider="
+                            "sun.security.provider.ConfigFile\n";
+            jdk_home = overlay;
+        }
+    }
     std::string opt_home = "-Djava.home=" + jdk_home.string();
     ::setenv("JAVA_HOME", jdk_home.string().c_str(), /*overwrite=*/0);
     std::cerr << "[HostJVM] java.home=" << jdk_home.string() << "\n";
@@ -426,6 +453,34 @@ int host_jvm_launch(const HostJvmLaunchConfig& config)
             exit_code = 1;
         } else {
             std::cerr << "[HostJVM] ArtApkMain.main returned successfully\n";
+#ifdef __APPLE__
+            jclass host_ui = env->FindClass("com/muplar/runtime/HostUi");
+            jmethodID has_windows = host_ui
+                ? env->GetStaticMethodID(host_ui, "hasVisibleWindows", "()Z")
+                : nullptr;
+            if (env->ExceptionCheck()) {
+                env->ExceptionClear();
+                has_windows = nullptr;
+            }
+            bool host_window_visible = has_windows &&
+                env->CallStaticBooleanMethod(host_ui, has_windows) == JNI_TRUE;
+            if (host_window_visible) {
+                [NSApplication sharedApplication];
+                [NSApp setActivationPolicy:NSApplicationActivationPolicyRegular];
+                [NSApp activateIgnoringOtherApps:YES];
+            }
+            while (host_window_visible) {
+                CFRunLoopRunInMode(kCFRunLoopDefaultMode, 0.05, true);
+                if (env->ExceptionCheck()) {
+                    env->ExceptionDescribe();
+                    env->ExceptionClear();
+                    exit_code = 1;
+                    break;
+                }
+                host_window_visible =
+                    env->CallStaticBooleanMethod(host_ui, has_windows) == JNI_TRUE;
+            }
+#endif
         }
     }
 

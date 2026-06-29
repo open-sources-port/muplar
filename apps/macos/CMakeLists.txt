@@ -5,6 +5,32 @@ set(APP_BUNDLE_NAME "Muplar Instance Manager")
 set(APP_BUNDLE "${CMAKE_BINARY_DIR}/bin/${APP_BUNDLE_NAME}.app")
 set(APP_CONTENTS "${APP_BUNDLE}/Contents")
 set(WINE_PREFIX_DIR "${CMAKE_BINARY_DIR}/wine-prefix")
+set(BUILTIN_ANDROID_DIR "${CMAKE_BINARY_DIR}/builtin-android")
+
+file(GLOB_RECURSE ANDROID_BOOTSTRAP_JAVA CONFIGURE_DEPENDS
+    "${CMAKE_SOURCE_DIR}/platform/android-aarch64/java-bootstrap/*.java")
+add_custom_command(
+    OUTPUT
+        "${BUILTIN_ANDROID_DIR}/muplar-launcher.apk"
+        "${BUILTIN_ANDROID_DIR}/muplar-launcher-classes.jar"
+    COMMAND ${CMAKE_COMMAND} -E make_directory "${BUILTIN_ANDROID_DIR}"
+    COMMAND zsh "${CMAKE_SOURCE_DIR}/tools/build-art-bootstrap-jar.sh"
+        --sysroot "${CMAKE_BINARY_DIR}/sysroot"
+    COMMAND zsh "${CMAKE_SOURCE_DIR}/tests/assets/apk/create-java-launcher-apk.sh"
+    COMMAND ${CMAKE_COMMAND} -E copy
+        "${CMAKE_BINARY_DIR}/sysroot/data/local/tmp/javalauncher.apk"
+        "${BUILTIN_ANDROID_DIR}/muplar-launcher.apk"
+    COMMAND ${CMAKE_COMMAND} -E copy
+        "${CMAKE_BINARY_DIR}/sysroot/data/local/tmp/javalauncher-classes.jar"
+        "${BUILTIN_ANDROID_DIR}/muplar-launcher-classes.jar"
+    DEPENDS
+        "${CMAKE_SOURCE_DIR}/tools/build-art-bootstrap-jar.sh"
+        "${CMAKE_SOURCE_DIR}/tests/assets/apk/create-java-launcher-apk.sh"
+        ${ANDROID_BOOTSTRAP_JAVA}
+    VERBATIM)
+add_custom_target(muplar_android_builtin_apps DEPENDS
+    "${BUILTIN_ANDROID_DIR}/muplar-launcher.apk"
+    "${BUILTIN_ANDROID_DIR}/muplar-launcher-classes.jar")
 
 set(WAWONA_DIR "${CMAKE_SOURCE_DIR}/third_party/muplar-wayland")
 
@@ -22,6 +48,7 @@ set_target_properties(muplar_prefix_manager PROPERTIES
 
 target_link_libraries(muplar_prefix_manager
     PRIVATE
+        muplar_runtime_apk
         muplar_runtime_prefix
         muplar_runtime_supervisor
 )
@@ -30,6 +57,7 @@ target_include_directories(muplar_prefix_manager
     PRIVATE
         ${CMAKE_SOURCE_DIR}/platform/commons/prefix
         ${CMAKE_SOURCE_DIR}/platform/commons/supervisor
+        ${CMAKE_SOURCE_DIR}/platform/android-aarch64/apk
 )
 
 target_compile_definitions(muplar_prefix_manager PRIVATE
@@ -74,6 +102,7 @@ add_custom_target(populate_manager_bundle ALL
         "${APP_CONTENTS}/MacOS"
         "${APP_CONTENTS}/Resources"
         "${APP_CONTENTS}/Resources/tools"
+        "${APP_CONTENTS}/Resources/android"
         "${APP_CONTENTS}/Frameworks"
         "${APP_CONTENTS}/Frameworks/aarch64"
         "${APP_CONTENTS}/Frameworks/x86_64"
@@ -87,6 +116,13 @@ add_custom_target(populate_manager_bundle ALL
         "${CMAKE_SOURCE_DIR}/tools/provision-linux-rootfs.sh"
         "${APP_CONTENTS}/Resources/tools/provision-linux-rootfs.sh"
     COMMAND chmod 755 "${APP_CONTENTS}/Resources/tools/provision-linux-rootfs.sh"
+
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        "${BUILTIN_ANDROID_DIR}/muplar-launcher.apk"
+        "${APP_CONTENTS}/Resources/android/muplar-launcher.apk"
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        "${BUILTIN_ANDROID_DIR}/muplar-launcher-classes.jar"
+        "${APP_CONTENTS}/Resources/android/muplar-launcher-classes.jar"
 
     # ── Windows compatibility defaults → Resources/ ─────────────────────────
     COMMAND ${CMAKE_COMMAND} -E copy_if_different
@@ -286,4 +322,5 @@ add_custom_target(populate_manager_bundle ALL
     VERBATIM
 )
 
-add_dependencies(populate_manager_bundle muplar_prefix_manager wine_lib dxmt_lib mup wawona_bin egl_gles_stubs_bin)
+add_dependencies(populate_manager_bundle muplar_prefix_manager
+    muplar_android_builtin_apps wine_lib dxmt_lib mup wawona_bin egl_gles_stubs_bin)

@@ -8,6 +8,8 @@
 #include <memory>
 #include <string>
 #include <vector>
+
+#include "apk_envelope.h"
 #include <dispatch/dispatch.h>
 #include <signal.h>
 #include <sys/types.h>
@@ -513,6 +515,8 @@ static NSString* ParseLnkFile(const std::filesystem::path& lnkPath)
                                             arch:(NSString*)arch
                                       targetRoot:(NSString*)targetRoot;
 - (void)prestartLinuxSessionIfNeeded:(prefix::PrefixLayout*)selected;
+- (void)launchAndroidApp:(MuplarAppShortcut*)app
+                   prefix:(prefix::PrefixLayout*)selected;
 - (void)waitForLinuxWindowForKey:(NSString*)key
                            token:(NSUUID*)token
            baselineWindowNumbers:(NSSet<NSNumber*>*)baselineWindowNumbers
@@ -1601,6 +1605,10 @@ static NSString* MapLinuxIconToSFSymbol(NSString* icon)
                 iconName = @"slider.horizontal.below.rectangle";
             } else if ([app.path isEqualToString:@"taskmgr"]) {
                 iconName = @"chart.bar";
+            } else if (selected && selected->kind == prefix::PrefixKind::Android) {
+                iconName = [app.name.lowercaseString containsString:@"setting"]
+                    ? @"gearshape"
+                    : @"app.fill";
             } else if (selected && selected->kind == prefix::PrefixKind::Linux) {
                 iconName = @"terminal";
                 NSString* lowerName = app.name.lowercaseString;
@@ -2384,6 +2392,16 @@ static NSString* MapLinuxIconToSFSymbol(NSString* icon)
     prefix::PrefixLayout* selected = [self selectedPrefix];
     if (!selected) return;
 
+    if (selected->kind == prefix::PrefixKind::Android) {
+        NSString* companion =
+            [[app.path stringByDeletingPathExtension]
+                stringByAppendingString:@"-classes.jar"];
+        [[NSFileManager defaultManager] removeItemAtPath:app.path error:nil];
+        [[NSFileManager defaultManager] removeItemAtPath:companion error:nil];
+        [self loadAppsForSelectedPrefix];
+        return;
+    }
+
     [_appsList removeObject:app];
     [self saveManualApps:selected];
     [_appsTableView reloadData];
@@ -2680,9 +2698,59 @@ static NSString* MapLinuxIconToSFSymbol(NSString* icon)
 
 - (void)scanAndroidApps:(prefix::PrefixLayout*)selected
 {
-    [self addShortcutWithName:@"Android Settings" path:@"com.android.settings" unixPath:@"" isManual:NO isLnk:NO];
-    [self addShortcutWithName:@"Browser" path:@"com.android.browser" unixPath:@"" isManual:NO isLnk:NO];
-    [self loadManualApps:selected];
+    std::error_code ec;
+    std::filesystem::create_directories(selected->packages_dir, ec);
+
+    NSString* builtinDir =
+        [[NSBundle mainBundle].resourcePath stringByAppendingPathComponent:@"android"];
+    NSString* builtinApk =
+        [builtinDir stringByAppendingPathComponent:@"muplar-launcher.apk"];
+    NSString* builtinJar =
+        [builtinDir stringByAppendingPathComponent:@"muplar-launcher-classes.jar"];
+    std::filesystem::path installedApk =
+        selected->packages_dir / "muplar-launcher.apk";
+    std::filesystem::path installedJar =
+        selected->packages_dir / "muplar-launcher-classes.jar";
+    if (!std::filesystem::exists(installedApk, ec) &&
+        [[NSFileManager defaultManager] isReadableFileAtPath:builtinApk]) {
+        std::filesystem::copy_file(
+            builtinApk.UTF8String, installedApk,
+            std::filesystem::copy_options::overwrite_existing, ec);
+        ec.clear();
+        if ([[NSFileManager defaultManager] isReadableFileAtPath:builtinJar]) {
+            std::filesystem::copy_file(
+                builtinJar.UTF8String, installedJar,
+                std::filesystem::copy_options::overwrite_existing, ec);
+        }
+    }
+
+    for (const auto& entry :
+         std::filesystem::directory_iterator(selected->packages_dir, ec)) {
+        if (!entry.is_regular_file(ec) ||
+            entry.path().extension() != ".apk") {
+            continue;
+        }
+
+        NSString* name = NSStringFromPath(entry.path().stem());
+        @try {
+            auto apk = muplar::runtime::apk::classify_apk(entry.path());
+            if (apk.manifest_package && !apk.manifest_package->empty()) {
+                name = NSStringFromStdString(*apk.manifest_package);
+                if (*apk.manifest_package == "com.android.settings")
+                    name = @"Android Settings";
+            }
+        } @catch (...) {
+            // Keep malformed APKs visible so launch can report the full error.
+        }
+
+        NSString* apkPath = NSStringFromPath(entry.path());
+        BOOL isBuiltinLauncher = entry.path().filename() == "muplar-launcher.apk";
+        [self addShortcutWithName:name
+                             path:apkPath
+                         unixPath:apkPath
+                         isManual:!isBuiltinLauncher
+                            isLnk:NO];
+    }
 }
 
 - (void)scanDirForShortcuts:(const std::filesystem::path&)dir isLnk:(BOOL)isLnk
@@ -2809,12 +2877,53 @@ static NSString* MapLinuxIconToSFSymbol(NSString* icon)
             //     [self showError:@"Executable must be inside the instance C: drive."];
             //     return;
             // }
-        } else {
+        } else if (selected->kind == prefix::PrefixKind::Linux) {
             NSString* rootfs = NSStringFromPath(selected->rootfs);
             if (![unixPath hasPrefix:rootfs]) {
                 [self showError:@"Binary must be inside the instance rootfs."];
                 return;
             }
+        } else {
+            NSString* packagesDir = NSStringFromPath(selected->packages_dir);
+            NSError* installError = nil;
+            [[NSFileManager defaultManager]
+                createDirectoryAtPath:packagesDir
+          withIntermediateDirectories:YES
+                           attributes:nil
+                                error:&installError];
+            if (!installError) {
+                NSString* destination =
+                    [packagesDir stringByAppendingPathComponent:unixPath.lastPathComponent];
+                if (![destination isEqualToString:unixPath]) {
+                    [[NSFileManager defaultManager] removeItemAtPath:destination
+                                                               error:nil];
+                    [[NSFileManager defaultManager] copyItemAtPath:unixPath
+                                                            toPath:destination
+                                                             error:&installError];
+
+                    NSString* sourceJar =
+                        [[unixPath stringByDeletingPathExtension]
+                            stringByAppendingString:@"-classes.jar"];
+                    if (!installError &&
+                        [[NSFileManager defaultManager] isReadableFileAtPath:sourceJar]) {
+                        NSString* destinationJar =
+                            [[destination stringByDeletingPathExtension]
+                                stringByAppendingString:@"-classes.jar"];
+                        [[NSFileManager defaultManager] removeItemAtPath:destinationJar
+                                                                   error:nil];
+                        [[NSFileManager defaultManager] copyItemAtPath:sourceJar
+                                                                toPath:destinationJar
+                                                                 error:&installError];
+                    }
+                }
+            }
+            if (installError) {
+                [self showError:[NSString stringWithFormat:
+                    @"Failed to install APK: %@", installError.localizedDescription]];
+                return;
+            }
+            [self loadAppsForSelectedPrefix];
+            return;
         }
 
         NSAlert* alert = [[NSAlert alloc] init];
@@ -4017,7 +4126,67 @@ static NSString* MapLinuxIconToSFSymbol(NSString* icon)
     } else if (selected->kind == prefix::PrefixKind::Linux) {
         [self launchLinuxApp:app prefix:selected];
     } else {
-        [self showError:[NSString stringWithFormat:@"Launching for %@ instances is not supported yet.", RuntimeDisplayName(*selected)]];
+        [self launchAndroidApp:app prefix:selected];
+    }
+}
+
+- (void)launchAndroidApp:(MuplarAppShortcut*)app
+                   prefix:(prefix::PrefixLayout*)selected
+{
+    NSString* mupBin = [self mupBinPath];
+    if (!mupBin || ![[NSFileManager defaultManager] isExecutableFileAtPath:mupBin]) {
+        [self showError:@"mup binary is unavailable for Android launch."];
+        return;
+    }
+    if (![[NSFileManager defaultManager] isReadableFileAtPath:app.path]) {
+        [self showError:@"The installed APK is missing or unreadable."];
+        return;
+    }
+
+    NSTask* task = [[NSTask alloc] init];
+    task.launchPath = mupBin;
+    task.arguments = @[@"--prefix", NSStringFromStdString(selected->name),
+                       @"--apk", @"--host-window", app.path];
+
+    NSMutableDictionary<NSString*, NSString*>* env =
+        [NSProcessInfo.processInfo.environment mutableCopy];
+    NSString* angleDir = [self angleLibraryDir];
+    if (angleDir.length > 0) {
+        NSString* existing = env[@"DYLD_LIBRARY_PATH"];
+        env[@"DYLD_LIBRARY_PATH"] = existing.length > 0
+            ? [angleDir stringByAppendingFormat:@":%@", existing]
+            : angleDir;
+    }
+    task.environment = env;
+    [self setupLoggingForTask:task prefix:selected appName:app.name];
+
+    NSString* key = [self appKeyForApp:app];
+    [_launchingAppPaths addObject:key];
+    [_appsTableView reloadData];
+
+    task.terminationHandler = ^(NSTask* finished) {
+        dispatch_async(dispatch_get_main_queue(), ^{
+            [self->_launchingAppPaths removeObject:key];
+            [self->_runningTasks removeObjectForKey:key];
+            [self->_appsTableView reloadData];
+            if (finished.terminationStatus != 0) {
+                [self showError:[NSString stringWithFormat:
+                    @"%@ stopped with exit code %d. See the instance log for details.",
+                    app.name, finished.terminationStatus]];
+            }
+        });
+    };
+
+    @try {
+        [task launch];
+        _runningTasks[key] = task;
+        [_launchingAppPaths removeObject:key];
+        [_appsTableView reloadData];
+    } @catch (NSException* ex) {
+        [_launchingAppPaths removeObject:key];
+        [_appsTableView reloadData];
+        [self showError:[NSString stringWithFormat:
+            @"Failed to launch Android app: %@", ex.reason]];
     }
 }
 
