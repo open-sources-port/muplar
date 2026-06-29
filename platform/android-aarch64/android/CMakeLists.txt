@@ -9,6 +9,9 @@ set(MUPLAR_ANDROID_SOURCES
 
 if(MUPLAR_HAS_BUNDLED_JDK)
     list(APPEND MUPLAR_ANDROID_SOURCES host_jvm_launcher.cpp)
+    if(APPLE)
+        set_source_files_properties(host_jvm_launcher.cpp PROPERTIES LANGUAGE OBJCXX)
+    endif()
 endif()
 
 add_library(muplar_runtime_android STATIC
@@ -47,6 +50,11 @@ target_link_libraries(muplar_runtime_android
         ${ANGLE_LIB_DIR}/libEGL.dylib
         ${ANGLE_LIB_DIR}/libGLESv2.dylib
 )
+
+if(APPLE AND MUPLAR_HAS_BUNDLED_JDK)
+    target_link_libraries(muplar_runtime_android PRIVATE "-framework AppKit")
+endif()
+
 
 
 

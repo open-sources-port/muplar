@@ -45,8 +45,20 @@ import android.app.Activity;
 import android.os.Bundle;
 import android.content.pm.PackageManager;
 import android.content.Intent;
+import android.view.View;
+import android.widget.Button;
+import android.widget.CheckBox;
+import android.widget.LinearLayout;
+import android.widget.TextView;
+import java.io.File;
+import java.io.FileInputStream;
+import java.io.FileOutputStream;
+import java.util.Properties;
 
 public class LauncherActivity extends Activity {
+    private final Properties settings = new Properties();
+    private File settingsFile;
+
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
@@ -57,6 +69,89 @@ public class LauncherActivity extends Activity {
         Intent intent = new Intent();
         intent.setClassName("com.example.muplar.tiny", "com.example.muplar.tiny.TinyActivity");
         System.out.println("[LauncherActivity] Launching app: " + intent.getComponentPackage());
+
+        settingsFile = new File(System.getProperty("java.io.tmpdir"),
+            "muplar-launcher.properties");
+        if (settingsFile.isFile()) {
+            try (FileInputStream input = new FileInputStream(settingsFile)) {
+                settings.load(input);
+            } catch (Exception error) {
+                System.err.println("[LauncherActivity] settings read failed: " + error);
+            }
+        }
+        showLauncher();
+    }
+
+    private void showLauncher() {
+        setTitle("Muplar Android Launcher");
+        LinearLayout content = verticalLayout();
+        TextView heading = new TextView(this);
+        heading.setText("Android apps");
+        content.addView(heading);
+
+        TextView status = new TextView(this);
+        status.setText("Runtime ready");
+        content.addView(status);
+
+        Button openSettings = new Button(this);
+        openSettings.setText("Open Settings");
+        openSettings.setOnClickListener(new View.OnClickListener() {
+            @Override public void onClick(View view) { showSettings(); }
+        });
+        content.addView(openSettings);
+        setContentView(content);
+    }
+
+    private void showSettings() {
+        setTitle("Android Settings");
+        LinearLayout content = verticalLayout();
+        TextView heading = new TextView(this);
+        heading.setText("Compatibility");
+        content.addView(heading);
+
+        final CheckBox compatibility = new CheckBox(this);
+        compatibility.setText("Enable compatibility UI");
+        compatibility.setChecked(Boolean.parseBoolean(
+            settings.getProperty("compatibilityUi", "true")));
+        content.addView(compatibility);
+
+        final CheckBox graphics = new CheckBox(this);
+        graphics.setText("Allow host graphics acceleration");
+        graphics.setChecked(Boolean.parseBoolean(
+            settings.getProperty("hostGraphics", "true")));
+        content.addView(graphics);
+
+        Button save = new Button(this);
+        save.setText("Save");
+        save.setOnClickListener(new View.OnClickListener() {
+            @Override public void onClick(View view) {
+                settings.setProperty("compatibilityUi",
+                    Boolean.toString(compatibility.isChecked()));
+                settings.setProperty("hostGraphics",
+                    Boolean.toString(graphics.isChecked()));
+                try (FileOutputStream output = new FileOutputStream(settingsFile)) {
+                    settings.store(output, "Muplar Android settings");
+                } catch (Exception error) {
+                    System.err.println("[LauncherActivity] settings write failed: " + error);
+                }
+                showLauncher();
+            }
+        });
+        content.addView(save);
+
+        Button back = new Button(this);
+        back.setText("Back");
+        back.setOnClickListener(new View.OnClickListener() {
+            @Override public void onClick(View view) { showLauncher(); }
+        });
+        content.addView(back);
+        setContentView(content);
+    }
+
+    private LinearLayout verticalLayout() {
+        LinearLayout layout = new LinearLayout(this);
+        layout.setOrientation(LinearLayout.VERTICAL);
+        return layout;
     }
 }
 EOF
