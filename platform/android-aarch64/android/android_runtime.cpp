@@ -1,5 +1,6 @@
 // platform/android-aarch64/android/android_runtime.cpp
 #include "android_runtime.h"
+#include "muplard_client.h"
 
 #include <cstdlib>
 #include <cstdio>
@@ -535,6 +536,11 @@ AndroidRuntime::~AndroidRuntime()
 void AndroidRuntime::set_asset_root(std::string asset_root)
 {
     asset_root_ = std::move(asset_root);
+}
+
+void AndroidRuntime::set_service_socket(std::string service_socket)
+{
+    service_socket_ = std::move(service_socket);
 }
 
 void AndroidRuntime::set_guest_function_invoker(GuestFunctionInvoker invoker)
@@ -2883,6 +2889,11 @@ void AndroidRuntime::register_libbinder_stubs()
             uint64_t handle = next_binder_handle_++;
             binder_services_[handle] =
                 make_binder_service(name, 1, true, true, 0, 0);
+            if (!service_socket_.empty()) {
+                services::MuplardClient client(service_socket_);
+                binder_services_[handle].daemon_owned =
+                    client.check_service(name) == services::ServiceState::Owned;
+            }
             binder_service_by_name_[name] = handle;
             return handle;
         };
@@ -3038,6 +3049,94 @@ void AndroidRuntime::register_libbinder_stubs()
     auto find_class = [this](uint64_t handle) -> BinderClass* {
         auto it = binder_classes_.find(handle);
         return it == binder_classes_.end() ? nullptr : &it->second;
+    };
+    auto append_bytes = [](std::string& output, const void* data, size_t size) {
+        output.append(static_cast<const char*>(data), size);
+    };
+    auto encode_parcel = [append_bytes](const BinderParcel* parcel,
+                                        uint32_t code,
+                                        uint32_t flags) {
+        std::string output;
+        const uint32_t magic = 0x4d425031; // MBP1
+        uint32_t count = parcel
+            ? static_cast<uint32_t>(parcel->values.size()) : 0;
+        append_bytes(output, &magic, sizeof(magic));
+        append_bytes(output, &code, sizeof(code));
+        append_bytes(output, &flags, sizeof(flags));
+        append_bytes(output, &count, sizeof(count));
+        if (!parcel) return output;
+        for (const BinderParcelValue& value : parcel->values) {
+            uint32_t kind = static_cast<uint32_t>(value.kind);
+            uint32_t text_size = static_cast<uint32_t>(value.text.size());
+            uint32_t element_count =
+                static_cast<uint32_t>(value.elements.size());
+            uint32_t string_count =
+                static_cast<uint32_t>(value.strings.size());
+            append_bytes(output, &kind, sizeof(kind));
+            append_bytes(output, &value.value, sizeof(value.value));
+            append_bytes(output, &text_size, sizeof(text_size));
+            append_bytes(output, value.text.data(), value.text.size());
+            append_bytes(output, &element_count, sizeof(element_count));
+            for (uint64_t element : value.elements)
+                append_bytes(output, &element, sizeof(element));
+            append_bytes(output, &string_count, sizeof(string_count));
+            for (const std::string& item : value.strings) {
+                uint32_t size = static_cast<uint32_t>(item.size());
+                append_bytes(output, &size, sizeof(size));
+                append_bytes(output, item.data(), item.size());
+            }
+        }
+        return output;
+    };
+    auto decode_parcel = [](const std::string& input,
+                            std::vector<BinderParcelValue>& values) {
+        size_t offset = 0;
+        auto read = [&input, &offset](void* output, size_t size) {
+            if (size > input.size() - std::min(offset, input.size()))
+                return false;
+            std::memcpy(output, input.data() + offset, size);
+            offset += size;
+            return true;
+        };
+        uint32_t magic = 0, code = 0, flags = 0, count = 0;
+        if (!read(&magic, sizeof(magic)) || magic != 0x4d425031 ||
+            !read(&code, sizeof(code)) || !read(&flags, sizeof(flags)) ||
+            !read(&count, sizeof(count)) || count > 4096) return false;
+        (void)code;
+        (void)flags;
+        values.clear();
+        for (uint32_t index = 0; index < count; ++index) {
+            BinderParcelValue value;
+            uint32_t kind = 0, text_size = 0, element_count = 0;
+            uint32_t string_count = 0;
+            if (!read(&kind, sizeof(kind)) ||
+                kind > static_cast<uint32_t>(BinderParcelKind::ParcelFileDescriptor) ||
+                !read(&value.value, sizeof(value.value)) ||
+                !read(&text_size, sizeof(text_size)) ||
+                text_size > input.size() - std::min(offset, input.size()))
+                return false;
+            value.kind = static_cast<BinderParcelKind>(kind);
+            value.text.assign(input.data() + offset, text_size);
+            offset += text_size;
+            if (!read(&element_count, sizeof(element_count)) ||
+                element_count > 65536) return false;
+            value.elements.resize(element_count);
+            for (uint64_t& element : value.elements)
+                if (!read(&element, sizeof(element))) return false;
+            if (!read(&string_count, sizeof(string_count)) ||
+                string_count > 65536) return false;
+            for (uint32_t string_index = 0;
+                 string_index < string_count; ++string_index) {
+                uint32_t size = 0;
+                if (!read(&size, sizeof(size)) ||
+                    size > input.size() - std::min(offset, input.size()))
+                    return false;
+                value.strings.emplace_back(input.data() + offset, size);
+                offset += size;
+            }
+            values.push_back(std::move(value));
+        }
+        return offset == input.size();
     };
     auto remove_death_link =
         [notify_death_unlinked](BinderService* service,
@@ -3492,7 +3591,8 @@ void AndroidRuntime::register_libbinder_stubs()
         });
 
     add("libbinder_ndk.so", "AIBinder_transact", HVC_BINDER_TRANSACT,
-        [this, find_service, find_parcel, create_parcel]
+        [this, find_service, find_parcel, create_parcel,
+         encode_parcel, decode_parcel]
         (guest_t* g, const uint64_t a[8]) -> uint64_t {
             uint64_t binder = a[0];
             uint32_t code = static_cast<uint32_t>(a[1]);
@@ -3583,6 +3683,45 @@ void AndroidRuntime::register_libbinder_stubs()
                     (unsigned long long)out_handle,
                     (long long)static_cast<int64_t>(status));
                 return status;
+            }
+
+            if (service->daemon_owned) {
+                services::MuplardClient client(service_socket_);
+                std::string reply_payload;
+                bool delivered = client.transact(
+                    service->name, encode_parcel(in, code, flags), reply_payload);
+                if (!delivered) {
+                    service->alive = false;
+                    consume_input();
+                    if (out_gpa) guest_write_u64(g, out_gpa, 0);
+                    return STATUS_DEAD_OBJECT;
+                }
+                if (!(flags & FLAG_ONEWAY) && out_gpa) {
+                    std::vector<BinderParcelValue> reply_values;
+                    if (!decode_parcel(reply_payload, reply_values)) {
+                        consume_input();
+                        guest_write_u64(g, out_gpa, 0);
+                        return STATUS_BAD_VALUE;
+                    }
+                    out_handle = create_parcel(binder, code, true);
+                    BinderParcel& out = binder_parcels_[out_handle];
+                    BinderParcelValue status_value;
+                    status_value.kind = BinderParcelKind::Status;
+                    out.values.push_back(std::move(status_value));
+                    for (BinderParcelValue& value : reply_values) {
+                        if (value.kind != BinderParcelKind::InterfaceToken)
+                            out.values.push_back(std::move(value));
+                    }
+                    guest_write_u64(g, out_gpa, out_handle);
+                } else if (out_gpa) {
+                    guest_write_u64(g, out_gpa, 0);
+                }
+                consume_input();
+                std::fprintf(stderr,
+                    "[Binder] muplard transact service=%s code=%u out=0x%llx\n",
+                    service->name.c_str(), code,
+                    (unsigned long long)out_handle);
+                return STATUS_OK;
             }
 
             if (!(flags & FLAG_ONEWAY) && out_gpa) {

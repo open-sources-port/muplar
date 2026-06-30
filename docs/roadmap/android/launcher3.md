@@ -44,12 +44,22 @@ render and receive input without Muplar-specific UI APIs.
 
 ## Later: Framework Services
 
-- [ ] Implement Binder-backed ActivityManager behavior needed by launchers.
-- [ ] Implement PackageManager service queries and package-change broadcasts.
-- [ ] Implement WindowManager and input-method interactions used by framework UI.
+- [x] Start a persistent per-prefix `muplard` service daemon.
+- [x] Route correlated Binder-style request/reply transactions over framed Unix sockets.
+- [x] Connect the existing NDK Binder adapter to the `muplard` transaction router.
+- [x] Add Java `Binder`, `Parcel`, and `ServiceManager` client adapters backed by `muplard`.
+- [x] Support and verify file-descriptor passing with `SCM_RIGHTS`.
+- [x] Implement `muplard`-backed ActivityManager process and top-activity tracking baseline.
+- [x] Route PackageManager package-change broadcasts through `muplard`.
+- [x] Move PackageManager metadata queries into `muplard` with file fallback.
+- [x] Implement baseline `LauncherApps` queries and user-zero package callbacks.
+- [x] Provide a minimal non-crashing `ShortcutManager` surface.
+- [x] Provide a non-crashing `AppWidgetManager` baseline.
+- [x] Provide baseline WindowManager/display and input-method discovery APIs.
 - [ ] Provide `system_server` service lifecycle or compatible Muplar-owned substitutes.
 - [ ] Provide SurfaceFlinger-compatible composition semantics where required.
-- [ ] Support permissions, users, settings provider, and persistent system properties.
+- [x] Persist Settings provider values and system properties through `muplard`.
+- [ ] Enforce package permissions and multi-user/profile isolation.
 
 Acceptance: framework applications can discover services and complete startup
 without hard-coded app-specific substitutes.

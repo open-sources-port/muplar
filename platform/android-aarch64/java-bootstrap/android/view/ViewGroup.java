@@ -17,6 +17,10 @@ public class ViewGroup extends View {
 
     public int getChildCount() { return children.size(); }
     public View getChildAt(int index) { return children.get(index); }
+    public void removeAllViews() {
+        children.clear();
+        HostUi.removeAllChildren(getPeer());
+    }
 
     @Override public View findViewById(int wantedId) {
         View own = super.findViewById(wantedId);

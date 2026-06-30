@@ -1,13 +1,17 @@
 package android.content.pm;
 
 import android.content.Intent;
+import android.graphics.drawable.Drawable;
 import java.io.File;
 import java.io.FileInputStream;
+import java.io.BufferedReader;
+import java.io.InputStreamReader;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 import java.util.Properties;
 import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.nio.file.FileSystems;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -20,12 +24,16 @@ public class PackageManager {
     private volatile List<ApplicationInfo> applications;
     private final List<Runnable> packageChangeListeners =
         new CopyOnWriteArrayList<Runnable>();
+    private final AtomicBoolean fileWatcherStarted = new AtomicBoolean(false);
+    private volatile Process serviceSubscription;
 
     public static final int GET_META_DATA = 0x00000080;
+    public static final int PERMISSION_GRANTED = 0;
+    public static final int PERMISSION_DENIED = -1;
 
     public PackageManager() {
         applications = loadApplications();
-        startRegistryWatcher();
+        if (!startServiceWatcher()) startFileRegistryWatcher();
     }
 
     public List<ApplicationInfo> getInstalledApplications(int flags) {
@@ -34,6 +42,21 @@ public class PackageManager {
 
     public void registerPackageChangeListener(Runnable listener) {
         if (listener != null) packageChangeListeners.add(listener);
+    }
+
+    public void unregisterPackageChangeListener(Runnable listener) {
+        if (listener != null) packageChangeListeners.remove(listener);
+    }
+
+    public Drawable getApplicationIcon(ApplicationInfo info) {
+        if (info == null || info.iconPath == null || info.iconPath.isEmpty())
+            return null;
+        return new Drawable(info.iconPath);
+    }
+
+    public Drawable getApplicationIcon(String packageName)
+            throws NameNotFoundException {
+        return getApplicationIcon(getApplicationInfo(packageName, 0));
     }
 
     public Intent getLaunchIntentForPackage(String packageName) {
@@ -64,16 +87,10 @@ public class PackageManager {
         }
     }
 
-    private static List<ApplicationInfo> loadApplications() {
+    private List<ApplicationInfo> loadApplications() {
         List<ApplicationInfo> result = new ArrayList<ApplicationInfo>();
-        String path = System.getProperty("muplar.package.registry", "");
-        if (path.isEmpty()) return result;
-
-        Properties registry = new Properties();
-        File file = new File(path);
-        if (!file.isFile()) return result;
-        try (FileInputStream input = new FileInputStream(file)) {
-            registry.load(input);
+        Properties registry = loadRegistryProperties();
+        try {
             int count = Integer.parseInt(registry.getProperty("count", "0"));
             for (int i = 0; i < count; ++i) {
                 String key = "package." + i + ".";
@@ -88,13 +105,103 @@ public class PackageManager {
                 app.iconPath = registry.getProperty(key + "icon", "");
                 result.add(app);
             }
-        } catch (Exception error) {
+        } catch (RuntimeException error) {
             System.err.println("[PackageManager] registry read failed: " + error);
         }
         return result;
     }
 
-    private void startRegistryWatcher() {
+    private Properties loadRegistryProperties() {
+        Properties registry = new Properties();
+        String executable = System.getProperty("muplar.service.executable", "");
+        String socket = System.getProperty("muplar.service.socket", "");
+        if (!executable.isEmpty() && !socket.isEmpty() &&
+            new File(executable).isFile()) {
+            try {
+                Process process = new ProcessBuilder(executable, "--socket", socket,
+                    "--client", "query-packages")
+                    .redirectError(ProcessBuilder.Redirect.INHERIT).start();
+                try (java.io.InputStream input = process.getInputStream()) {
+                    registry.load(input);
+                }
+                if (process.waitFor() == 0) return registry;
+                registry.clear();
+            } catch (Exception error) {
+                System.err.println("[PackageManager] metadata RPC failed: " + error);
+                registry.clear();
+            }
+        }
+
+        String path = System.getProperty("muplar.package.registry", "");
+        File file = new File(path);
+        if (!file.isFile()) return registry;
+        try (FileInputStream input = new FileInputStream(file)) {
+            registry.load(input);
+        } catch (Exception error) {
+            System.err.println("[PackageManager] registry fallback failed: " + error);
+        }
+        return registry;
+    }
+
+    private boolean startServiceWatcher() {
+        final String executable =
+            System.getProperty("muplar.service.executable", "");
+        final String socket = System.getProperty("muplar.service.socket", "");
+        if (executable.isEmpty() || socket.isEmpty() ||
+            !new File(executable).isFile()) return false;
+        try {
+            serviceSubscription = new ProcessBuilder(executable,
+                "--socket", socket, "--client", "subscribe-packages")
+                .redirectError(ProcessBuilder.Redirect.INHERIT).start();
+        } catch (Exception error) {
+            System.err.println("[PackageManager] service subscription failed: " +
+                error);
+            return false;
+        }
+        Runtime.getRuntime().addShutdownHook(new Thread(new Runnable() {
+            @Override public void run() {
+                Process process = serviceSubscription;
+                if (process != null) process.destroy();
+            }
+        }, "muplar-package-service-shutdown"));
+        Thread watcher = new Thread(new Runnable() {
+            @Override public void run() {
+                try (BufferedReader input = new BufferedReader(
+                         new InputStreamReader(serviceSubscription.getInputStream(),
+                                               "UTF-8"))) {
+                    String generation = input.readLine();
+                    if (generation == null) {
+                        startFileRegistryWatcher();
+                        return;
+                    }
+                    while ((generation = input.readLine()) != null) {
+                        notifyPackagesChanged();
+                    }
+                    startFileRegistryWatcher();
+                } catch (Exception error) {
+                    System.err.println("[PackageManager] service watch failed: " +
+                        error);
+                    startFileRegistryWatcher();
+                }
+            }
+        }, "muplar-package-service");
+        watcher.setDaemon(true);
+        watcher.start();
+        return true;
+    }
+
+    private void notifyPackagesChanged() {
+        applications = loadApplications();
+        for (Runnable listener : packageChangeListeners) {
+            try { listener.run(); }
+            catch (RuntimeException error) {
+                System.err.println("[PackageManager] listener failed: " + error);
+            }
+        }
+    }
+
+    private void startFileRegistryWatcher() {
+        if (!fileWatcherStarted.compareAndSet(false, true)) return;
         final String registryPath =
             System.getProperty("muplar.package.registry", "");
         if (registryPath.isEmpty()) return;
@@ -122,15 +229,7 @@ public class PackageManager {
                         }
                         if (!key.reset()) return;
                         if (changed) {
-                            applications = loadApplications();
-                            for (Runnable listener : packageChangeListeners) {
-                                try { listener.run(); }
-                                catch (RuntimeException error) {
-                                    System.err.println(
-                                        "[PackageManager] listener failed: " +
-                                        error);
-                                }
-                            }
+                            notifyPackagesChanged();
                         }
                     }
                 } catch (Exception error) {

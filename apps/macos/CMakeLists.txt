@@ -145,6 +145,9 @@ add_custom_target(populate_manager_bundle ALL
              cp -f '${CMAKE_BINARY_DIR}/bin/mup' '${APP_CONTENTS}/MacOS/mup'; \
              codesign --entitlements '${CMAKE_SOURCE_DIR}/mup.entitlements' --force -s - '${APP_CONTENTS}/MacOS/mup'; \
          fi"
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        "$<TARGET_FILE:muplard>" "${APP_CONTENTS}/MacOS/muplard"
+    COMMAND chmod 755 "${APP_CONTENTS}/MacOS/muplard"
 
     # ── Linux Bootstrap Rootfs → Frameworks/ ─────────────────────────────────
     COMMAND bash -c
@@ -333,5 +336,5 @@ add_custom_target(populate_manager_bundle ALL
 )
 
 add_dependencies(populate_manager_bundle muplar_prefix_manager
-    muplar_android_builtin_apps wine_lib dxmt_lib mup wawona_bin
+    muplar_android_builtin_apps wine_lib dxmt_lib mup muplard wawona_bin
     egl_gles_stubs_bin)

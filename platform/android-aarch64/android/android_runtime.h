@@ -59,6 +59,7 @@ public:
     ~AndroidRuntime();
 
     void set_asset_root(std::string asset_root);
+    void set_service_socket(std::string service_socket);
     void set_guest_function_invoker(GuestFunctionInvoker invoker);
 
     // Write HVC shim stubs into guest memory and build the symbol tables.
@@ -182,6 +183,7 @@ private:
         size_t offset = 0;
     };
     std::string asset_root_;
+    std::string service_socket_;
     std::unordered_map<uint64_t, AssetState> assets_;
     uint64_t next_asset_handle_ = 0xA5511000ULL;
     static constexpr uint64_t GUEST_ASSET_MANAGER = 0xA5510001ULL;
@@ -203,6 +205,7 @@ private:
         uint32_t ref_count = 1;
         bool alive = true;
         bool remote = true;
+        bool daemon_owned = false;
         uint64_t class_handle = 0;
         uint64_t user_data = 0;
         uint64_t extension_handle = 0;

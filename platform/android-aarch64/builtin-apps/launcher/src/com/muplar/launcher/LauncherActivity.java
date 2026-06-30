@@ -19,8 +19,10 @@ import java.util.List;
 public class LauncherActivity extends Activity {
     private final Properties settings = new Properties();
     private File settingsFile;
-    private boolean packageListenerRegistered;
+    private Runnable packageListener;
     private String currentScreen = "launcher";
+    private TextView appStatus;
+    private LinearLayout appContainer;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -29,17 +31,17 @@ public class LauncherActivity extends Activity {
         PackageManager pm = getPackageManager();
         System.out.println("[LauncherActivity] package manager resolved: "
             + pm.getClass().getName());
-        if (!packageListenerRegistered) {
-            packageListenerRegistered = true;
-            pm.registerPackageChangeListener(new Runnable() {
+        if (packageListener == null) {
+            packageListener = new Runnable() {
                 @Override public void run() {
                     runOnUiThread(new Runnable() {
                         @Override public void run() {
-                            if ("launcher".equals(currentScreen)) showLauncher();
+                            if ("launcher".equals(currentScreen)) refreshApps();
                         }
                     });
                 }
-            });
+            };
+            pm.registerPackageChangeListener(packageListener);
         }
 
         File stateDirectory = new File(System.getProperty(
@@ -71,7 +73,24 @@ public class LauncherActivity extends Activity {
         heading.setText("Android apps");
         content.addView(heading);
 
-        TextView status = new TextView(this);
+        appStatus = new TextView(this);
+        content.addView(appStatus);
+        appContainer = verticalLayout();
+        content.addView(appContainer);
+
+        refreshApps();
+
+        Button openSettings = new Button(this);
+        openSettings.setText("Open Settings");
+        openSettings.setOnClickListener(new View.OnClickListener() {
+            @Override public void onClick(View view) { showSettings(); }
+        });
+        content.addView(openSettings);
+        setContentView(content);
+    }
+
+    private void refreshApps() {
+        if (appStatus == null || appContainer == null) return;
         final PackageManager packageManager = getPackageManager();
         List<ApplicationInfo> applications =
             packageManager.getInstalledApplications(0);
@@ -81,15 +100,16 @@ public class LauncherActivity extends Activity {
         }
         System.out.println("[LauncherActivity] discovered " + visibleApps +
             " installed app(s)");
-        status.setText(visibleApps == 1 ? "1 app installed" :
+        appStatus.setText(visibleApps == 1 ? "1 app installed" :
             visibleApps + " apps installed");
-        content.addView(status);
+        appContainer.removeAllViews();
 
         for (final ApplicationInfo app : applications) {
             if ("com.muplar.launcher".equals(app.packageName)) continue;
             Button launch = new Button(this);
             launch.setText(app.loadLabel(packageManager));
-            launch.setIconPath(app.iconPath);
+            launch.setCompoundDrawablesWithIntrinsicBounds(
+                app.loadIcon(packageManager), null, null, null);
             launch.setOnClickListener(new View.OnClickListener() {
                 @Override public void onClick(View view) {
                     Intent intent = packageManager.getLaunchIntentForPackage(
@@ -102,16 +122,8 @@ public class LauncherActivity extends Activity {
                     }
                 }
             });
-            content.addView(launch);
+            appContainer.addView(launch);
         }
-
-        Button openSettings = new Button(this);
-        openSettings.setText("Open Settings");
-        openSettings.setOnClickListener(new View.OnClickListener() {
-            @Override public void onClick(View view) { showSettings(); }
-        });
-        content.addView(openSettings);
-        setContentView(content);
     }
 
     private void showSettings() {
@@ -173,5 +185,13 @@ public class LauncherActivity extends Activity {
             System.err.println("[LauncherActivity] settings write failed: " +
                 error);
         }
+    }
+
+    @Override protected void onDestroy() {
+        if (packageListener != null) {
+            getPackageManager().unregisterPackageChangeListener(packageListener);
+            packageListener = null;
+        }
+        super.onDestroy();
     }
 }

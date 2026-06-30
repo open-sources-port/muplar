@@ -398,6 +398,16 @@ int host_jvm_launch(const HostJvmLaunchConfig& config)
         opt_resource_apk = "-Dmuplar.apk.resource.path=" +
             config.resource_apk_path.string();
     }
+    std::string opt_service_socket;
+    if (!config.service_socket.empty()) {
+        opt_service_socket = "-Dmuplar.service.socket=" +
+            config.service_socket.string();
+    }
+    std::string opt_service_executable;
+    if (!config.service_executable.empty()) {
+        opt_service_executable = "-Dmuplar.service.executable=" +
+            config.service_executable.string();
+    }
 
     std::vector<JavaVMOption> jvm_options;
     auto add_opt = [&](std::string& s) {
@@ -414,6 +424,8 @@ int host_jvm_launch(const HostJvmLaunchConfig& config)
     if (!opt_prefix_name.empty()) add_opt(opt_prefix_name);
     if (!opt_prefix_state_dir.empty()) add_opt(opt_prefix_state_dir);
     if (!opt_resource_apk.empty()) add_opt(opt_resource_apk);
+    if (!opt_service_socket.empty()) add_opt(opt_service_socket);
+    if (!opt_service_executable.empty()) add_opt(opt_service_executable);
 
     JavaVMInitArgs vm_args{};
     vm_args.version            = JNI_VERSION_1_8;

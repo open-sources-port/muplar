@@ -21,6 +21,7 @@ of these milestones instead of creating more numbered phases.
 - [Compatibility Scanning](./compatibility-scanning.md)
 - [Java and ART Surface](./java-art-surface.md)
 - [Launcher and Launcher3](./launcher3.md)
+- [Framework Services Architecture](./framework-services.md)
 - [Android Sysroot](./sysroot.md)
 
 Rule of thumb: use the SVG files for a compact visual summary, and use these

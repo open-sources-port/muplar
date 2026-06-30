@@ -32,6 +32,8 @@ struct HostJvmLaunchConfig {
     std::filesystem::path launcher_executable;
     std::string prefix_name;
     std::filesystem::path prefix_state_dir;
+    std::filesystem::path service_socket;
+    std::filesystem::path service_executable;
 
     // Writable scratch directory for dexopt / temp files.
     std::filesystem::path scratch_dir;

@@ -22,6 +22,7 @@ public final class ArtApkMain {
         if (!launchActivity.isEmpty()) {
             System.out.println("[Muplar/ART] launchActivity=" + launchActivity);
         }
+        FrameworkProcessSession.start(packageName, launchActivity);
 
         try {
             ClassLoader loader = createApkClassLoader(apkPath, packageName);

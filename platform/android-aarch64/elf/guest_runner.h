@@ -108,6 +108,10 @@ namespace muplar::runtime::elf {
         std::string package_name;
         std::string package_code_path;
 
+        // Host-side per-prefix framework service endpoint. AndroidRuntime uses
+        // it to route NDK Binder calls to services owned by muplard clients.
+        std::string service_socket;
+
         // Flag to indicate if JNI/ART/ANGLE (Android runtime environment) should be initialized.
         // For pure Linux ARM64 binaries (e.g. bash), this can be set to false.
         bool is_android = true;

@@ -3,6 +3,7 @@ package android.widget;
 import android.content.Context;
 import android.view.View;
 import com.muplar.runtime.HostUi;
+import android.graphics.drawable.Drawable;
 
 public class Button extends TextView {
     public Button(Context context) { super(context, HostUi.createButton()); }
@@ -14,5 +15,10 @@ public class Button extends TextView {
     }
     public void setIconPath(String path) {
         HostUi.setButtonIcon(getPeer(), path);
+    }
+    public void setCompoundDrawablesWithIntrinsicBounds(
+            Drawable left, Drawable top, Drawable right, Drawable bottom) {
+        HostUi.setButtonIcon(getPeer(), left == null ? null :
+            left.getSourcePath());
     }
 }

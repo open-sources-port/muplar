@@ -16,6 +16,9 @@
 #include <unordered_set>
 #include <vector>
 #include <unistd.h>
+#include <sys/socket.h>
+#include <sys/un.h>
+#include <fcntl.h>
 #ifdef __APPLE__
 #include <mach-o/dyld.h>
 #endif
@@ -105,6 +108,77 @@ std::filesystem::path current_executable_path()
         return ec ? std::filesystem::path(buffer.data()) : canonical;
     }
 #endif
+    return {};
+}
+
+bool unix_socket_is_live(const std::filesystem::path& path)
+{
+    if (path.string().size() >=
+        sizeof(static_cast<sockaddr_un*>(nullptr)->sun_path)) return false;
+    int fd = socket(AF_UNIX, SOCK_STREAM, 0);
+    if (fd < 0) return false;
+    sockaddr_un address{};
+    address.sun_family = AF_UNIX;
+    std::strncpy(address.sun_path, path.c_str(), sizeof(address.sun_path) - 1);
+    bool live = connect(fd, reinterpret_cast<sockaddr*>(&address),
+                        sizeof(address)) == 0;
+    close(fd);
+    return live;
+}
+
+std::filesystem::path ensure_muplard(
+    const prefix::PrefixLayout& active_prefix)
+{
+    std::filesystem::path run_dir = active_prefix.root / "run";
+    std::filesystem::path socket_path = run_dir / "muplard.sock";
+    if (unix_socket_is_live(socket_path)) return socket_path;
+
+    std::filesystem::path daemon = current_executable_path().parent_path() /
+        "muplard";
+    if (!std::filesystem::is_regular_file(daemon)) {
+        std::cerr << "[muplard] warning: daemon binary not found at "
+                  << daemon << "\n";
+        return {};
+    }
+    std::error_code ec;
+    std::filesystem::create_directories(run_dir, ec);
+    std::filesystem::create_directories(active_prefix.logs_dir, ec);
+    std::filesystem::path registry =
+        active_prefix.registry_dir / "android-packages.properties";
+    std::filesystem::path pid_file = run_dir / "muplard.pid";
+    std::filesystem::path settings_file =
+        active_prefix.registry_dir / "android-state" / "framework-settings.db";
+    std::filesystem::path log_file = active_prefix.logs_dir / "muplard.log";
+
+    pid_t child = fork();
+    if (child == 0) {
+        setsid();
+        int log_fd = open(log_file.c_str(), O_WRONLY | O_CREAT | O_APPEND, 0600);
+        if (log_fd >= 0) {
+            dup2(log_fd, STDOUT_FILENO);
+            dup2(log_fd, STDERR_FILENO);
+            if (log_fd > STDERR_FILENO) close(log_fd);
+        }
+        execl(daemon.c_str(), daemon.c_str(),
+              "--socket", socket_path.c_str(),
+              "--registry", registry.c_str(),
+              "--pid-file", pid_file.c_str(),
+              "--settings", settings_file.c_str(),
+              static_cast<char*>(nullptr));
+        _exit(127);
+    }
+    if (child < 0) {
+        std::cerr << "[muplard] warning: fork failed\n";
+        return {};
+    }
+    for (int attempt = 0; attempt < 40; ++attempt) {
+        if (unix_socket_is_live(socket_path)) {
+            std::cerr << "[muplard] service ready at " << socket_path << "\n";
+            return socket_path;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(50));
+    }
+    std::cerr << "[muplard] warning: daemon did not become ready\n";
     return {};
 }
 
@@ -470,6 +544,9 @@ int handle_java_apk_launch(const PlatformLaunchConfig& launch_cfg,
             launch_cfg.active_prefix->registry_dir / "android-state";
         std::error_code state_ec;
         std::filesystem::create_directories(jvm_cfg.prefix_state_dir, state_ec);
+        jvm_cfg.service_socket = ensure_muplard(*launch_cfg.active_prefix);
+        jvm_cfg.service_executable =
+            current_executable_path().parent_path() / "muplard";
     }
     jvm_cfg.launcher_executable = current_executable_path();
 
@@ -572,6 +649,9 @@ int AndroidAarch64Runtime::run(const PlatformLaunchConfig& config)
             guest_cfg.env = default_guest_environment(*config.active_prefix);
         }
         guest_cfg.host_cwd = default_host_cwd(*config.active_prefix).string();
+        if (config.active_prefix->kind == prefix::PrefixKind::Android)
+            guest_cfg.service_socket =
+                ensure_muplard(*config.active_prefix).string();
     }
     
     auto resolve_path = [&](const std::string& input_path, std::string& resolved_elf_path, std::string& resolved_guest_elf_path) {
