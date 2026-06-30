@@ -73,9 +73,12 @@ esac
 JDK_OUT_DIR="$ROOT_DIR/third_party/jdk-bin/$JDK_BIN_SUBDIR"
 LIBJVM_PATH="$JDK_OUT_DIR/lib/server/libjvm.dylib"
 JNI_H_PATH="$JDK_OUT_DIR/include/jni.h"
+JAVAC_PATH="$JDK_OUT_DIR/bin/javac"
+JAR_PATH="$JDK_OUT_DIR/bin/jar"
 
 # Check if already set up
-if [ "$FORCE" = false ] && [ -f "$LIBJVM_PATH" ] && [ -f "$JNI_H_PATH" ]; then
+if [ "$FORCE" = false ] && [ -f "$LIBJVM_PATH" ] &&
+   [ -f "$JNI_H_PATH" ] && [ -x "$JAVAC_PATH" ] && [ -x "$JAR_PATH" ]; then
     echo "[setup-jdk] Already installed: $JDK_OUT_DIR"
     echo "[setup-jdk] libjvm: $LIBJVM_PATH"
     echo "[setup-jdk] jni.h:  $JNI_H_PATH"
@@ -161,7 +164,7 @@ echo "[setup-jdk] JDK root: $JDK_ROOT"
 # ---------------------------------------------------------------------------
 # Copy only what Muplar needs
 # ---------------------------------------------------------------------------
-mkdir -p "$JDK_OUT_DIR/include/darwin"
+mkdir -p "$JDK_OUT_DIR/bin" "$JDK_OUT_DIR/include/darwin"
 
 # Copy the full lib/ directory — JNI_CreateJavaVM needs lib/modules (JDK9+
 # boot image), lib/jli/libjli.dylib, lib/libjava.dylib, etc.
@@ -170,6 +173,17 @@ echo "[setup-jdk] copying lib/ (this is ~80MB)..."
 rsync -a --quiet \
     --exclude "src.zip" \
     "$JDK_ROOT/lib/" "$JDK_OUT_DIR/lib/"
+
+# Compiler/runtime launchers used to build the bundled Java applications.
+for tool in java javac jar; do
+    cp "$JDK_ROOT/bin/$tool" "$JDK_OUT_DIR/bin/$tool"
+    chmod 755 "$JDK_OUT_DIR/bin/$tool"
+done
+
+# JDK 9+ reads security and logging defaults from conf/.
+if [ -d "$JDK_ROOT/conf" ]; then
+    rsync -a --quiet "$JDK_ROOT/conf/" "$JDK_OUT_DIR/conf/"
+fi
 
 # release file (contains JDK version metadata, needed by libjvm startup)
 if [ -f "$JDK_ROOT/../release" ]; then

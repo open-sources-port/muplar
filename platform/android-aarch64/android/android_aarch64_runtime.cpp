@@ -1,7 +1,9 @@
 #include "android_aarch64_runtime.h"
 
 #include <algorithm>
+#include <atomic>
 #include <cctype>
+#include <chrono>
 #include <cstdlib>
 #include <exception>
 #include <filesystem>
@@ -10,8 +12,13 @@
 #include <sstream>
 #include <stdexcept>
 #include <string>
+#include <thread>
+#include <unordered_set>
 #include <vector>
 #include <unistd.h>
+#ifdef __APPLE__
+#include <mach-o/dyld.h>
+#endif
 
 #include "apk_envelope.h"
 #include "art_bootstrap.h"
@@ -29,7 +36,8 @@ public:
     explicit PrefixPidRegistration(
         const std::optional<prefix::PrefixLayout>& active_prefix)
     {
-        if (!active_prefix ||
+        if (std::getenv("MUPLAR_DISPATCHED_APP") != nullptr ||
+            !active_prefix ||
             active_prefix->kind == prefix::PrefixKind::Wine) {
             return;
         }
@@ -82,6 +90,22 @@ std::string lower_ext(const std::string& path)
     for (char& c : ext)
         c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
     return ext;
+}
+
+std::filesystem::path current_executable_path()
+{
+#ifdef __APPLE__
+    uint32_t size = 0;
+    _NSGetExecutablePath(nullptr, &size);
+    std::vector<char> buffer(size + 1, '\0');
+    if (_NSGetExecutablePath(buffer.data(), &size) == 0) {
+        std::error_code ec;
+        std::filesystem::path canonical =
+            std::filesystem::weakly_canonical(buffer.data(), ec);
+        return ec ? std::filesystem::path(buffer.data()) : canonical;
+    }
+#endif
+    return {};
 }
 
 void copy_jni_call_config(const RuntimeJniCallConfig& from,
@@ -162,6 +186,175 @@ void inspect_elf(const std::string& elf_path)
     } catch (const std::exception& e) {
         std::cerr << "ELF inspect error: " << e.what() << "\n";
     }
+}
+
+std::string properties_escape(const std::string& value)
+{
+    std::string escaped;
+    escaped.reserve(value.size());
+    for (char c : value) {
+        switch (c) {
+        case '\\': escaped += "\\\\"; break;
+        case '\n': escaped += "\\n"; break;
+        case '\r': escaped += "\\r"; break;
+        case '\t': escaped += "\\t"; break;
+        case '=': escaped += "\\="; break;
+        case ':': escaped += "\\:"; break;
+        default: escaped.push_back(c); break;
+        }
+    }
+    return escaped;
+}
+
+std::filesystem::path build_android_package_registry(
+    const prefix::PrefixLayout& active_prefix)
+{
+    std::error_code ec;
+    std::filesystem::create_directories(active_prefix.registry_dir, ec);
+    if (ec) {
+        std::cerr << "[PackageManager] warning: cannot create registry: "
+                  << ec.message() << "\n";
+        return {};
+    }
+
+    std::vector<std::filesystem::path> apk_paths;
+    if (std::filesystem::is_directory(active_prefix.packages_dir, ec)) {
+        for (const auto& entry :
+             std::filesystem::directory_iterator(active_prefix.packages_dir,
+                                                 ec)) {
+            if (!entry.is_regular_file(ec))
+                continue;
+            std::string extension = entry.path().extension().string();
+            std::transform(extension.begin(), extension.end(), extension.begin(),
+                [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+            if (extension == ".apk")
+                apk_paths.push_back(entry.path());
+        }
+    }
+    std::sort(apk_paths.begin(), apk_paths.end());
+
+    struct PackageRecord {
+        std::string package_name;
+        std::string label;
+        std::string activity;
+        std::string apk_path;
+        std::string icon_path;
+    };
+    std::vector<PackageRecord> records;
+    for (const auto& path : apk_paths) {
+        try {
+            apk::ApkClassification classification = apk::classify_apk(path);
+            if (!classification.manifest_package ||
+                !classification.manifest_launch_activity) {
+                continue;
+            }
+            std::string icon_path;
+            if (classification.manifest_application_icon) {
+                std::filesystem::path resource_path =
+                    *classification.manifest_application_icon;
+                std::string extension = lower_ext(resource_path.string());
+                if (extension == ".png" || extension == ".jpg" ||
+                    extension == ".jpeg" || extension == ".gif") {
+                    std::string icon_name = *classification.manifest_package;
+                    std::replace_if(icon_name.begin(), icon_name.end(),
+                        [](unsigned char c) {
+                            return !std::isalnum(c) && c != '.' && c != '-';
+                        }, '_');
+                    std::filesystem::path output =
+                        active_prefix.registry_dir / "android-icons" /
+                        (icon_name + extension);
+                    if (apk::extract_apk_entry(path,
+                            *classification.manifest_application_icon, output)) {
+                        icon_path = output.string();
+                    }
+                }
+            }
+            records.push_back({
+                *classification.manifest_package,
+                classification.manifest_application_label.value_or(
+                    *classification.manifest_package),
+                *classification.manifest_launch_activity,
+                std::filesystem::absolute(path).string(),
+                icon_path,
+            });
+        } catch (const std::exception& error) {
+            std::cerr << "[PackageManager] warning: skipping " << path
+                      << ": " << error.what() << "\n";
+        }
+    }
+
+    std::unordered_set<std::string> active_icons;
+    for (const auto& record : records) {
+        if (!record.icon_path.empty())
+            active_icons.insert(record.icon_path);
+    }
+    std::filesystem::path icons_dir =
+        active_prefix.registry_dir / "android-icons";
+    if (std::filesystem::is_directory(icons_dir, ec)) {
+        for (const auto& entry :
+             std::filesystem::directory_iterator(icons_dir, ec)) {
+            if (entry.is_regular_file(ec) &&
+                active_icons.count(entry.path().string()) == 0) {
+                std::filesystem::remove(entry.path(), ec);
+            }
+        }
+    }
+
+    std::filesystem::path registry =
+        active_prefix.registry_dir / "android-packages.properties";
+    std::filesystem::path temporary = registry;
+    temporary += ".tmp-" + std::to_string(getpid());
+    std::ofstream out(temporary, std::ios::trunc);
+    if (!out)
+        return {};
+    out << "count=" << records.size() << "\n";
+    for (size_t i = 0; i < records.size(); ++i) {
+        const std::string key = "package." + std::to_string(i) + ".";
+        out << key << "name=" << properties_escape(records[i].package_name) << "\n"
+            << key << "label=" << properties_escape(records[i].label) << "\n"
+            << key << "activity=" << properties_escape(records[i].activity) << "\n"
+            << key << "apk=" << properties_escape(records[i].apk_path) << "\n";
+        out << key << "icon=" << properties_escape(records[i].icon_path) << "\n";
+    }
+    out.close();
+    if (!out)
+        return {};
+    std::filesystem::rename(temporary, registry, ec);
+    if (ec) {
+        std::filesystem::remove(registry, ec);
+        ec.clear();
+        std::filesystem::rename(temporary, registry, ec);
+    }
+    if (ec)
+        return {};
+    std::cerr << "[PackageManager] indexed " << records.size()
+              << " launchable APK(s)\n";
+    return registry;
+}
+
+std::string android_packages_stamp(const prefix::PrefixLayout& active_prefix)
+{
+    std::error_code ec;
+    std::vector<std::string> entries;
+    if (std::filesystem::is_directory(active_prefix.packages_dir, ec)) {
+        for (const auto& entry :
+             std::filesystem::directory_iterator(active_prefix.packages_dir,
+                                                 ec)) {
+            if (!entry.is_regular_file(ec) ||
+                lower_ext(entry.path().string()) != ".apk") {
+                continue;
+            }
+            entries.push_back(entry.path().filename().string() + ":" +
+                std::to_string(entry.file_size(ec)) + ":" +
+                std::to_string(static_cast<long long>(
+                    entry.last_write_time(ec).time_since_epoch().count())));
+        }
+    }
+    std::sort(entries.begin(), entries.end());
+    std::string stamp;
+    for (const auto& entry : entries)
+        stamp += entry + "\n";
+    return stamp;
 }
 
 void apply_apk_launch(const PlatformLaunchConfig& launch_cfg,
@@ -262,13 +455,48 @@ int handle_java_apk_launch(const PlatformLaunchConfig& launch_cfg,
     jvm_cfg.apk_path        = apk_jar.empty()
                                   ? launch_cfg.input_path
                                   : std::filesystem::absolute(apk_jar).string();
+    jvm_cfg.resource_apk_path =
+        std::filesystem::absolute(launch_cfg.input_path);
     jvm_cfg.package_name    =
         classification.manifest_package.value_or("");
     jvm_cfg.launch_activity =
         classification.manifest_launch_activity.value_or("");
     jvm_cfg.scratch_dir     = scratch_dir;
+    if (launch_cfg.active_prefix) {
+        jvm_cfg.package_registry =
+            build_android_package_registry(*launch_cfg.active_prefix);
+        jvm_cfg.prefix_name = launch_cfg.active_prefix->name;
+        jvm_cfg.prefix_state_dir =
+            launch_cfg.active_prefix->registry_dir / "android-state";
+        std::error_code state_ec;
+        std::filesystem::create_directories(jvm_cfg.prefix_state_dir, state_ec);
+    }
+    jvm_cfg.launcher_executable = current_executable_path();
 
-    return host_jvm_launch(jvm_cfg);
+    std::atomic<bool> stop_package_watcher{false};
+    std::thread package_watcher;
+    if (launch_cfg.active_prefix &&
+        classification.manifest_package ==
+            std::optional<std::string>("com.muplar.launcher")) {
+        prefix::PrefixLayout watched_prefix = *launch_cfg.active_prefix;
+        package_watcher = std::thread([&stop_package_watcher, watched_prefix]() {
+            std::string previous = android_packages_stamp(watched_prefix);
+            while (!stop_package_watcher.load()) {
+                std::this_thread::sleep_for(std::chrono::milliseconds(500));
+                std::string current = android_packages_stamp(watched_prefix);
+                if (current != previous) {
+                    previous = std::move(current);
+                    build_android_package_registry(watched_prefix);
+                }
+            }
+        });
+    }
+
+    int result = host_jvm_launch(jvm_cfg);
+    stop_package_watcher.store(true);
+    if (package_watcher.joinable())
+        package_watcher.join();
+    return result;
 
 #else
     // ── ART guest path (requires sysroot + boot OAT files) ───────────────────

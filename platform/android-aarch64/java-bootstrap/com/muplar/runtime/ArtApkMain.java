@@ -60,6 +60,14 @@ public final class ArtApkMain {
                         Object bundleObj = bundleClass.getDeclaredConstructor().newInstance();
                         onCreateMethod.invoke(activityObj, bundleObj);
                         System.out.println("[Muplar/ART] onCreate completed successfully");
+                        try {
+                            java.lang.reflect.Method lifecycle =
+                                activityClass.getMethod("dispatchStartAndResume");
+                            lifecycle.invoke(activityObj);
+                            System.out.println("[Muplar/ART] onStart/onResume completed successfully");
+                        } catch (NoSuchMethodException ignored) {
+                            // Older bootstrap Activity surface.
+                        }
                     } else {
                         System.out.println("[Muplar/ART] onCreate method not found");
                     }

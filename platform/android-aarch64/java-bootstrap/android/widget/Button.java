@@ -12,4 +12,7 @@ public class Button extends TextView {
             @Override public void run() { listener.onClick(Button.this); }
         });
     }
+    public void setIconPath(String path) {
+        HostUi.setButtonIcon(getPeer(), path);
+    }
 }

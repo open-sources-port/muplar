@@ -374,6 +374,30 @@ int host_jvm_launch(const HostJvmLaunchConfig& config)
         std::filesystem::create_directories(config.scratch_dir, ec);
         opt_tmp = "-Djava.io.tmpdir=" + config.scratch_dir.string();
     }
+    std::string opt_package_registry;
+    if (!config.package_registry.empty()) {
+        opt_package_registry = "-Dmuplar.package.registry=" +
+            config.package_registry.string();
+    }
+    std::string opt_launcher_executable;
+    if (!config.launcher_executable.empty()) {
+        opt_launcher_executable = "-Dmuplar.launcher.executable=" +
+            config.launcher_executable.string();
+    }
+    std::string opt_prefix_name;
+    if (!config.prefix_name.empty()) {
+        opt_prefix_name = "-Dmuplar.prefix.name=" + config.prefix_name;
+    }
+    std::string opt_prefix_state_dir;
+    if (!config.prefix_state_dir.empty()) {
+        opt_prefix_state_dir = "-Dmuplar.prefix.state.dir=" +
+            config.prefix_state_dir.string();
+    }
+    std::string opt_resource_apk;
+    if (!config.resource_apk_path.empty()) {
+        opt_resource_apk = "-Dmuplar.apk.resource.path=" +
+            config.resource_apk_path.string();
+    }
 
     std::vector<JavaVMOption> jvm_options;
     auto add_opt = [&](std::string& s) {
@@ -385,6 +409,11 @@ int host_jvm_launch(const HostJvmLaunchConfig& config)
     add_opt(opt_home);
     add_opt(opt_cp);
     if (!opt_tmp.empty()) add_opt(opt_tmp);
+    if (!opt_package_registry.empty()) add_opt(opt_package_registry);
+    if (!opt_launcher_executable.empty()) add_opt(opt_launcher_executable);
+    if (!opt_prefix_name.empty()) add_opt(opt_prefix_name);
+    if (!opt_prefix_state_dir.empty()) add_opt(opt_prefix_state_dir);
+    if (!opt_resource_apk.empty()) add_opt(opt_resource_apk);
 
     JavaVMInitArgs vm_args{};
     vm_args.version            = JNI_VERSION_1_8;

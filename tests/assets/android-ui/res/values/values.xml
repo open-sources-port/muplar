@@ -1,0 +1,8 @@
+<resources>
+    <string name="app_name">Muplar UI Test</string>
+    <string name="ready">XML layout ready</string>
+    <string name="tap">Tap to verify input</string>
+    <string name="option">Resource checkbox</string>
+    <color name="accent">#ff287a5f</color>
+    <dimen name="spacing">16dp</dimen>
+</resources>

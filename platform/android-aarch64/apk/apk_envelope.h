@@ -29,6 +29,8 @@ struct ApkLaunchResult {
     std::string selected_lib;
     std::optional<std::string> manifest_lib;
     std::optional<std::string> manifest_package;
+    std::optional<std::string> manifest_application_label;
+    std::optional<std::string> manifest_application_icon;
     std::optional<std::string> manifest_launch_activity;
     std::vector<std::string> extracted_libs;
     std::vector<std::string> extracted_assets;
@@ -40,6 +42,8 @@ struct ApkClassification {
     bool has_manifest = false;
     std::optional<std::string> manifest_lib;
     std::optional<std::string> manifest_package;
+    std::optional<std::string> manifest_application_label;
+    std::optional<std::string> manifest_application_icon;
     std::optional<std::string> manifest_launch_activity;
     std::vector<std::string> arm64_libs;
     std::vector<std::string> dex_files;
@@ -48,6 +52,9 @@ struct ApkClassification {
 
 std::string to_string(ApkRuntimeKind kind);
 ApkClassification classify_apk(const std::filesystem::path& apk_path);
+bool extract_apk_entry(const std::filesystem::path& apk_path,
+                       const std::string& entry_path,
+                       const std::filesystem::path& output_path);
 ApkLaunchResult prepare_apk_launch(const ApkLaunchConfig& config);
 
 } // namespace muplar::runtime::apk
