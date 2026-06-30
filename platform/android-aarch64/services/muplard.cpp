@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <atomic>
+#include <chrono>
 #include <cerrno>
 #include <csignal>
 #include <cstring>
@@ -153,6 +154,44 @@ std::string service_list(const std::unordered_map<std::string, int>& services)
     return result;
 }
 
+std::unordered_map<std::string, int> builtin_services()
+{
+    return {
+        {"activity", -1}, {"package", -1}, {"launcherapps", -1},
+        {"shortcut", -1}, {"appwidget", -1}, {"window", -1},
+        {"input_method", -1}, {"permission", -1}, {"user", -1},
+        {"settings", -1}, {"surfaceflinger", -1},
+    };
+}
+
+std::string framework_service_state(
+    const std::unordered_map<std::string, int>& services,
+    uint64_t generation,
+    std::chrono::steady_clock::time_point started)
+{
+    auto uptime = std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::steady_clock::now() - started).count();
+    return "state=ready\ngeneration=" + std::to_string(generation) +
+        "\nuptimeMillis=" + std::to_string(uptime) + "\nservices=" +
+        std::to_string(services.size()) + "\nserviceNames=" +
+        service_list(services);
+}
+
+int run_lifecycle_self_test()
+{
+    auto services = builtin_services();
+    std::string state = framework_service_state(
+        services, 42, std::chrono::steady_clock::now());
+    if (state.find("state=ready") == std::string::npos ||
+        state.find("generation=42") == std::string::npos ||
+        state.find("activity") == std::string::npos ||
+        state.find("permission") == std::string::npos ||
+        state.find("surfaceflinger") == std::string::npos) return 1;
+    std::cout << "frameworkHost=ready\nserviceCatalog="
+              << services.size() << "\nrestartGeneration=tracked\n";
+    return 0;
+}
+
 uint64_t registry_stamp(const fs::path& path)
 {
     std::error_code ec;
@@ -204,6 +243,199 @@ bool save_settings(const fs::path& path,
         fs::rename(temporary, path, ec);
     }
     return !ec;
+}
+
+bool user_exists(const std::unordered_map<std::string, std::string>& settings,
+                 const std::string& user)
+{
+    auto found = settings.find("users");
+    std::string users = found == settings.end() ? "0" : found->second;
+    size_t start = 0;
+    while (start <= users.size()) {
+        size_t end = users.find(',', start);
+        if (users.substr(start, end - start) == user) return true;
+        if (end == std::string::npos) break;
+        start = end + 1;
+    }
+    return false;
+}
+
+std::string permission_key(const std::string& package,
+                           const std::string& user,
+                           const std::string& permission)
+{
+    return "permission:" + user + ":" + package + ":" + permission;
+}
+
+bool permission_granted(
+    const std::unordered_map<std::string, std::string>& settings,
+    const std::string& package,
+    const std::string& user,
+    const std::string& permission)
+{
+    static const std::unordered_set<std::string> dangerous = {
+        "android.permission.CAMERA",
+        "android.permission.RECORD_AUDIO",
+        "android.permission.READ_CONTACTS",
+        "android.permission.WRITE_CONTACTS",
+        "android.permission.ACCESS_FINE_LOCATION",
+        "android.permission.ACCESS_COARSE_LOCATION",
+        "android.permission.READ_EXTERNAL_STORAGE",
+        "android.permission.WRITE_EXTERNAL_STORAGE",
+    };
+    auto override = settings.find(permission_key(package, user, permission));
+    if (override != settings.end()) return override->second == "grant";
+    return user_exists(settings, user) && !package.empty() &&
+        !permission.empty() && !dangerous.count(permission);
+}
+
+int run_policy_self_test(const fs::path& settings_path)
+{
+    auto settings = load_settings(settings_path);
+    settings["users"] = "0,10";
+    const std::string package = "com.muplar.policytest";
+    const std::string camera = "android.permission.CAMERA";
+    if (permission_granted(settings, package, "10", camera) ||
+        !permission_granted(settings, package, "10",
+                            "android.permission.INTERNET") ||
+        permission_granted(settings, package, "11",
+                           "android.permission.INTERNET")) return 1;
+    settings[permission_key(package, "10", camera)] = "grant";
+    if (!save_settings(settings_path, settings)) return 1;
+    auto reloaded = load_settings(settings_path);
+    if (!permission_granted(reloaded, package, "10", camera) ||
+        !user_exists(reloaded, "0") || !user_exists(reloaded, "10")) return 1;
+    std::cout << "policyPersistence=ok\nusers=0,10\n"
+              << "dangerousDefault=denied\nexplicitGrant=ok\n";
+    return 0;
+}
+
+struct SurfaceState {
+    std::string name;
+    int width = 0;
+    int height = 0;
+    int layer = 0;
+    float alpha = 1.0f;
+    float x = 0.0f;
+    float y = 0.0f;
+    int crop_width = 0;
+    int crop_height = 0;
+    bool visible = false;
+};
+
+bool apply_surface_transaction(
+    std::unordered_map<uint64_t, SurfaceState>& surfaces,
+    const std::string& payload)
+{
+    auto updated = surfaces;
+    bool valid = true;
+    size_t start = 0;
+    while (valid && start < payload.size()) {
+        size_t end = payload.find('\n', start);
+        std::string line = payload.substr(start, end - start);
+        std::vector<std::string> fields;
+        size_t field_start = 0;
+        while (field_start <= line.size()) {
+            size_t tab = line.find('\t', field_start);
+            fields.push_back(line.substr(field_start, tab - field_start));
+            if (tab == std::string::npos) break;
+            field_start = tab + 1;
+        }
+        try {
+            if (fields.size() >= 2 && fields[0] == "remove") {
+                updated.erase(std::stoull(fields[1]));
+            } else if (fields.size() == 5 && fields[0] == "create") {
+                uint64_t id = std::stoull(fields[1]);
+                SurfaceState surface;
+                surface.name = fields[2];
+                surface.width = std::stoi(fields[3]);
+                surface.height = std::stoi(fields[4]);
+                surface.crop_width = surface.width;
+                surface.crop_height = surface.height;
+                valid = id != 0 && surface.width >= 0 &&
+                    surface.height >= 0 && !updated.count(id);
+                if (valid) updated[id] = std::move(surface);
+            } else if (fields.size() >= 2) {
+                uint64_t id = std::stoull(fields[1]);
+                auto surface = updated.find(id);
+                valid = surface != updated.end();
+                if (valid && fields[0] == "show")
+                    surface->second.visible = true;
+                else if (valid && fields[0] == "hide")
+                    surface->second.visible = false;
+                else if (valid && fields.size() == 3 && fields[0] == "layer")
+                    surface->second.layer = std::stoi(fields[2]);
+                else if (valid && fields.size() == 3 && fields[0] == "alpha")
+                    surface->second.alpha = std::stof(fields[2]);
+                else if (valid && fields.size() == 4 && fields[0] == "position") {
+                    surface->second.x = std::stof(fields[2]);
+                    surface->second.y = std::stof(fields[3]);
+                } else if (valid && fields.size() == 4 && fields[0] == "crop") {
+                    surface->second.crop_width = std::stoi(fields[2]);
+                    surface->second.crop_height = std::stoi(fields[3]);
+                } else if (valid && fields[0] != "show" &&
+                           fields[0] != "hide") {
+                    valid = false;
+                }
+            } else {
+                valid = false;
+            }
+        } catch (const std::exception&) {
+            valid = false;
+        }
+        if (end == std::string::npos) break;
+        start = end + 1;
+    }
+    if (valid) surfaces = std::move(updated);
+    return valid;
+}
+
+std::string surface_list(
+    const std::unordered_map<uint64_t, SurfaceState>& surfaces,
+    uint64_t generation)
+{
+    std::vector<std::pair<uint64_t, SurfaceState>> ordered(
+        surfaces.begin(), surfaces.end());
+    std::sort(ordered.begin(), ordered.end(),
+        [](const auto& left, const auto& right) {
+            if (left.second.layer != right.second.layer)
+                return left.second.layer < right.second.layer;
+            return left.first < right.first;
+        });
+    std::string result = "generation=" + std::to_string(generation);
+    for (const auto& entry : ordered) {
+        result += "\n" + std::to_string(entry.first) + "\t" +
+            entry.second.name + "\t" + std::to_string(entry.second.layer) +
+            "\t" + (entry.second.visible ? "visible" : "hidden") +
+            "\t" + std::to_string(entry.second.alpha) + "\t" +
+            std::to_string(entry.second.x) + "," +
+            std::to_string(entry.second.y) + "\t" +
+            std::to_string(entry.second.crop_width) + "x" +
+            std::to_string(entry.second.crop_height);
+    }
+    return result;
+}
+
+int run_surface_self_test()
+{
+    std::unordered_map<uint64_t, SurfaceState> surfaces;
+    if (!apply_surface_transaction(surfaces,
+            "create\t1\tbackground\t800\t600\n"
+            "create\t2\tlauncher\t400\t300\n"
+            "layer\t1\t0\nlayer\t2\t10\nshow\t2\n"
+            "alpha\t2\t0.75\nposition\t2\t20\t30\ncrop\t2\t320\t240"))
+        return 1;
+    auto before = surfaces;
+    if (apply_surface_transaction(surfaces, "show\t1\nlayer\t999\t4") ||
+        surfaces.size() != before.size() || surfaces[1].visible)
+        return 1;
+    std::string list = surface_list(surfaces, 1);
+    if (list.find("2\tlauncher\t10\tvisible") == std::string::npos ||
+        list.find("0.750000") == std::string::npos ||
+        list.find("320x240") == std::string::npos) return 1;
+    std::cout << "surfaceAtomicity=ok\nlayerOrdering=ok\n"
+              << "visibilityAlphaCrop=ok\n";
+    return 0;
 }
 
 void identify_client(Client& client)
@@ -281,6 +513,12 @@ int run_client(const fs::path& socket_path, const std::string& operation,
         : operation == "settings-get" ? Opcode::GetSetting
         : operation == "settings-put" ? Opcode::PutSetting
         : operation == "check-service" ? Opcode::CheckService
+        : operation == "service-state" ? Opcode::ServiceState
+        : operation == "query-users" ? Opcode::QueryUsers
+        : operation == "check-permission" ? Opcode::CheckPermission
+        : operation == "set-permission" ? Opcode::SetPermission
+        : operation == "surface-transaction" ? Opcode::ApplySurfaceTransaction
+        : operation == "query-surfaces" ? Opcode::QuerySurfaces
         : operation == "binder-transact" ? Opcode::BinderTransact
         : Opcode::Ping;
     int passed_fd = -1;
@@ -324,6 +562,9 @@ int main(int argc, char** argv)
     std::string client_operation;
     std::string client_payload;
     fs::path client_fd_path;
+    bool policy_self_test = false;
+    bool surface_self_test = false;
+    bool lifecycle_self_test = false;
     for (int i = 1; i < argc; ++i) {
         std::string arg = argv[i];
         if (arg == "--socket" && i + 1 < argc) socket_path = argv[++i];
@@ -333,7 +574,16 @@ int main(int argc, char** argv)
         else if (arg == "--client" && i + 1 < argc) client_operation = argv[++i];
         else if (arg == "--payload" && i + 1 < argc) client_payload = argv[++i];
         else if (arg == "--fd" && i + 1 < argc) client_fd_path = argv[++i];
+        else if (arg == "--self-test-policy") policy_self_test = true;
+        else if (arg == "--self-test-surface") surface_self_test = true;
+        else if (arg == "--self-test-lifecycle") lifecycle_self_test = true;
     }
+    if (policy_self_test)
+        return run_policy_self_test(settings_path);
+    if (surface_self_test)
+        return run_surface_self_test();
+    if (lifecycle_self_test)
+        return run_lifecycle_self_test();
     if (socket_path.empty()) {
         std::cerr << "muplard: --socket is required\n";
         return 2;
@@ -374,22 +624,24 @@ int main(int argc, char** argv)
         std::ofstream(pid_path, std::ios::trunc) << getpid() << "\n";
     }
 
-    std::unordered_map<std::string, int> services = {
-        {"activity", -1}, {"package", -1}, {"launcherapps", -1},
-        {"shortcut", -1}, {"appwidget", -1}, {"window", -1},
-    };
+    std::unordered_map<std::string, int> services = builtin_services();
     struct PendingTransaction {
         int caller_fd;
         int owner_fd;
         uint64_t caller_request_id;
     };
     std::unordered_map<uint64_t, PendingTransaction> pending_transactions;
+    std::unordered_map<uint64_t, SurfaceState> surfaces;
+    uint64_t surface_generation = 0;
     uint64_t next_transaction_id = 1;
     std::vector<Client> clients;
     uint64_t package_generation = 1;
     uint64_t previous_registry_stamp = registry_stamp(registry_path);
     std::unordered_map<std::string, std::string> settings =
         load_settings(settings_path);
+    const auto service_started = std::chrono::steady_clock::now();
+    const uint64_t service_generation = static_cast<uint64_t>(getpid());
+    if (!settings.count("users")) settings["users"] = "0";
     std::cerr << "[muplard] listening on " << socket_path << "\n";
 
     while (running.load()) {
@@ -500,6 +752,63 @@ int main(int argc, char** argv)
                             }
                             send_message(clients[i].fd, opcode, header.request_id,
                                 valid ? "1" : "0");
+                        } else if (opcode == Opcode::ServiceState) {
+                            send_message(clients[i].fd, opcode, header.request_id,
+                                framework_service_state(services,
+                                    service_generation, service_started));
+                        } else if (opcode == Opcode::QueryUsers) {
+                            send_message(clients[i].fd, opcode, header.request_id,
+                                settings["users"]);
+                        } else if (opcode == Opcode::CheckPermission) {
+                            size_t first = payload.find('\n');
+                            size_t second = first == std::string::npos
+                                ? std::string::npos : payload.find('\n', first + 1);
+                            std::string package = payload.substr(0, first);
+                            std::string user = first == std::string::npos
+                                ? std::string() : payload.substr(
+                                    first + 1, second - first - 1);
+                            std::string permission = second == std::string::npos
+                                ? std::string() : payload.substr(second + 1);
+                            bool granted = permission_granted(
+                                settings, package, user, permission);
+                            send_message(clients[i].fd, opcode, header.request_id,
+                                granted ? "0" : "-1");
+                        } else if (opcode == Opcode::SetPermission) {
+                            size_t first = payload.find('\n');
+                            size_t second = first == std::string::npos
+                                ? std::string::npos : payload.find('\n', first + 1);
+                            size_t third = second == std::string::npos
+                                ? std::string::npos : payload.find('\n', second + 1);
+                            bool valid = first != std::string::npos &&
+                                second != std::string::npos &&
+                                third != std::string::npos;
+                            if (valid) {
+                                std::string package = payload.substr(0, first);
+                                std::string user = payload.substr(
+                                    first + 1, second - first - 1);
+                                std::string permission = payload.substr(
+                                    second + 1, third - second - 1);
+                                std::string value = payload.substr(third + 1);
+                                valid = !package.empty() && !user.empty() &&
+                                    !permission.empty() &&
+                                    (value == "grant" || value == "deny");
+                                if (valid) {
+                                    settings[permission_key(
+                                        package, user, permission)] = value;
+                                    valid = save_settings(settings_path, settings);
+                                }
+                            }
+                            send_message(clients[i].fd, opcode, header.request_id,
+                                valid ? "1" : "0");
+                        } else if (opcode == Opcode::ApplySurfaceTransaction) {
+                            bool valid = apply_surface_transaction(
+                                surfaces, payload);
+                            if (valid) ++surface_generation;
+                            send_message(clients[i].fd, opcode, header.request_id,
+                                valid ? std::to_string(surface_generation) : "0");
+                        } else if (opcode == Opcode::QuerySurfaces) {
+                            send_message(clients[i].fd, opcode, header.request_id,
+                                surface_list(surfaces, surface_generation));
                         } else if (opcode == Opcode::BinderTransact) {
                             size_t separator = payload.find('\n');
                             std::string service = payload.substr(0, separator);

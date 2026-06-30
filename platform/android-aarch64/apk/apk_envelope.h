@@ -31,6 +31,7 @@ struct ApkLaunchResult {
     std::optional<std::string> manifest_package;
     std::optional<std::string> manifest_application_label;
     std::optional<std::string> manifest_application_icon;
+    std::optional<std::string> manifest_application_class;
     std::optional<std::string> manifest_launch_activity;
     std::vector<std::string> extracted_libs;
     std::vector<std::string> extracted_assets;
@@ -44,6 +45,7 @@ struct ApkClassification {
     std::optional<std::string> manifest_package;
     std::optional<std::string> manifest_application_label;
     std::optional<std::string> manifest_application_icon;
+    std::optional<std::string> manifest_application_class;
     std::optional<std::string> manifest_launch_activity;
     std::vector<std::string> arm64_libs;
     std::vector<std::string> dex_files;

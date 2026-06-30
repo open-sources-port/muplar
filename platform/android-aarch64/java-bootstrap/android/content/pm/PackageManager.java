@@ -19,6 +19,7 @@ import java.nio.file.StandardWatchEventKinds;
 import java.nio.file.WatchEvent;
 import java.nio.file.WatchKey;
 import java.nio.file.WatchService;
+import com.muplar.runtime.FrameworkServiceClient;
 
 public class PackageManager {
     private volatile List<ApplicationInfo> applications;
@@ -69,6 +70,15 @@ public class PackageManager {
             }
         }
         return null;
+    }
+
+    public int checkPermission(String permissionName, String packageName) {
+        if (permissionName == null || packageName == null)
+            return PERMISSION_DENIED;
+        String user = System.getProperty("muplar.user.id", "0");
+        String result = FrameworkServiceClient.request("check-permission",
+            packageName + "\n" + user + "\n" + permissionName);
+        return "0".equals(result) ? PERMISSION_GRANTED : PERMISSION_DENIED;
     }
 
     public ApplicationInfo getApplicationInfo(String packageName, int flags)

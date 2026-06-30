@@ -38,3 +38,17 @@ service-owner death handling, package-generation subscriptions, and verified
 adapter now routes daemon-owned services through this transport while preserving
 in-process guest services. Java Binder, Parcel, and ServiceManager client adapters
 use the same parcel envelope and transaction router.
+
+## Service Host Baseline
+
+`muplard` publishes lifecycle readiness, restart generation, uptime, and a
+catalog of Muplar-owned framework substitutes. Prefix-persistent policy state
+tracks users and package permission overrides. Unknown profiles are rejected,
+dangerous permissions require an explicit grant, and normal permissions use a
+default grant for known users.
+
+The surface service provides atomic create/remove, visibility, layer, alpha,
+position, and crop transactions. Java `SurfaceControl` clients use that state
+model while Muplar's existing host-window paths remain responsible for pixel
+presentation. This is the Launcher3 startup baseline, not complete AOSP
+SurfaceFlinger, SELinux, or Android runtime-permission parity.

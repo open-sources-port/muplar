@@ -12,6 +12,10 @@ import android.widget.TextView;
 public class MainActivity extends Activity {
     @Override protected void onCreate(Bundle state) {
         super.onCreate(state);
+        if (!UiTestApplication.isCreated() ||
+            !(getApplicationContext() instanceof UiTestApplication)) {
+            throw new AssertionError("Application lifecycle did not run first");
+        }
         setTitle(getString(R.string.app_name));
         setContentView(R.layout.activity_main);
         final TextView status = (TextView) findViewById(R.id.status);

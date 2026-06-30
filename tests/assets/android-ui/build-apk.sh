@@ -22,6 +22,7 @@ mkdir -p "$OUT_DIR/classes" "$OUT_DIR/dex" "$OUT_DIR/generated"
     --java "$OUT_DIR/generated" -o "$APK_OUT" "$OUT_DIR/resources.zip"
 "$JAVAC" -Xlint:-options --release 8 -cp "$BOOTSTRAP_JAR:$ANDROID_JAR" \
     -d "$OUT_DIR/classes" \
+    "$SCRIPT_DIR/src/com/muplar/uitest/UiTestApplication.java" \
     "$SCRIPT_DIR/src/com/muplar/uitest/MainActivity.java" \
     "$OUT_DIR/generated/com/muplar/uitest/R.java"
 find "$OUT_DIR/classes" -type f -name '*.class' -print0 |

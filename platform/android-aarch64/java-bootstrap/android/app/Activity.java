@@ -15,6 +15,11 @@ public class Activity extends Context {
 
     public Activity() {}
 
+    public Application getApplication() {
+        Context context = getApplicationContext();
+        return context instanceof Application ? (Application) context : null;
+    }
+
     protected void onCreate(Bundle savedInstanceState) {
         // stub
     }

@@ -13,6 +13,7 @@ public final class ArtApkMain {
         String apkPath = args.length > 0 ? args[0] : "";
         String packageName = args.length > 1 ? args[1] : "";
         String launchActivity = args.length > 2 ? args[2] : "";
+        String applicationClass = args.length > 3 ? args[3] : "";
 
         System.out.println("[Muplar/ART] ArtApkMain started");
         System.out.println("[Muplar/ART] apk=" + apkPath);
@@ -28,6 +29,20 @@ public final class ArtApkMain {
             ClassLoader loader = createApkClassLoader(apkPath, packageName);
             Thread.currentThread().setContextClassLoader(loader);
             System.out.println("[Muplar/ART] apk class loader ready");
+
+            if (!applicationClass.isEmpty()) {
+                Class<?> type = Class.forName(
+                    normalizeActivityClassName(packageName, applicationClass),
+                    false, loader);
+                Constructor<?> constructor = type.getDeclaredConstructor();
+                constructor.setAccessible(true);
+                Object application = constructor.newInstance();
+                java.lang.reflect.Method onCreate =
+                    type.getMethod("onCreate");
+                onCreate.invoke(application);
+                System.out.println("[Muplar/ART] Application onCreate completed class="
+                    + type.getName());
+            }
 
             if (!launchActivity.isEmpty()) {
                 String activityClassName =

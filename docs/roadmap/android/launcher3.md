@@ -56,18 +56,22 @@ render and receive input without Muplar-specific UI APIs.
 - [x] Provide a minimal non-crashing `ShortcutManager` surface.
 - [x] Provide a non-crashing `AppWidgetManager` baseline.
 - [x] Provide baseline WindowManager/display and input-method discovery APIs.
-- [ ] Provide `system_server` service lifecycle or compatible Muplar-owned substitutes.
-- [ ] Provide SurfaceFlinger-compatible composition semantics where required.
+- [x] Provide `system_server` service lifecycle through Muplar-owned daemon services.
+- [x] Provide baseline SurfaceFlinger-compatible atomic surface state transactions.
 - [x] Persist Settings provider values and system properties through `muplard`.
-- [ ] Enforce package permissions and multi-user/profile isolation.
+- [x] Enforce prefix-scoped package permissions and multi-user/profile isolation baseline.
 
 Acceptance: framework applications can discover services and complete startup
 without hard-coded app-specific substitutes.
 
 ## Later: AOSP Launcher3
 
+- [x] Pin the official Android 15 Launcher3 source revision and provenance workflow.
+- [x] Add reproducible source fetch, AOSP APK import, and framework API inventory tooling.
+- [x] Run manifest `Application.onCreate()` before Activity creation in Java APK processes.
+- [x] Import and hash an official Android 15 ARM64 Launcher3 compatibility APK.
 - [ ] Build a pinned Launcher3 version as a compatibility fixture.
-- [ ] Reach Launcher3 process and Application initialization.
+- [x] Reach Launcher3 process and Application initialization.
 - [ ] Reach the first Activity frame.
 - [ ] Populate the app drawer from PackageManager.
 - [ ] Launch an installed application from the app drawer.
@@ -76,3 +80,9 @@ without hard-coded app-specific substitutes.
 
 Acceptance: Launcher3 displays an app drawer and launches an installed APK in
 a clean Android prefix. Advanced widgets and customization may follow.
+
+Current runtime checkpoint: the official Android 15 ARM64 Launcher3 APK passes
+multidex conversion, resource-table loading, process startup, and
+`LauncherApplication.onCreate()`. `QuickstepLauncher` class loading succeeds;
+Activity construction currently stops at the missing standard `View` animation
+properties such as `TRANSLATION_X`.

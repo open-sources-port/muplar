@@ -145,6 +145,8 @@ public class Resources {
     private void readPackage(byte[] data, int packageOffset, int packageSize,
                              int packageHeader, int packageId,
                              String[] globalStrings) {
+        int typeIdOffset = packageHeader >= 288
+            ? u32(data, packageOffset + 284) : 0;
         int child = packageOffset + packageHeader;
         int end = packageOffset + packageSize;
         while (child + 20 <= end) {
@@ -186,6 +188,12 @@ public class Resources {
                         if (sparse + 4 > child + size) break;
                         entryIndex = u16(data, sparse);
                         entryOffset = u16(data, sparse + 2) * 4;
+                    } else if ((flags & 2) != 0) {
+                        int position = child + header + i * 2;
+                        if (position + 2 > child + size) break;
+                        int compactOffset = u16(data, position);
+                        if (compactOffset == 0xffff) continue;
+                        entryOffset = compactOffset * 4;
                     } else {
                         int position = child + header + i * 4;
                         if (position + 4 > child + size) break;
@@ -193,16 +201,26 @@ public class Resources {
                     }
                     if (entryOffset == -1) continue;
                     int entry = child + entriesStart + entryOffset;
-                    if (entry + 8 > child + size ||
-                        (u16(data, entry + 2) & 1) != 0) continue;
-                    int value = entry + u16(data, entry);
-                    if (value + 8 > child + size) continue;
-                    int valueType = data[value + 3] & 0xff;
-                    int valueData = u32(data, value + 4);
+                    if (entry + 8 > child + size) continue;
+                    int entryFlags = u16(data, entry + 2);
+                    if ((entryFlags & 1) != 0) continue;
+                    int valueType;
+                    int valueData;
+                    if ((entryFlags & 8) != 0) {
+                        valueType = (entryFlags >> 8) & 0xff;
+                        valueData = u32(data, entry + 4);
+                    } else {
+                        int value = entry + u16(data, entry);
+                        if (value + 8 > child + size) continue;
+                        valueType = data[value + 3] & 0xff;
+                        valueData = u32(data, value + 4);
+                    }
                     String text = valueType == TYPE_STRING &&
                         valueData >= 0 && valueData < globalStrings.length
                         ? globalStrings[valueData] : null;
-                    int id = (packageId << 24) | (typeId << 16) | entryIndex;
+                    int effectiveTypeId = typeId + typeIdOffset;
+                    int id = (packageId << 24) |
+                        (effectiveTypeId << 16) | entryIndex;
                     Integer selectedScore = valueScores.get(id);
                     if (selectedScore == null || score >= selectedScore) {
                         values.put(id, new Value(valueType, valueData, text));
@@ -239,21 +257,38 @@ public class Resources {
     }
 
     private static String[] stringPool(byte[] data, int offset) {
+        if (offset < 0 || offset + 28 > data.length ||
+            u16(data, offset) != 0x0001) return new String[0];
         int header = u16(data, offset + 2);
         int count = u32(data, offset + 8);
+        long chunkSize = u32long(data, offset + 4);
         boolean utf8 = (u32(data, offset + 16) & 0x100) != 0;
-        int stringsStart = u32(data, offset + 20);
+        long stringsStart = u32long(data, offset + 20);
+        long chunkEnd = (long) offset + chunkSize;
+        if (header < 28 || count < 0 || count > 1000000 ||
+            chunkEnd > data.length ||
+            (long) offset + header + (long) count * 4 > chunkEnd ||
+            stringsStart < header || stringsStart >= chunkSize) {
+            return new String[0];
+        }
         String[] result = new String[count];
         for (int i = 0; i < count; ++i) {
-            int position = offset + stringsStart +
-                u32(data, offset + header + i * 4);
+            long relative = u32long(data, offset + header + i * 4);
+            long absolute = (long) offset + stringsStart + relative;
+            if (absolute < 0 || absolute >= chunkEnd) continue;
+            int position = (int) absolute;
             if (utf8) {
                 int[] first = length8(data, position);
+                if (first == null || first[1] >= chunkEnd) continue;
                 int[] bytes = length8(data, first[1]);
+                if (bytes == null || bytes[0] < 0 ||
+                    (long) bytes[1] + bytes[0] > chunkEnd) continue;
                 result[i] = new String(data, bytes[1], bytes[0],
                     StandardCharsets.UTF_8);
             } else {
                 int[] length = length16(data, position);
+                if (length == null || length[0] < 0 ||
+                    (long) length[1] + (long) length[0] * 2 > chunkEnd) continue;
                 result[i] = new String(data, length[1], length[0] * 2,
                     StandardCharsets.UTF_16LE);
             }
@@ -262,16 +297,20 @@ public class Resources {
     }
 
     private static int[] length8(byte[] data, int position) {
+        if (position < 0 || position >= data.length) return null;
         int first = data[position++] & 0xff;
         if ((first & 0x80) == 0) return new int[]{first, position};
+        if (position >= data.length) return null;
         return new int[]{((first & 0x7f) << 8) | (data[position++] & 0xff),
             position};
     }
 
     private static int[] length16(byte[] data, int position) {
+        if (position < 0 || position + 2 > data.length) return null;
         int first = u16(data, position);
         position += 2;
         if ((first & 0x8000) == 0) return new int[]{first, position};
+        if (position + 2 > data.length) return null;
         int second = u16(data, position);
         return new int[]{((first & 0x7fff) << 16) | second, position + 2};
     }
@@ -283,6 +322,10 @@ public class Resources {
     private static int u32(byte[] data, int offset) {
         return (data[offset] & 0xff) | ((data[offset + 1] & 0xff) << 8) |
             ((data[offset + 2] & 0xff) << 16) | (data[offset + 3] << 24);
+    }
+
+    private static long u32long(byte[] data, int offset) {
+        return u32(data, offset) & 0xffffffffL;
     }
 
     private static byte[] readAll(InputStream input) throws Exception {

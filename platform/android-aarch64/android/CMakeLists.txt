@@ -84,3 +84,7 @@ target_compile_options(muplar_runtime_android PRIVATE
     -Wextra
     -Wno-language-extension-token
 )
+
+target_compile_definitions(muplar_runtime_android PRIVATE
+    MUPLAR_SOURCE_DIR="${CMAKE_SOURCE_DIR}"
+)

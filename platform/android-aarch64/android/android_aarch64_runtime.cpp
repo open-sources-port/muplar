@@ -533,6 +533,8 @@ int handle_java_apk_launch(const PlatformLaunchConfig& launch_cfg,
         std::filesystem::absolute(launch_cfg.input_path);
     jvm_cfg.package_name    =
         classification.manifest_package.value_or("");
+    jvm_cfg.application_class =
+        classification.manifest_application_class.value_or("");
     jvm_cfg.launch_activity =
         classification.manifest_launch_activity.value_or("");
     jvm_cfg.scratch_dir     = scratch_dir;

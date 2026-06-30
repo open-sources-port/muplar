@@ -5,6 +5,7 @@ import android.content.Intent;
 import android.graphics.Rect;
 import android.os.Bundle;
 import android.os.UserHandle;
+import android.os.UserManager;
 import com.muplar.runtime.IntentDispatcher;
 import java.util.ArrayList;
 import java.util.List;
@@ -24,15 +25,18 @@ public class LauncherApps {
     public List<LauncherActivityInfo> getActivityList(String packageName,
                                                        UserHandle user) {
         List<LauncherActivityInfo> result = new ArrayList<LauncherActivityInfo>();
+        if (!new UserManager().isUserRunning(user)) return result;
         for (ApplicationInfo app : packageManager.getInstalledApplications(0)) {
             if (packageName == null || packageName.equals(app.packageName))
-                result.add(new LauncherActivityInfo(app, packageManager));
+                result.add(new LauncherActivityInfo(app, packageManager, user));
         }
         return result;
     }
 
     public void startMainActivity(ComponentName component, UserHandle user,
                                   Rect sourceBounds, Bundle options) {
+        if (!new UserManager().isUserRunning(user))
+            throw new SecurityException("unknown or stopped user");
         Intent intent = new Intent().setClassName(component.getPackageName(),
             component.getClassName());
         IntentDispatcher.launch(intent, packageManager);

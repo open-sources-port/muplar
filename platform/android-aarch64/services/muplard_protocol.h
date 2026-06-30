@@ -26,6 +26,12 @@ enum class Opcode : uint16_t {
     BinderTransact = 14,
     BinderIncoming = 15,
     BinderReply = 16,
+    ServiceState = 17,
+    QueryUsers = 18,
+    CheckPermission = 19,
+    SetPermission = 20,
+    ApplySurfaceTransaction = 21,
+    QuerySurfaces = 22,
 };
 
 struct MessageHeader {

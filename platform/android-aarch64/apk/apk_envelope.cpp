@@ -612,7 +612,10 @@ infer_plain_manifest_launch_activity(const std::string& manifest,
                 package_name.value_or(std::string()), *name);
             candidate.is_launcher =
                 block.find("android.intent.action.MAIN") != std::string::npos &&
-                block.find("android.intent.category.LAUNCHER") != std::string::npos;
+                (block.find("android.intent.category.LAUNCHER") != std::string::npos ||
+                 block.find("android.intent.category.HOME") != std::string::npos ||
+                 block.find("android.intent.category.SECONDARY_HOME") !=
+                     std::string::npos);
             candidates.push_back(std::move(candidate));
         }
 
@@ -876,10 +879,14 @@ std::optional<std::string> infer_binary_manifest_launch_activity(
                     attribute_value(off, "name") ==
                         std::optional<std::string>("android.intent.action.MAIN");
             } else if (current_activity && element == "category") {
+                auto category = attribute_value(off, "name");
                 has_launcher_category = has_launcher_category ||
-                    attribute_value(off, "name") ==
-                        std::optional<std::string>(
-                            "android.intent.category.LAUNCHER");
+                    category == std::optional<std::string>(
+                        "android.intent.category.LAUNCHER") ||
+                    category == std::optional<std::string>(
+                        "android.intent.category.HOME") ||
+                    category == std::optional<std::string>(
+                        "android.intent.category.SECONDARY_HOME");
             }
         } else if (type == RES_XML_END_ELEMENT_TYPE &&
                    off + 24 <= manifest.size()) {
@@ -903,6 +910,7 @@ struct ManifestInfo {
     std::optional<uint32_t> application_label_resource;
     std::optional<std::string> application_icon;
     std::optional<uint32_t> application_icon_resource;
+    std::optional<std::string> application_class;
     std::optional<std::string> launch_activity;
 };
 
@@ -925,6 +933,14 @@ ManifestInfo infer_manifest_info(const std::vector<uint8_t>& manifest,
         if (!application_icon)
             application_icon =
                 plain_manifest_attribute(text, "application", "icon");
+        auto application_class =
+            plain_manifest_attribute(text, "application", "android:name");
+        if (!application_class)
+            application_class =
+                plain_manifest_attribute(text, "application", "name");
+        if (application_class)
+            application_class = normalize_activity_name(
+                package_name.value_or(std::string()), *application_class);
         return {
             infer_plain_manifest_lib(text, available_bases),
             package_name,
@@ -932,6 +948,7 @@ ManifestInfo infer_manifest_info(const std::vector<uint8_t>& manifest,
             std::nullopt,
             application_icon,
             std::nullopt,
+            application_class,
             infer_plain_manifest_launch_activity(text, package_name)
         };
     }
@@ -943,6 +960,13 @@ ManifestInfo infer_manifest_info(const std::vector<uint8_t>& manifest,
         infer_binary_manifest_resource_attribute(manifest, "application", "label"),
         infer_binary_manifest_string_attribute(manifest, "application", "icon"),
         infer_binary_manifest_resource_attribute(manifest, "application", "icon"),
+        [&]() -> std::optional<std::string> {
+            auto value = infer_binary_manifest_string_attribute(
+                manifest, "application", "name");
+            if (!value) return std::nullopt;
+            return normalize_activity_name(
+                package_name.value_or(std::string()), *value);
+        }(),
         infer_binary_manifest_launch_activity(manifest, package_name)
     };
 }
@@ -1021,6 +1045,8 @@ ApkClassification classify_entries(const std::filesystem::path& apk_path,
                 extract_entry_data(apk, *resources_entry),
                 *manifest_info.application_icon_resource);
         }
+        classification.manifest_application_class =
+            manifest_info.application_class;
         classification.manifest_launch_activity =
             manifest_info.launch_activity;
     }
@@ -1132,6 +1158,8 @@ ApkLaunchResult prepare_apk_launch(const ApkLaunchConfig& config)
         classification.manifest_application_label;
     std::optional<std::string> manifest_application_icon =
         classification.manifest_application_icon;
+    std::optional<std::string> manifest_application_class =
+        classification.manifest_application_class;
     std::optional<std::string> manifest_launch_activity =
         classification.manifest_launch_activity;
 
@@ -1190,6 +1218,7 @@ ApkLaunchResult prepare_apk_launch(const ApkLaunchConfig& config)
     result.manifest_package = manifest_package;
     result.manifest_application_label = manifest_application_label;
     result.manifest_application_icon = manifest_application_icon;
+    result.manifest_application_class = manifest_application_class;
     result.manifest_launch_activity = manifest_launch_activity;
 
     for (const ZipEntry& lib : arm64_libs) {
