@@ -253,13 +253,16 @@ if(APPLE)
     set(JDK_LIBJVM      ${JDK_BIN_DIR}/lib/server/libjvm.dylib)
     set(JDK_LIBJLI      ${JDK_BIN_DIR}/lib/jli/libjli.dylib)
     set(JDK_INCLUDE_DIR ${JDK_BIN_DIR}/include)
+    set(JDK_JAVA        ${JDK_BIN_DIR}/bin/java)
+    set(JDK_JAVAC       ${JDK_BIN_DIR}/bin/javac)
+    set(JDK_JAR         ${JDK_BIN_DIR}/bin/jar)
 
-    if(EXISTS "${JDK_LIBJVM}")
+    if(EXISTS "${JDK_LIBJVM}" AND EXISTS "${JDK_JAVAC}" AND EXISTS "${JDK_JAR}")
         message(STATUS "Bundled JDK: ${JDK_LIBJVM}")
         set(MUPLAR_HAS_BUNDLED_JDK ON)
     else()
         message(WARNING
-            "Bundled JDK not found at ${JDK_BIN_DIR}\n"
+            "Complete bundled JDK not found at ${JDK_BIN_DIR}\n"
             "  Run: tools/setup-jdk.sh\n"
             "  Java-only APK bootstrap will be disabled until then.")
         set(MUPLAR_HAS_BUNDLED_JDK OFF)

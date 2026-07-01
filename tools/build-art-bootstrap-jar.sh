@@ -87,7 +87,7 @@ else
         -d "$CLASSES_DIR" @"$BUILD_DIR/sources.txt"
 fi
 
-(cd "$CLASSES_DIR" && "$JAR_BIN" cf "$OUT" com android)
+(cd "$CLASSES_DIR" && "$JAR_BIN" cf "$OUT" com android org)
 
 echo "[ART] Built bootstrap jar: $OUT"
 file "$OUT"

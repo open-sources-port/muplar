@@ -131,8 +131,8 @@ echo "Building Java ART bootstrap jar done."
 
 echo "========================================="
 echo "Building Java launcher APK test..."
-export scriptToRun=$ROOT_DIR/tests/assets/apk/create-java-launcher-apk.sh
-sh ${scriptToRun}
+export scriptToRun=$ROOT_DIR/platform/android-aarch64/builtin-apps/build-launcher-apk.sh
+zsh ${scriptToRun}
 returnCode=$?
 if [ "$returnCode" -ne 0 ]; then
     echo "Building Java launcher APK test error."

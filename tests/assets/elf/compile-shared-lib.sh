@@ -199,6 +199,21 @@ $CC -shared -fPIC \
 echo "[compile] Built: $SYSROOT_TMP/libbindertranstest.so"
 file "$SYSROOT_TMP/libbindertranstest.so"
 
+# --- APK muplard-routed binder transaction fixture ---
+echo "[compile] Building libbindermuplardtest.so ..."
+$CC -shared -fPIC \
+    -Wl,-z,max-page-size=4096 \
+    -isystem "$NDK_SYSROOT/usr/include" \
+    -isystem "$NDK_SYSROOT/usr/include/aarch64-linux-android" \
+    "$ROOT_DIR/tests/assets/elf/libbindermuplardtest.c" \
+    -lbinder_ndk \
+    -landroid \
+    -llog \
+    -o "$SYSROOT_TMP/libbindermuplardtest.so"
+
+echo "[compile] Built: $SYSROOT_TMP/libbindermuplardtest.so"
+file "$SYSROOT_TMP/libbindermuplardtest.so"
+
 # --- APK local binder onTransact fixture ---
 echo "[compile] Building libbinderlocaltest.so ..."
 $CC -shared -fPIC \

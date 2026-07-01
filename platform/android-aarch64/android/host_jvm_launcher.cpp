@@ -139,6 +139,25 @@ std::filesystem::path bundled_libjvm_path()
 #endif
 }
 
+std::filesystem::path configure_bundled_jdk_environment()
+{
+    auto libjvm = bundled_libjvm_path();
+    if (libjvm.empty()) return {};
+
+    auto jdk_home = libjvm.parent_path().parent_path().parent_path();
+    auto jdk_bin = jdk_home / "bin";
+    ::setenv("JAVA_HOME", jdk_home.string().c_str(), /*overwrite=*/1);
+
+    std::string path = jdk_bin.string();
+    if (const char* current_path = std::getenv("PATH");
+        current_path && *current_path) {
+        path += ':';
+        path += current_path;
+    }
+    ::setenv("PATH", path.c_str(), /*overwrite=*/1);
+    return jdk_home;
+}
+
 // ---------------------------------------------------------------------------
 // JNI helper — build a jstring String[] from a vector<string>
 // ---------------------------------------------------------------------------
@@ -176,6 +195,20 @@ std::filesystem::path convert_apk_dex_to_jar(
     std::error_code ec;
     std::filesystem::create_directories(scratch_dir, ec);
     std::filesystem::create_directories(out_jar.parent_path(), ec);
+    configure_bundled_jdk_environment();
+
+    std::filesystem::path normalization_marker =
+        out_jar.string() + ".normalized-v2";
+    if (std::filesystem::is_regular_file(out_jar, ec) &&
+        std::filesystem::is_regular_file(normalization_marker, ec)) {
+        auto output_time = std::filesystem::last_write_time(out_jar, ec);
+        auto input_time = std::filesystem::last_write_time(apk_path, ec);
+        if (!ec && output_time >= input_time) {
+            std::cerr << "[HostJVM] cached DEX -> JAR: "
+                      << out_jar.string() << "\n";
+            return out_jar;
+        }
+    }
 
     // Strategy 0: Look for a companion *-classes.jar placed next to the APK
     // by the APK build script (create-tiny-java-activity-apk.sh and similar).
@@ -212,6 +245,13 @@ std::filesystem::path convert_apk_dex_to_jar(
             }
             pclose(f);
         }
+        if (d2j.empty()) {
+            std::filesystem::path bundled =
+                std::filesystem::path(MUPLAR_SOURCE_DIR) /
+                "third_party/dex-tools-bin/d2j-dex2jar.sh";
+            if (std::filesystem::is_regular_file(bundled, ec))
+                d2j = bundled.string();
+        }
         if (!d2j.empty() && std::filesystem::is_regular_file(d2j)) {
             std::string cmd = "\"" + d2j + "\""
                             + " -f"
@@ -222,6 +262,17 @@ std::filesystem::path convert_apk_dex_to_jar(
                       << "[HostJVM]   " << cmd << "\n";
             int rc = std::system(cmd.c_str());
             if (rc == 0 && std::filesystem::is_regular_file(out_jar, ec)) {
+                std::string normalize = "python3 \"" +
+                    (std::filesystem::path(MUPLAR_SOURCE_DIR) /
+                     "tools/normalize-dex2jar.py").string() +
+                    "\" \"" + out_jar.string() + "\"";
+                int normalize_rc = std::system(normalize.c_str());
+                if (normalize_rc != 0) {
+                    std::cerr << "[HostJVM] dex2jar normalization failed (exit "
+                              << normalize_rc << ")\n";
+                    std::filesystem::remove(out_jar, ec);
+                    return {};
+                }
                 std::cerr << "[HostJVM] DEX -> JAR: " << out_jar.string() << "\n";
                 return out_jar;
             }
@@ -229,51 +280,8 @@ std::filesystem::path convert_apk_dex_to_jar(
         }
     }
 
-    // Strategy 2: Extract .class files from the APK's companion build directory.
-    // The tinyjavaactivity APK is built by create-tiny-java-activity-apk.sh which
-    // leaves compiled .class files in build/apk/<name>-<pid>/classes/.
-    // Find the most recently modified companion classes dir next to the APK.
-    {
-        std::filesystem::path apk_dir = apk_path.parent_path();
-        // APK build dirs land in build/apk/ two levels up from data/local/tmp
-        std::filesystem::path apk_root = apk_dir.parent_path().parent_path()
-                                       / "apk";
-
-        std::filesystem::path best_classes_dir;
-        std::filesystem::file_time_type best_time{};
-
-        if (std::filesystem::is_directory(apk_root, ec)) {
-            for (auto& entry : std::filesystem::directory_iterator(apk_root, ec)) {
-                if (!entry.is_directory()) continue;
-                auto classes_dir = entry.path() / "classes";
-                if (!std::filesystem::is_directory(classes_dir, ec)) continue;
-                auto mtime = entry.last_write_time(ec);
-                if (mtime > best_time) {
-                    best_time = mtime;
-                    best_classes_dir = classes_dir;
-                }
-            }
-        }
-
-        if (!best_classes_dir.empty()) {
-            // Pack the .class files into a plain JAR
-            std::string jar_cmd = "cd \"" + best_classes_dir.string() + "\""
-                                + " && jar cf \"" + out_jar.string() + "\" .";
-            std::cerr << "[HostJVM] packaging .class files -> JAR\n"
-                      << "[HostJVM]   " << jar_cmd << "\n";
-            int rc = std::system(jar_cmd.c_str());
-            if (rc == 0 && std::filesystem::is_regular_file(out_jar, ec)) {
-                std::cerr << "[HostJVM] DEX -> JAR (via .class files): "
-                          << out_jar.string() << "\n";
-                return out_jar;
-            }
-        }
-    }
-
-    // Strategy 3: Use d8 to get a classes.dex, then use dex2jar via jar tool.
-    // (Informational fallback — URLClassLoader needs plain .class files.)
     std::cerr << "[HostJVM] WARNING: no DEX->class converter found.\n"
-              << "[HostJVM]   Install dex-tools (brew install dex-tools) for full support.\n"
+              << "[HostJVM]   Run tools/setup-dex2jar.sh for DEX-only APK support.\n"
               << "[HostJVM]   Continuing without converted JAR; class loading will fail "
                  "if APK has DEX-only classes.\n";
     return {};
@@ -364,15 +372,54 @@ int host_jvm_launch(const HostJvmLaunchConfig& config)
         }
     }
     std::string opt_home = "-Djava.home=" + jdk_home.string();
-    ::setenv("JAVA_HOME", jdk_home.string().c_str(), /*overwrite=*/0);
+    ::setenv("JAVA_HOME", jdk_home.string().c_str(), /*overwrite=*/1);
     std::cerr << "[HostJVM] java.home=" << jdk_home.string() << "\n";
 
     std::string opt_cp  = "-Djava.class.path=" + classpath;
+    std::string opt_noverify = "-Xverify:none";
     std::string opt_tmp;
     if (!config.scratch_dir.empty()) {
         std::error_code ec;
         std::filesystem::create_directories(config.scratch_dir, ec);
         opt_tmp = "-Djava.io.tmpdir=" + config.scratch_dir.string();
+    }
+    std::string opt_package_registry;
+    if (!config.package_registry.empty()) {
+        opt_package_registry = "-Dmuplar.package.registry=" +
+            config.package_registry.string();
+    }
+    std::string opt_launcher_executable;
+    if (!config.launcher_executable.empty()) {
+        opt_launcher_executable = "-Dmuplar.launcher.executable=" +
+            config.launcher_executable.string();
+    }
+    std::string opt_prefix_name;
+    if (!config.prefix_name.empty()) {
+        opt_prefix_name = "-Dmuplar.prefix.name=" + config.prefix_name;
+    }
+    std::string opt_package_name;
+    if (!config.package_name.empty()) {
+        opt_package_name = "-Dmuplar.package.name=" + config.package_name;
+    }
+    std::string opt_prefix_state_dir;
+    if (!config.prefix_state_dir.empty()) {
+        opt_prefix_state_dir = "-Dmuplar.prefix.state.dir=" +
+            config.prefix_state_dir.string();
+    }
+    std::string opt_resource_apk;
+    if (!config.resource_apk_path.empty()) {
+        opt_resource_apk = "-Dmuplar.apk.resource.path=" +
+            config.resource_apk_path.string();
+    }
+    std::string opt_service_socket;
+    if (!config.service_socket.empty()) {
+        opt_service_socket = "-Dmuplar.service.socket=" +
+            config.service_socket.string();
+    }
+    std::string opt_service_executable;
+    if (!config.service_executable.empty()) {
+        opt_service_executable = "-Dmuplar.service.executable=" +
+            config.service_executable.string();
     }
 
     std::vector<JavaVMOption> jvm_options;
@@ -384,7 +431,16 @@ int host_jvm_launch(const HostJvmLaunchConfig& config)
     };
     add_opt(opt_home);
     add_opt(opt_cp);
+    add_opt(opt_noverify);
     if (!opt_tmp.empty()) add_opt(opt_tmp);
+    if (!opt_package_registry.empty()) add_opt(opt_package_registry);
+    if (!opt_launcher_executable.empty()) add_opt(opt_launcher_executable);
+    if (!opt_prefix_name.empty()) add_opt(opt_prefix_name);
+    if (!opt_package_name.empty()) add_opt(opt_package_name);
+    if (!opt_prefix_state_dir.empty()) add_opt(opt_prefix_state_dir);
+    if (!opt_resource_apk.empty()) add_opt(opt_resource_apk);
+    if (!opt_service_socket.empty()) add_opt(opt_service_socket);
+    if (!opt_service_executable.empty()) add_opt(opt_service_executable);
 
     JavaVMInitArgs vm_args{};
     vm_args.version            = JNI_VERSION_1_8;
@@ -428,11 +484,12 @@ int host_jvm_launch(const HostJvmLaunchConfig& config)
             goto destroy;
         }
 
-        // ── 7. Build String[] { apkPath, packageName, launchActivity } ─────
+        // ── 7. Build process bootstrap arguments ──────────────────────────
         std::vector<std::string> args = {
             config.apk_path,
             config.package_name,
             config.launch_activity,
+            config.application_class,
         };
         jobjectArray args_arr = make_string_array(env, args);
         if (!args_arr || env->ExceptionCheck()) {

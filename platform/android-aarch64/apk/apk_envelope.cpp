@@ -358,6 +358,138 @@ std::vector<std::string> axml_string_pool(const std::vector<uint8_t>& manifest)
     return strings;
 }
 
+std::vector<std::string> string_pool_at(const std::vector<uint8_t>& data,
+                                        size_t off)
+{
+    constexpr uint16_t RES_STRING_POOL_TYPE = 0x0001;
+    constexpr uint32_t UTF8_FLAG = 0x00000100;
+
+    if (off + 28 > data.size() || read_u16(data, off) != RES_STRING_POOL_TYPE)
+        return {};
+    uint16_t header_size = read_u16(data, off + 2);
+    uint32_t chunk_size = read_u32(data, off + 4);
+    uint32_t string_count = read_u32(data, off + 8);
+    uint32_t flags = read_u32(data, off + 16);
+    uint32_t strings_start = read_u32(data, off + 20);
+    if (chunk_size < header_size || off + chunk_size > data.size() ||
+        header_size + static_cast<uint64_t>(string_count) * 4u > chunk_size ||
+        strings_start >= chunk_size) {
+        return {};
+    }
+
+    std::vector<std::string> strings;
+    strings.reserve(string_count);
+    for (uint32_t i = 0; i < string_count; ++i) {
+        uint32_t string_off = read_u32(data, off + header_size + i * 4u);
+        size_t string_pos = off + strings_start + string_off;
+        if (string_pos >= off + chunk_size) {
+            strings.emplace_back();
+            continue;
+        }
+        try {
+            strings.push_back((flags & UTF8_FLAG) != 0
+                ? utf8_length_string(data, string_pos)
+                : utf16_length_string(data, string_pos));
+        } catch (const std::exception&) {
+            strings.emplace_back();
+        }
+    }
+    return strings;
+}
+
+std::optional<std::string>
+resolve_resource_string(const std::vector<uint8_t>& resources,
+                        uint32_t resource_id)
+{
+    constexpr uint16_t RES_TABLE_TYPE = 0x0002;
+    constexpr uint16_t RES_TABLE_PACKAGE_TYPE = 0x0200;
+    constexpr uint16_t RES_TABLE_TYPE_TYPE = 0x0201;
+    constexpr uint32_t NO_ENTRY = 0xffffffffu;
+    constexpr uint16_t FLAG_COMPLEX = 0x0001;
+    constexpr uint8_t FLAG_SPARSE = 0x01;
+    constexpr uint8_t TYPE_STRING = 0x03;
+
+    if (resources.size() < 12 || read_u16(resources, 0) != RES_TABLE_TYPE)
+        return std::nullopt;
+    uint16_t table_header_size = read_u16(resources, 2);
+    uint32_t table_size = read_u32(resources, 4);
+    if (table_size < table_header_size || table_size > resources.size())
+        return std::nullopt;
+
+    std::vector<std::string> global_strings;
+    size_t off = table_header_size;
+    while (off + 8 <= table_size) {
+        uint16_t type = read_u16(resources, off);
+        uint16_t header_size = read_u16(resources, off + 2);
+        uint32_t chunk_size = read_u32(resources, off + 4);
+        if (chunk_size < header_size || off + chunk_size > table_size)
+            break;
+        if (type == 0x0001 && global_strings.empty()) {
+            global_strings = string_pool_at(resources, off);
+        } else if (type == RES_TABLE_PACKAGE_TYPE && header_size >= 284 &&
+                   read_u32(resources, off + 8) == (resource_id >> 24)) {
+            size_t package_end = off + chunk_size;
+            size_t child = off + header_size;
+            while (child + 20 <= package_end) {
+                uint16_t child_type = read_u16(resources, child);
+                uint16_t child_header_size = read_u16(resources, child + 2);
+                uint32_t child_size = read_u32(resources, child + 4);
+                if (child_size < child_header_size ||
+                    child + child_size > package_end) {
+                    break;
+                }
+                if (child_type == RES_TABLE_TYPE_TYPE &&
+                    resources[child + 8] == ((resource_id >> 16) & 0xffu)) {
+                    uint8_t type_flags = resources[child + 9];
+                    uint32_t entry_count = read_u32(resources, child + 12);
+                    uint32_t entries_start = read_u32(resources, child + 16);
+                    uint32_t wanted = resource_id & 0xffffu;
+                    uint32_t entry_offset = NO_ENTRY;
+
+                    if ((type_flags & FLAG_SPARSE) != 0) {
+                        for (uint32_t i = 0; i < entry_count; ++i) {
+                            size_t sparse = child + child_header_size + i * 4u;
+                            if (sparse + 4 > child + child_size)
+                                break;
+                            if (read_u16(resources, sparse) == wanted) {
+                                entry_offset =
+                                    static_cast<uint32_t>(read_u16(resources,
+                                                                  sparse + 2)) * 4u;
+                                break;
+                            }
+                        }
+                    } else if (wanted < entry_count) {
+                        size_t offset_pos =
+                            child + child_header_size + wanted * 4u;
+                        if (offset_pos + 4 <= child + child_size)
+                            entry_offset = read_u32(resources, offset_pos);
+                    }
+
+                    if (entry_offset != NO_ENTRY) {
+                        size_t entry = child + entries_start + entry_offset;
+                        if (entry + 8 <= child + child_size) {
+                            uint16_t entry_size = read_u16(resources, entry);
+                            uint16_t entry_flags = read_u16(resources, entry + 2);
+                            size_t value = entry + entry_size;
+                            if ((entry_flags & FLAG_COMPLEX) == 0 &&
+                                value + 8 <= child + child_size &&
+                                resources[value + 3] == TYPE_STRING) {
+                                uint32_t string_index =
+                                    read_u32(resources, value + 4);
+                                if (string_index < global_strings.size())
+                                    return global_strings[string_index];
+                            }
+                        }
+                    }
+                }
+                child += child_size;
+            }
+        }
+        off += chunk_size;
+    }
+    return std::nullopt;
+}
+
 std::optional<std::string>
 infer_plain_manifest_lib(const std::string& manifest,
                          const std::vector<std::string>& available_bases)
@@ -480,7 +612,10 @@ infer_plain_manifest_launch_activity(const std::string& manifest,
                 package_name.value_or(std::string()), *name);
             candidate.is_launcher =
                 block.find("android.intent.action.MAIN") != std::string::npos &&
-                block.find("android.intent.category.LAUNCHER") != std::string::npos;
+                (block.find("android.intent.category.LAUNCHER") != std::string::npos ||
+                 block.find("android.intent.category.HOME") != std::string::npos ||
+                 block.find("android.intent.category.SECONDARY_HOME") !=
+                     std::string::npos);
             candidates.push_back(std::move(candidate));
         }
 
@@ -574,9 +709,208 @@ infer_binary_manifest_package(const std::vector<uint8_t>& manifest)
     return std::nullopt;
 }
 
+std::optional<std::string> infer_binary_manifest_string_attribute(
+    const std::vector<uint8_t>& manifest,
+    const std::string& element,
+    const std::string& attribute)
+{
+    constexpr uint16_t RES_XML_START_ELEMENT_TYPE = 0x0102;
+    constexpr uint32_t NO_INDEX = 0xffffffffu;
+    constexpr uint8_t TYPE_STRING = 0x03;
+
+    std::vector<std::string> strings = axml_string_pool(manifest);
+    if (strings.empty())
+        return std::nullopt;
+
+    size_t off = manifest.size() >= 8 && read_u16(manifest, 0) == 0x0003
+        ? 8 : 0;
+    while (off + 8 <= manifest.size()) {
+        uint16_t type = read_u16(manifest, off);
+        uint16_t header_size = read_u16(manifest, off + 2);
+        uint32_t chunk_size = read_u32(manifest, off + 4);
+        if (chunk_size < header_size || off + chunk_size > manifest.size())
+            break;
+
+        if (type == RES_XML_START_ELEMENT_TYPE && off + 36 <= manifest.size()) {
+            uint32_t element_idx = read_u32(manifest, off + 20);
+            if (element_idx < strings.size() && strings[element_idx] == element) {
+                uint16_t attr_start = read_u16(manifest, off + 24);
+                uint16_t attr_size = read_u16(manifest, off + 26);
+                uint16_t attr_count = read_u16(manifest, off + 28);
+                size_t attrs = off + 16u + attr_start;
+                for (uint16_t i = 0; i < attr_count; ++i) {
+                    size_t a = attrs + static_cast<size_t>(i) * attr_size;
+                    if (a + 20 > off + chunk_size)
+                        break;
+                    uint32_t name_idx = read_u32(manifest, a + 4);
+                    if (name_idx >= strings.size() ||
+                        strings[name_idx] != attribute)
+                        continue;
+                    uint32_t raw_idx = read_u32(manifest, a + 8);
+                    if (raw_idx != NO_INDEX && raw_idx < strings.size())
+                        return strings[raw_idx];
+                    uint8_t data_type = manifest[a + 15];
+                    uint32_t data = read_u32(manifest, a + 16);
+                    if (data_type == TYPE_STRING && data < strings.size())
+                        return strings[data];
+                }
+            }
+        }
+        off += chunk_size;
+    }
+    return std::nullopt;
+}
+
+std::optional<uint32_t> infer_binary_manifest_resource_attribute(
+    const std::vector<uint8_t>& manifest,
+    const std::string& element,
+    const std::string& attribute)
+{
+    constexpr uint16_t RES_XML_START_ELEMENT_TYPE = 0x0102;
+    constexpr uint8_t TYPE_REFERENCE = 0x01;
+    constexpr uint8_t TYPE_DYNAMIC_REFERENCE = 0x07;
+
+    std::vector<std::string> strings = axml_string_pool(manifest);
+    size_t off = manifest.size() >= 8 && read_u16(manifest, 0) == 0x0003
+        ? 8 : 0;
+    while (!strings.empty() && off + 8 <= manifest.size()) {
+        uint16_t type = read_u16(manifest, off);
+        uint16_t header_size = read_u16(manifest, off + 2);
+        uint32_t chunk_size = read_u32(manifest, off + 4);
+        if (chunk_size < header_size || off + chunk_size > manifest.size())
+            break;
+        if (type == RES_XML_START_ELEMENT_TYPE && off + 36 <= manifest.size()) {
+            uint32_t element_idx = read_u32(manifest, off + 20);
+            if (element_idx < strings.size() && strings[element_idx] == element) {
+                uint16_t attr_start = read_u16(manifest, off + 24);
+                uint16_t attr_size = read_u16(manifest, off + 26);
+                uint16_t attr_count = read_u16(manifest, off + 28);
+                size_t attrs = off + 16u + attr_start;
+                for (uint16_t i = 0; i < attr_count; ++i) {
+                    size_t a = attrs + static_cast<size_t>(i) * attr_size;
+                    if (a + 20 > off + chunk_size)
+                        break;
+                    uint32_t name_idx = read_u32(manifest, a + 4);
+                    if (name_idx < strings.size() &&
+                        strings[name_idx] == attribute) {
+                        uint8_t data_type = manifest[a + 15];
+                        if (data_type == TYPE_REFERENCE ||
+                            data_type == TYPE_DYNAMIC_REFERENCE) {
+                            return read_u32(manifest, a + 16);
+                        }
+                    }
+                }
+            }
+        }
+        off += chunk_size;
+    }
+    return std::nullopt;
+}
+
+std::optional<std::string> infer_binary_manifest_launch_activity(
+    const std::vector<uint8_t>& manifest,
+    const std::optional<std::string>& package_name)
+{
+    constexpr uint16_t RES_XML_START_ELEMENT_TYPE = 0x0102;
+    constexpr uint16_t RES_XML_END_ELEMENT_TYPE = 0x0103;
+    constexpr uint32_t NO_INDEX = 0xffffffffu;
+    constexpr uint8_t TYPE_STRING = 0x03;
+
+    std::vector<std::string> strings = axml_string_pool(manifest);
+    if (strings.empty())
+        return std::nullopt;
+
+    auto attribute_value = [&](size_t element_off,
+                               const std::string& wanted)
+        -> std::optional<std::string> {
+        uint32_t chunk_size = read_u32(manifest, element_off + 4);
+        uint16_t attr_start = read_u16(manifest, element_off + 24);
+        uint16_t attr_size = read_u16(manifest, element_off + 26);
+        uint16_t attr_count = read_u16(manifest, element_off + 28);
+        size_t attrs = element_off + 16u + attr_start;
+        for (uint16_t i = 0; i < attr_count; ++i) {
+            size_t a = attrs + static_cast<size_t>(i) * attr_size;
+            if (a + 20 > element_off + chunk_size)
+                break;
+            uint32_t name_idx = read_u32(manifest, a + 4);
+            if (name_idx >= strings.size() || strings[name_idx] != wanted)
+                continue;
+            uint32_t raw_idx = read_u32(manifest, a + 8);
+            if (raw_idx != NO_INDEX && raw_idx < strings.size())
+                return strings[raw_idx];
+            if (manifest[a + 15] == TYPE_STRING) {
+                uint32_t value_idx = read_u32(manifest, a + 16);
+                if (value_idx < strings.size())
+                    return strings[value_idx];
+            }
+        }
+        return std::nullopt;
+    };
+
+    std::optional<std::string> first_activity;
+    std::optional<std::string> current_activity;
+    bool has_main_action = false;
+    bool has_launcher_category = false;
+    size_t off = manifest.size() >= 8 && read_u16(manifest, 0) == 0x0003
+        ? 8 : 0;
+    while (off + 8 <= manifest.size()) {
+        uint16_t type = read_u16(manifest, off);
+        uint16_t header_size = read_u16(manifest, off + 2);
+        uint32_t chunk_size = read_u32(manifest, off + 4);
+        if (chunk_size < header_size || off + chunk_size > manifest.size())
+            break;
+
+        if (type == RES_XML_START_ELEMENT_TYPE && off + 36 <= manifest.size()) {
+            uint32_t name_idx = read_u32(manifest, off + 20);
+            std::string element = name_idx < strings.size()
+                ? strings[name_idx] : std::string();
+            if (element == "activity") {
+                auto name = attribute_value(off, "name");
+                if (name) {
+                    current_activity = normalize_activity_name(
+                        package_name.value_or(std::string()), *name);
+                    if (!first_activity)
+                        first_activity = current_activity;
+                    has_main_action = false;
+                    has_launcher_category = false;
+                }
+            } else if (current_activity && element == "action") {
+                has_main_action = has_main_action ||
+                    attribute_value(off, "name") ==
+                        std::optional<std::string>("android.intent.action.MAIN");
+            } else if (current_activity && element == "category") {
+                auto category = attribute_value(off, "name");
+                has_launcher_category = has_launcher_category ||
+                    category == std::optional<std::string>(
+                        "android.intent.category.LAUNCHER") ||
+                    category == std::optional<std::string>(
+                        "android.intent.category.HOME") ||
+                    category == std::optional<std::string>(
+                        "android.intent.category.SECONDARY_HOME");
+            }
+        } else if (type == RES_XML_END_ELEMENT_TYPE &&
+                   off + 24 <= manifest.size()) {
+            uint32_t name_idx = read_u32(manifest, off + 20);
+            if (current_activity && name_idx < strings.size() &&
+                strings[name_idx] == "activity") {
+                if (has_main_action && has_launcher_category)
+                    return current_activity;
+                current_activity.reset();
+            }
+        }
+        off += chunk_size;
+    }
+    return first_activity;
+}
+
 struct ManifestInfo {
     std::optional<std::string> lib_name;
     std::optional<std::string> package_name;
+    std::optional<std::string> application_label;
+    std::optional<uint32_t> application_label_resource;
+    std::optional<std::string> application_icon;
+    std::optional<uint32_t> application_icon_resource;
+    std::optional<std::string> application_class;
     std::optional<std::string> launch_activity;
 };
 
@@ -589,9 +923,32 @@ ManifestInfo infer_manifest_info(const std::vector<uint8_t>& manifest,
         std::string text(reinterpret_cast<const char*>(manifest.data()),
                          manifest.size());
         auto package_name = infer_plain_manifest_package(text);
+        auto application_label =
+            plain_manifest_attribute(text, "application", "android:label");
+        if (!application_label)
+            application_label =
+                plain_manifest_attribute(text, "application", "label");
+        auto application_icon =
+            plain_manifest_attribute(text, "application", "android:icon");
+        if (!application_icon)
+            application_icon =
+                plain_manifest_attribute(text, "application", "icon");
+        auto application_class =
+            plain_manifest_attribute(text, "application", "android:name");
+        if (!application_class)
+            application_class =
+                plain_manifest_attribute(text, "application", "name");
+        if (application_class)
+            application_class = normalize_activity_name(
+                package_name.value_or(std::string()), *application_class);
         return {
             infer_plain_manifest_lib(text, available_bases),
             package_name,
+            application_label,
+            std::nullopt,
+            application_icon,
+            std::nullopt,
+            application_class,
             infer_plain_manifest_launch_activity(text, package_name)
         };
     }
@@ -599,7 +956,18 @@ ManifestInfo infer_manifest_info(const std::vector<uint8_t>& manifest,
     return {
         infer_binary_manifest_lib(manifest, available_bases),
         package_name,
-        std::nullopt
+        infer_binary_manifest_string_attribute(manifest, "application", "label"),
+        infer_binary_manifest_resource_attribute(manifest, "application", "label"),
+        infer_binary_manifest_string_attribute(manifest, "application", "icon"),
+        infer_binary_manifest_resource_attribute(manifest, "application", "icon"),
+        [&]() -> std::optional<std::string> {
+            auto value = infer_binary_manifest_string_attribute(
+                manifest, "application", "name");
+            if (!value) return std::nullopt;
+            return normalize_activity_name(
+                package_name.value_or(std::string()), *value);
+        }(),
+        infer_binary_manifest_launch_activity(manifest, package_name)
     };
 }
 
@@ -633,10 +1001,13 @@ ApkClassification classify_entries(const std::filesystem::path& apk_path,
     classification.apk_path = apk_path;
 
     const ZipEntry* manifest_entry = nullptr;
+    const ZipEntry* resources_entry = nullptr;
     for (const ZipEntry& entry : entries) {
         if (entry.name == "AndroidManifest.xml") {
             manifest_entry = &entry;
             classification.has_manifest = true;
+        } else if (entry.name == "resources.arsc") {
+            resources_entry = &entry;
         } else if (starts_with(entry.name, "lib/arm64-v8a/") &&
                    ends_with(entry.name, ".so")) {
             classification.arm64_libs.push_back(entry.name);
@@ -658,6 +1029,24 @@ ApkClassification classify_entries(const std::filesystem::path& apk_path,
         ManifestInfo manifest_info = infer_manifest_info(manifest, available_bases);
         classification.manifest_lib = manifest_info.lib_name;
         classification.manifest_package = manifest_info.package_name;
+        classification.manifest_application_label =
+            manifest_info.application_label;
+        if (!classification.manifest_application_label &&
+            manifest_info.application_label_resource && resources_entry) {
+            classification.manifest_application_label = resolve_resource_string(
+                extract_entry_data(apk, *resources_entry),
+                *manifest_info.application_label_resource);
+        }
+        classification.manifest_application_icon = manifest_info.application_icon;
+        if ((!classification.manifest_application_icon ||
+             classification.manifest_application_icon->front() == '@') &&
+            manifest_info.application_icon_resource && resources_entry) {
+            classification.manifest_application_icon = resolve_resource_string(
+                extract_entry_data(apk, *resources_entry),
+                *manifest_info.application_icon_resource);
+        }
+        classification.manifest_application_class =
+            manifest_info.application_class;
         classification.manifest_launch_activity =
             manifest_info.launch_activity;
     }
@@ -697,6 +1086,31 @@ ApkClassification classify_apk(const std::filesystem::path& apk_path)
     std::vector<uint8_t> apk = read_file(apk_path);
     std::vector<ZipEntry> entries = read_zip_entries(apk);
     return classify_entries(apk_path, apk, entries);
+}
+
+bool extract_apk_entry(const std::filesystem::path& apk_path,
+                       const std::string& entry_path,
+                       const std::filesystem::path& output_path)
+{
+    if (!safe_zip_path(entry_path))
+        return false;
+    std::vector<uint8_t> apk = read_file(apk_path);
+    std::vector<ZipEntry> entries = read_zip_entries(apk);
+    auto found = std::find_if(entries.begin(), entries.end(),
+        [&](const ZipEntry& entry) { return entry.name == entry_path; });
+    if (found == entries.end())
+        return false;
+    std::vector<uint8_t> data = extract_entry_data(apk, *found);
+    std::error_code ec;
+    std::filesystem::create_directories(output_path.parent_path(), ec);
+    if (ec)
+        return false;
+    std::ofstream out(output_path, std::ios::binary | std::ios::trunc);
+    if (!out)
+        return false;
+    if (!data.empty())
+        out.write(reinterpret_cast<const char*>(data.data()), data.size());
+    return static_cast<bool>(out);
 }
 
 ApkLaunchResult prepare_apk_launch(const ApkLaunchConfig& config)
@@ -740,6 +1154,12 @@ ApkLaunchResult prepare_apk_launch(const ApkLaunchConfig& config)
     std::optional<std::string> manifest_lib = classification.manifest_lib;
     std::optional<std::string> manifest_package =
         classification.manifest_package;
+    std::optional<std::string> manifest_application_label =
+        classification.manifest_application_label;
+    std::optional<std::string> manifest_application_icon =
+        classification.manifest_application_icon;
+    std::optional<std::string> manifest_application_class =
+        classification.manifest_application_class;
     std::optional<std::string> manifest_launch_activity =
         classification.manifest_launch_activity;
 
@@ -796,6 +1216,9 @@ ApkLaunchResult prepare_apk_launch(const ApkLaunchConfig& config)
     result.selected_lib = lib_base_name(selected->name);
     result.manifest_lib = manifest_lib;
     result.manifest_package = manifest_package;
+    result.manifest_application_label = manifest_application_label;
+    result.manifest_application_icon = manifest_application_icon;
+    result.manifest_application_class = manifest_application_class;
     result.manifest_launch_activity = manifest_launch_activity;
 
     for (const ZipEntry& lib : arm64_libs) {

@@ -30,8 +30,10 @@ the eventual ART-facing compatibility layer.
 - [x] Add Java-side API stubs only when tied to a real startup failure or focused fixture.
 
 ## Next
-- [ ] Use Launcher3 as the compatibility target after the simple launcher path
-      is stable.
+- [ ] Complete the functional simple-launcher milestones in
+      [Launcher and Launcher3](./launcher3.md).
+- [ ] Use Launcher3 as the compatibility target only after package launching,
+      Android UI/resources, and required framework services are stable.
 - [ ] Keep Java/ART expansion separate from native dependency closure work.
 
 ## Later

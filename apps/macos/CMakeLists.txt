@@ -5,18 +5,26 @@ set(APP_BUNDLE_NAME "Muplar Instance Manager")
 set(APP_BUNDLE "${CMAKE_BINARY_DIR}/bin/${APP_BUNDLE_NAME}.app")
 set(APP_CONTENTS "${APP_BUNDLE}/Contents")
 set(WINE_PREFIX_DIR "${CMAKE_BINARY_DIR}/wine-prefix")
+set(BUILTIN_ANDROID_SOURCE_DIR
+    "${CMAKE_SOURCE_DIR}/platform/android-aarch64/builtin-apps")
 set(BUILTIN_ANDROID_DIR "${CMAKE_BINARY_DIR}/builtin-android")
-
+file(GLOB_RECURSE BUILTIN_ANDROID_SOURCES CONFIGURE_DEPENDS
+    "${BUILTIN_ANDROID_SOURCE_DIR}/launcher/*")
 file(GLOB_RECURSE ANDROID_BOOTSTRAP_JAVA CONFIGURE_DEPENDS
     "${CMAKE_SOURCE_DIR}/platform/android-aarch64/java-bootstrap/*.java")
+
 add_custom_command(
     OUTPUT
         "${BUILTIN_ANDROID_DIR}/muplar-launcher.apk"
         "${BUILTIN_ANDROID_DIR}/muplar-launcher-classes.jar"
     COMMAND ${CMAKE_COMMAND} -E make_directory "${BUILTIN_ANDROID_DIR}"
-    COMMAND zsh "${CMAKE_SOURCE_DIR}/tools/build-art-bootstrap-jar.sh"
-        --sysroot "${CMAKE_BINARY_DIR}/sysroot"
-    COMMAND zsh "${CMAKE_SOURCE_DIR}/tests/assets/apk/create-java-launcher-apk.sh"
+    COMMAND ${CMAKE_COMMAND} -E env
+        "JAVA_HOME=${JDK_BIN_DIR}" "JAVAC=${JDK_JAVAC}" "JAR=${JDK_JAR}"
+        zsh "${CMAKE_SOURCE_DIR}/tools/build-art-bootstrap-jar.sh"
+            --sysroot "${CMAKE_BINARY_DIR}/sysroot"
+    COMMAND ${CMAKE_COMMAND} -E env
+        "JAVA_HOME=${JDK_BIN_DIR}" "JAVAC=${JDK_JAVAC}" "JAR=${JDK_JAR}"
+        zsh "${BUILTIN_ANDROID_SOURCE_DIR}/build-launcher-apk.sh"
     COMMAND ${CMAKE_COMMAND} -E copy
         "${CMAKE_BINARY_DIR}/sysroot/data/local/tmp/javalauncher.apk"
         "${BUILTIN_ANDROID_DIR}/muplar-launcher.apk"
@@ -25,9 +33,11 @@ add_custom_command(
         "${BUILTIN_ANDROID_DIR}/muplar-launcher-classes.jar"
     DEPENDS
         "${CMAKE_SOURCE_DIR}/tools/build-art-bootstrap-jar.sh"
-        "${CMAKE_SOURCE_DIR}/tests/assets/apk/create-java-launcher-apk.sh"
+        "${BUILTIN_ANDROID_SOURCE_DIR}/build-launcher-apk.sh"
+        ${BUILTIN_ANDROID_SOURCES}
         ${ANDROID_BOOTSTRAP_JAVA}
     VERBATIM)
+
 add_custom_target(muplar_android_builtin_apps DEPENDS
     "${BUILTIN_ANDROID_DIR}/muplar-launcher.apk"
     "${BUILTIN_ANDROID_DIR}/muplar-launcher-classes.jar")
@@ -135,6 +145,9 @@ add_custom_target(populate_manager_bundle ALL
              cp -f '${CMAKE_BINARY_DIR}/bin/mup' '${APP_CONTENTS}/MacOS/mup'; \
              codesign --entitlements '${CMAKE_SOURCE_DIR}/mup.entitlements' --force -s - '${APP_CONTENTS}/MacOS/mup'; \
          fi"
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        "$<TARGET_FILE:muplard>" "${APP_CONTENTS}/MacOS/muplard"
+    COMMAND chmod 755 "${APP_CONTENTS}/MacOS/muplard"
 
     # ── Linux Bootstrap Rootfs → Frameworks/ ─────────────────────────────────
     COMMAND bash -c
@@ -323,4 +336,5 @@ add_custom_target(populate_manager_bundle ALL
 )
 
 add_dependencies(populate_manager_bundle muplar_prefix_manager
-    muplar_android_builtin_apps wine_lib dxmt_lib mup wawona_bin egl_gles_stubs_bin)
+    muplar_android_builtin_apps wine_lib dxmt_lib mup muplard wawona_bin
+    egl_gles_stubs_bin)

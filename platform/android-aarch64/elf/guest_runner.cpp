@@ -1437,6 +1437,7 @@ int GuestRunner::run(const GuestRunnerConfig& cfg)
 
             auto art = std::make_unique<android::AndroidRuntime>(&g, android_stubs_gpa, cfg.host_window);
             art->set_asset_root(cfg.apk_assets_dir);
+            art->set_service_socket(cfg.service_socket);
             gpu_bridge = std::move(art);
         } else {
             gpu_bridge = std::make_unique<muplar::runtime::GpuBridge>(&g, android_stubs_gpa, cfg.host_window);

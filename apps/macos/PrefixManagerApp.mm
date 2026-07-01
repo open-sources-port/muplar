@@ -1896,7 +1896,6 @@ static NSString* MapLinuxIconToSFSymbol(NSString* icon)
         @[[self label:@"Distro"], distroPopup],
         @[[self label:@"Arch"], archPopup],
         @[[self label:@"Parent"], [self locationPickerWithField:locationField]],
-        @[[self label:@"Sysroot"], sysrootField],
     ]];
     grid.rowSpacing = 8.0;
     grid.columnSpacing = 12.0;
@@ -1904,7 +1903,7 @@ static NSString* MapLinuxIconToSFSymbol(NSString* icon)
     [grid columnAtIndex:1].width = 420.0;
     alert.accessoryView = [self dialogAccessoryWithGrid:grid
                                                   width:540.0
-                                                 height:200.0];
+                                                 height:168.0];
     alert.window.initialFirstResponder = nameField;
 
     NSModalResponse response = [alert runModal];
@@ -2711,8 +2710,7 @@ static NSString* MapLinuxIconToSFSymbol(NSString* icon)
         selected->packages_dir / "muplar-launcher.apk";
     std::filesystem::path installedJar =
         selected->packages_dir / "muplar-launcher-classes.jar";
-    if (!std::filesystem::exists(installedApk, ec) &&
-        [[NSFileManager defaultManager] isReadableFileAtPath:builtinApk]) {
+    if ([[NSFileManager defaultManager] isReadableFileAtPath:builtinApk]) {
         std::filesystem::copy_file(
             builtinApk.UTF8String, installedApk,
             std::filesystem::copy_options::overwrite_existing, ec);
@@ -2734,7 +2732,11 @@ static NSString* MapLinuxIconToSFSymbol(NSString* icon)
         NSString* name = NSStringFromPath(entry.path().stem());
         @try {
             auto apk = muplar::runtime::apk::classify_apk(entry.path());
-            if (apk.manifest_package && !apk.manifest_package->empty()) {
+            if (apk.manifest_application_label &&
+                !apk.manifest_application_label->empty() &&
+                apk.manifest_application_label->front() != '@') {
+                name = NSStringFromStdString(*apk.manifest_application_label);
+            } else if (apk.manifest_package && !apk.manifest_package->empty()) {
                 name = NSStringFromStdString(*apk.manifest_package);
                 if (*apk.manifest_package == "com.android.settings")
                     name = @"Android Settings";
