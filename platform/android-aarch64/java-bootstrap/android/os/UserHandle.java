@@ -4,6 +4,7 @@ public final class UserHandle {
     public static final UserHandle CURRENT = new UserHandle(myUserId());
     private final int identifier;
     public UserHandle(int identifier) { this.identifier = identifier; }
+    public static UserHandle of(int identifier) { return new UserHandle(identifier); }
     public int getIdentifier() { return identifier; }
     public static int myUserId() {
         try {

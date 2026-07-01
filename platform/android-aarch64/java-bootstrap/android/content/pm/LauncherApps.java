@@ -12,8 +12,17 @@ import java.util.List;
 import java.util.HashSet;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.Executor;
+import java.util.Collections;
 
 public class LauncherApps {
+    public static final class ArchiveCompatibilityParams {
+        public static final ArchiveCompatibilityParams DEFAULT =
+            new ArchiveCompatibilityParams();
+        public ArchiveCompatibilityParams() {}
+        public ArchiveCompatibilityParams(boolean includeArchivedApps) {}
+        public void setEnableUnarchivalConfirmation(boolean enabled) {}
+    }
     private final PackageManager packageManager;
     private final ConcurrentHashMap<Callback, Runnable> callbacks =
         new ConcurrentHashMap<Callback, Runnable>();
@@ -21,6 +30,14 @@ public class LauncherApps {
     public LauncherApps(PackageManager packageManager) {
         this.packageManager = packageManager;
     }
+    public void setArchiveCompatibility(ArchiveCompatibilityParams params) {}
+    public List<PackageInstaller.SessionInfo> getAllPackageInstallerSessions() {
+        return Collections.emptyList();
+    }
+    public void registerPackageInstallerSessionCallback(Executor executor,
+            PackageInstaller.SessionCallback callback) {}
+    public void unregisterPackageInstallerSessionCallback(
+            PackageInstaller.SessionCallback callback) {}
 
     public List<LauncherActivityInfo> getActivityList(String packageName,
                                                        UserHandle user) {

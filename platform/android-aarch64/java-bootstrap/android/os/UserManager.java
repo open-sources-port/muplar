@@ -6,7 +6,11 @@ import java.util.List;
 import com.muplar.runtime.FrameworkServiceClient;
 
 public class UserManager {
+    public boolean isManagedProfile() { return false; }
     public boolean isUserUnlocked() { return true; }
+    public boolean isUserUnlocked(UserHandle user) {
+        return user != null && getUserProfiles().contains(user);
+    }
     public boolean isSystemUser() { return UserHandle.myUserId() == 0; }
     public List<UserHandle> getUserProfiles() {
         String response = FrameworkServiceClient.request("query-users", "");

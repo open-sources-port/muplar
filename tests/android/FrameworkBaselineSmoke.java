@@ -3,6 +3,7 @@ import android.content.Context;
 import android.os.UserManager;
 import android.provider.Settings;
 import android.util.DisplayMetrics;
+import android.util.SparseArray;
 import android.view.WindowManager;
 
 public final class FrameworkBaselineSmoke {
@@ -22,10 +23,16 @@ public final class FrameworkBaselineSmoke {
             throw new AssertionError("settings baseline failed");
         if (context.checkSelfPermission("android.permission.TEST") != 0)
             throw new AssertionError("permission baseline failed");
+        SparseArray<String> sparse = new SparseArray<>();
+        sparse.put(9, "nine");
+        sparse.put(2, "two");
+        if (sparse.keyAt(0) != 2 || !"nine".equals(sparse.get(9)))
+            throw new AssertionError("sparse array baseline failed");
         System.out.println("display=" + metrics.widthPixels + "x" +
             metrics.heightPixels);
         System.out.println("singleUser=ok");
         System.out.println("settings=ok");
         System.out.println("permissions=ok");
+        System.out.println("sparseArray=ok");
     }
 }

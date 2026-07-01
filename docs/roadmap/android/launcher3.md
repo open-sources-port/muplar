@@ -83,6 +83,11 @@ a clean Android prefix. Advanced widgets and customization may follow.
 
 Current runtime checkpoint: the official Android 15 ARM64 Launcher3 APK passes
 multidex conversion, resource-table loading, process startup, and
-`LauncherApplication.onCreate()`. `QuickstepLauncher` class loading succeeds;
-Activity construction currently stops at the missing standard `View` animation
-properties such as `TRANSLATION_X`.
+`LauncherApplication.onCreate()`. `QuickstepLauncher.onCreate()` now initializes
+display/device profiles, `LauncherAppState`, package install-session tracking,
+settings observers, accessibility actions, and transition controllers. The
+official compiled launcher layout is parsed and custom APK views are inflated
+reflectively; `LauncherRootView` construction has reached its `SysUiScrim`
+drawing setup. The next checkpoint is completing the remaining graphics/view
+surface needed to finish root-view inflation and present the first Activity
+frame.

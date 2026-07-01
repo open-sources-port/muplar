@@ -8,7 +8,7 @@ import com.muplar.runtime.HostUi;
 public class ImageView extends View {
     private final Context context;
     public ImageView(Context context) {
-        super(HostUi.createImageView());
+        super(HostUi.createImageView(), context);
         this.context = context;
     }
     public void setImageDrawable(Drawable drawable) {

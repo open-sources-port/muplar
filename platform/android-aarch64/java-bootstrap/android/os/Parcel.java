@@ -81,6 +81,12 @@ public final class Parcel {
         Value value = read(STRING);
         return value.number == 0 ? null : value.text;
     }
+    public void writeParcelable(Parcelable value, int flags) {
+        writeBoolean(value != null);
+        if (value != null) value.writeToParcel(this, flags);
+    }
+    public <T> T readParcelable(ClassLoader loader) { return null; }
+    public <T> T readParcelable(ClassLoader loader, Class<T> type) { return null; }
     public void writeStrongBinder(IBinder binder) {
         values.add(new Value(STRONG_BINDER, binder == null ? 0 : 1, null));
     }

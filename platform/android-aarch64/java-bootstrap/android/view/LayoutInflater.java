@@ -11,6 +11,8 @@ import android.widget.TextView;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayDeque;
 import java.util.Deque;
+import java.lang.reflect.Constructor;
+import android.util.AttributeSet;
 
 public class LayoutInflater {
     private static final int START_ELEMENT = 0x0102;
@@ -77,7 +79,23 @@ public class LayoutInflater {
         if (name.endsWith("CheckBox")) return new CheckBox(context);
         if (name.endsWith("ImageView")) return new ImageView(context);
         if (name.endsWith("ListView")) return new ListView(context);
-        throw new IllegalArgumentException("unsupported layout view: " + name);
+        try {
+            ClassLoader loader = Thread.currentThread().getContextClassLoader();
+            Class<?> type = Class.forName(name, true, loader);
+            if (!View.class.isAssignableFrom(type))
+                throw new IllegalArgumentException("layout tag is not a View: " + name);
+            try {
+                Constructor<?> constructor = type.getConstructor(
+                    Context.class, AttributeSet.class);
+                return (View) constructor.newInstance(context, null);
+            } catch (NoSuchMethodException ignored) {
+                Constructor<?> constructor = type.getConstructor(Context.class);
+                return (View) constructor.newInstance(context);
+            }
+        } catch (ReflectiveOperationException error) {
+            throw new IllegalArgumentException(
+                "cannot inflate layout view: " + name, error);
+        }
     }
 
     private void applyAttributes(View view, byte[] xml, int element,

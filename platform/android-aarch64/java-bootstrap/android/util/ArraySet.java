@@ -6,7 +6,9 @@ import java.util.LinkedHashSet;
 public class ArraySet<E> extends LinkedHashSet<E> {
     public ArraySet() { super(); }
     public ArraySet(int capacity) { super(capacity); }
-    public ArraySet(Collection<? extends E> values) { super(values); }
+    public ArraySet(Collection<? extends E> values) {
+        super(values == null ? java.util.Collections.<E>emptyList() : values);
+    }
     public E valueAt(int wanted) {
         if (wanted < 0 || wanted >= size())
             throw new ArrayIndexOutOfBoundsException(wanted);

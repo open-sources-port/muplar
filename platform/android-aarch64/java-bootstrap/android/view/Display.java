@@ -1,6 +1,7 @@
 package android.view;
 
 import android.util.DisplayMetrics;
+import android.graphics.Point;
 
 public class Display {
     public static final int DEFAULT_DISPLAY = 0;
@@ -14,4 +15,10 @@ public class Display {
         output.density = current.density;
         output.scaledDensity = current.scaledDensity;
     }
+    public void getSize(Point output) {
+        DisplayMetrics metrics = new DisplayMetrics();
+        getMetrics(metrics);
+        output.set(metrics.widthPixels, metrics.heightPixels);
+    }
+    public void getRealSize(Point output) { getSize(output); }
 }

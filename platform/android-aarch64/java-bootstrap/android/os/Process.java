@@ -8,6 +8,9 @@ public final class Process {
     public static int myPid() { return 1; }
     public static int myUid() { return 10000; }
     public static int myTid() { return (int)Thread.currentThread().getId(); }
+    public static UserHandle myUserHandle() {
+        return new UserHandle(UserHandle.myUserId());
+    }
     public static void setThreadPriority(int priority) {}
     public static void setThreadPriority(int threadId, int priority) {}
     public static int getThreadPriority(int threadId) { return 0; }

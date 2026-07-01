@@ -33,6 +33,7 @@ public final class Looper {
     }
     public Thread getThread() { return owner; }
     public boolean isCurrentThread() { return myLooper() == this; }
+    public void setTraceTag(long traceTag) {}
     public void quit() { executor.shutdownNow(); }
     public void quitSafely() { executor.shutdown(); }
 }

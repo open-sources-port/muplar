@@ -6,12 +6,16 @@ import android.content.res.Configuration;
 import android.os.Bundle;
 import android.view.View;
 import android.view.LayoutInflater;
+import android.window.OnBackInvokedDispatcher;
+import android.window.OnBackInvokedCallback;
+import java.util.TreeMap;
 import com.muplar.runtime.HostUi;
 import com.muplar.runtime.IntentDispatcher;
 
 public class Activity extends Context {
     private String title = "Android";
     private View contentView;
+    private final OnBackInvokedDispatcher backDispatcher = new BackDispatcher();
 
     public Activity() {}
 
@@ -30,6 +34,8 @@ public class Activity extends Context {
     protected void onDestroy() {}
     public void onWindowFocusChanged(boolean hasFocus) {}
     public void onConfigurationChanged(Configuration newConfig) {}
+    public boolean isInMultiWindowMode() { return false; }
+    public boolean isInPictureInPictureMode() { return false; }
 
     public void setTitle(CharSequence title) {
         this.title = title == null ? "Android" : title.toString();
@@ -76,6 +82,22 @@ public class Activity extends Context {
 
     public void runOnUiThread(Runnable action) {
         if (action != null) HostUi.runOnUiThread(action);
+    }
+
+    public OnBackInvokedDispatcher getOnBackInvokedDispatcher() {
+        return backDispatcher;
+    }
+
+    private static final class BackDispatcher implements OnBackInvokedDispatcher {
+        private final TreeMap<Integer, OnBackInvokedCallback> callbacks =
+            new TreeMap<>();
+        public void registerOnBackInvokedCallback(
+                int priority, OnBackInvokedCallback callback) {
+            if (callback != null) callbacks.put(priority, callback);
+        }
+        public void unregisterOnBackInvokedCallback(OnBackInvokedCallback callback) {
+            callbacks.values().removeIf(value -> value == callback);
+        }
     }
 
     public final void dispatchStartAndResume() { onStart(); onResume(); }

@@ -41,3 +41,9 @@ LAUNCHER3_ARTIFACT_REF=system-images\;android-35\;default\;arm64-v8a_r02 \
 LAUNCHER3_ARTIFACT_CHECKSUM=2026a06409db630b56711afdbffb457c1dbaed49 \
   platform/android-aarch64/compat/launcher3/import-apk.sh Launcher3QuickStep.apk
 ```
+
+The complete download/extraction/import flow is automated by:
+
+```sh
+platform/android-aarch64/compat/launcher3/fetch-official-apk.sh
+```

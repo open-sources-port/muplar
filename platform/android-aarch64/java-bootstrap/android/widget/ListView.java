@@ -8,7 +8,7 @@ import com.muplar.runtime.HostUi;
 public class ListView extends ViewGroup {
     private BaseAdapter adapter;
     public ListView(Context context) {
-        super(HostUi.createLinearLayout());
+        super(HostUi.createLinearLayout(), context);
         HostUi.setLinearLayoutOrientation(getPeer(), LinearLayout.VERTICAL);
     }
     public void setAdapter(BaseAdapter adapter) {

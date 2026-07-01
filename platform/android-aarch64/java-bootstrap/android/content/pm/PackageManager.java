@@ -22,6 +22,7 @@ import java.nio.file.WatchService;
 import com.muplar.runtime.FrameworkServiceClient;
 
 public class PackageManager {
+    private final PackageInstaller packageInstaller = new PackageInstaller();
     private volatile List<ApplicationInfo> applications;
     private final List<Runnable> packageChangeListeners =
         new CopyOnWriteArrayList<Runnable>();
@@ -31,11 +32,16 @@ public class PackageManager {
     public static final int GET_META_DATA = 0x00000080;
     public static final int PERMISSION_GRANTED = 0;
     public static final int PERMISSION_DENIED = -1;
+    public static final int COMPONENT_ENABLED_STATE_DISABLED = 2;
 
     public PackageManager() {
         applications = loadApplications();
         if (!startServiceWatcher()) startFileRegistryWatcher();
     }
+    public boolean isSafeMode() { return false; }
+    public PackageInstaller getPackageInstaller() { return packageInstaller; }
+    public void setApplicationEnabledSetting(String packageName, int newState,
+            int flags) {}
 
     public List<ApplicationInfo> getInstalledApplications(int flags) {
         return Collections.unmodifiableList(applications);
@@ -70,6 +76,25 @@ public class PackageManager {
             }
         }
         return null;
+    }
+    public List<ResolveInfo> queryBroadcastReceivers(Intent intent, int flags) {
+        return Collections.emptyList();
+    }
+    public List<ResolveInfo> queryIntentActivities(Intent intent, int flags) {
+        List<ResolveInfo> result = new ArrayList<ResolveInfo>();
+        for (ApplicationInfo app : applications) {
+            ResolveInfo resolve = new ResolveInfo();
+            resolve.activityInfo = new ActivityInfo();
+            resolve.activityInfo.applicationInfo = app;
+            resolve.activityInfo.packageName = app.packageName;
+            resolve.activityInfo.name = app.launchActivity;
+            result.add(resolve);
+        }
+        return result;
+    }
+    public ResolveInfo resolveActivity(Intent intent, int flags) {
+        List<ResolveInfo> results = queryIntentActivities(intent, flags);
+        return results.isEmpty() ? null : results.get(0);
     }
 
     public int checkPermission(String permissionName, String packageName) {

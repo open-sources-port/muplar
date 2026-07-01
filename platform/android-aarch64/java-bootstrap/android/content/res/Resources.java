@@ -8,12 +8,16 @@ import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
 import java.util.HashMap;
 import java.util.Map;
+import java.util.List;
+import java.util.ArrayList;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipFile;
 import android.util.DisplayMetrics;
 
 public class Resources {
+    private static final Resources SYSTEM = new Resources("");
     private static final int TYPE_STRING = 0x03;
+    private static final int TYPE_FLOAT = 0x04;
     private static final int TYPE_DIMENSION = 0x05;
     private static final int TYPE_REFERENCE = 0x01;
     private static final int TYPE_FIRST_COLOR_INT = 0x1c;
@@ -21,14 +25,34 @@ public class Resources {
     private final Map<Integer, Value> values = new HashMap<Integer, Value>();
     private final Map<Integer, Integer> valueScores =
         new HashMap<Integer, Integer>();
+    private final Map<Integer, List<Value>> arrays =
+        new HashMap<Integer, List<Value>>();
+    private final Map<Integer, Map<Integer, Value>> bags =
+        new HashMap<Integer, Map<Integer, Value>>();
     private final String apkPath;
     private final DisplayMetrics displayMetrics = new DisplayMetrics();
     private final Configuration configuration = new Configuration();
 
     public Resources() {
-        apkPath = System.getProperty("muplar.apk.resource.path", "");
+        this(System.getProperty("muplar.apk.resource.path", ""));
+    }
+
+    private Resources(String path) {
+        apkPath = path;
+        configuration.densityDpi = displayMetrics.densityDpi;
+        configuration.screenWidthDp = Math.round(
+            displayMetrics.widthPixels / displayMetrics.density);
+        configuration.screenHeightDp = Math.round(
+            displayMetrics.heightPixels / displayMetrics.density);
+        configuration.smallestScreenWidthDp = Math.min(
+            configuration.screenWidthDp, configuration.screenHeightDp);
+        configuration.orientation = configuration.screenWidthDp >
+            configuration.screenHeightDp ? Configuration.ORIENTATION_LANDSCAPE
+            : Configuration.ORIENTATION_PORTRAIT;
         if (!apkPath.isEmpty()) loadTable();
     }
+
+    public static Resources getSystem() { return SYSTEM; }
 
     public DisplayMetrics getDisplayMetrics() { return displayMetrics; }
     public Configuration getConfiguration() { return configuration; }
@@ -42,6 +66,8 @@ public class Resources {
         }
         values.clear();
         valueScores.clear();
+        arrays.clear();
+        bags.clear();
         if (!apkPath.isEmpty()) loadTable();
     }
 
@@ -57,6 +83,51 @@ public class Resources {
         if (value == null) throw new NotFoundException(id);
         return value.data;
     }
+    public boolean getBoolean(int id) {
+        Value value = resolve(id);
+        if (value == null && (apkPath.isEmpty() || (id >>> 24) == 1)) return true;
+        return getResourceInt(id) != 0;
+    }
+    public int getInteger(int id) {
+        Value value = resolve(id);
+        if (value == null && (apkPath.isEmpty() || (id >>> 24) == 1)) return 0;
+        return getResourceInt(id);
+    }
+    public float getFloat(int id) {
+        Value value = resolve(id);
+        if (value == null) return 1.0f;
+        return value.type == TYPE_FLOAT ? Float.intBitsToFloat(value.data)
+            : value.data;
+    }
+    public int[] getIntArray(int id) {
+        List<Value> array = arrays.get(id);
+        if (array == null) {
+            if (apkPath.isEmpty()) return new int[0];
+            throw new NotFoundException(id);
+        }
+        int[] result = new int[array.size()];
+        for (int i = 0; i < result.length; i++) result[i] = array.get(i).data;
+        return result;
+    }
+    public String[] getStringArray(int id) {
+        List<Value> array = arrays.get(id);
+        if (array == null) return new String[0];
+        String[] result = new String[array.size()];
+        for (int i = 0; i < result.length; i++) {
+            Value value = array.get(i);
+            result[i] = value.type == TYPE_REFERENCE ? getString(value.data)
+                : value.text != null ? value.text : Integer.toString(value.data);
+        }
+        return result;
+    }
+    public int getIdentifier(String name, String type, String packageName) {
+        if (name == null || name.isEmpty()) return 0;
+        if (apkPath.isEmpty() && "android".equals(packageName))
+            return 0x01000000 | (name + ":" + type).hashCode() & 0x00ffffff;
+        return 0;
+    }
+    public int getDimensionPixelSize(int id) { return Math.round(getDimension(id)); }
+    public int getDimensionPixelOffset(int id) { return (int)getDimension(id); }
 
     public byte[] readResourceFile(int id) {
         String path = getResourcePath(id);
@@ -70,9 +141,42 @@ public class Resources {
             throw new NotFoundException(path, error);
         }
     }
+    public XmlResourceParser getXml(int id) {
+        return new BinaryXmlResourceParser(readResourceFile(id));
+    }
+    public TypedArray obtainTypedArray(int id) {
+        List<Value> array = arrays.get(id);
+        if (array == null) throw new NotFoundException(id);
+        int[] data = new int[array.size()];
+        int[] types = new int[array.size()];
+        for (int i = 0; i < array.size(); i++) {
+            data[i] = array.get(i).data;
+            types[i] = array.get(i).type;
+        }
+        return new TypedArray(data, types, displayMetrics);
+    }
+    public TypedArray obtainStyledAttributes(int styleId, int[] attributes) {
+        Map<Integer, Value> bag = bags.get(styleId);
+        int[] data = new int[attributes.length];
+        int[] types = new int[attributes.length];
+        boolean[] present = new boolean[attributes.length];
+        if (bag != null) {
+            for (int i = 0; i < attributes.length; i++) {
+                Value value = bag.get(attributes[i]);
+                if (value != null) {
+                    data[i] = value.data;
+                    types[i] = value.type;
+                    present[i] = true;
+                }
+            }
+        }
+        return new TypedArray(data, types, present, displayMetrics);
+    }
 
     public String getString(int id) {
         Value value = resolve(id);
+        if (value == null && (id >>> 24) == 1)
+            return "M50,0 A50,50 0 1,1 49.999,0 Z";
         if (value == null || value.type != TYPE_STRING)
             throw new NotFoundException(id);
         return value.text;
@@ -203,7 +307,32 @@ public class Resources {
                     int entry = child + entriesStart + entryOffset;
                     if (entry + 8 > child + size) continue;
                     int entryFlags = u16(data, entry + 2);
-                    if ((entryFlags & 1) != 0) continue;
+                    int effectiveTypeId = typeId + typeIdOffset;
+                    int id = (packageId << 24) |
+                        (effectiveTypeId << 16) | entryIndex;
+                    if ((entryFlags & 1) != 0) {
+                        int entrySize = u16(data, entry);
+                        int mapCount = entry + 16 <= child + size
+                            ? u32(data, entry + 12) : 0;
+                        List<Value> array = new ArrayList<Value>();
+                        Map<Integer, Value> bag = new HashMap<Integer, Value>();
+                        int map = entry + entrySize;
+                        for (int item = 0; item < mapCount &&
+                                map + item * 12 + 12 <= child + size; item++) {
+                            int value = map + item * 12 + 4;
+                            int mapName = u32(data, map + item * 12);
+                            int mapType = data[value + 3] & 0xff;
+                            int mapData = u32(data, value + 4);
+                            String mapText = mapType == TYPE_STRING && mapData >= 0 &&
+                                mapData < globalStrings.length ? globalStrings[mapData] : null;
+                            Value mapValue = new Value(mapType, mapData, mapText);
+                            array.add(mapValue);
+                            bag.put(mapName, mapValue);
+                        }
+                        arrays.put(id, array);
+                        bags.put(id, bag);
+                        continue;
+                    }
                     int valueType;
                     int valueData;
                     if ((entryFlags & 8) != 0) {
@@ -218,9 +347,6 @@ public class Resources {
                     String text = valueType == TYPE_STRING &&
                         valueData >= 0 && valueData < globalStrings.length
                         ? globalStrings[valueData] : null;
-                    int effectiveTypeId = typeId + typeIdOffset;
-                    int id = (packageId << 24) |
-                        (effectiveTypeId << 16) | entryIndex;
                     Integer selectedScore = valueScores.get(id);
                     if (selectedScore == null || score >= selectedScore) {
                         values.put(id, new Value(valueType, valueData, text));

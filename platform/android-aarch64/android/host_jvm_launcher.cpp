@@ -139,6 +139,25 @@ std::filesystem::path bundled_libjvm_path()
 #endif
 }
 
+std::filesystem::path configure_bundled_jdk_environment()
+{
+    auto libjvm = bundled_libjvm_path();
+    if (libjvm.empty()) return {};
+
+    auto jdk_home = libjvm.parent_path().parent_path().parent_path();
+    auto jdk_bin = jdk_home / "bin";
+    ::setenv("JAVA_HOME", jdk_home.string().c_str(), /*overwrite=*/1);
+
+    std::string path = jdk_bin.string();
+    if (const char* current_path = std::getenv("PATH");
+        current_path && *current_path) {
+        path += ':';
+        path += current_path;
+    }
+    ::setenv("PATH", path.c_str(), /*overwrite=*/1);
+    return jdk_home;
+}
+
 // ---------------------------------------------------------------------------
 // JNI helper — build a jstring String[] from a vector<string>
 // ---------------------------------------------------------------------------
@@ -176,9 +195,10 @@ std::filesystem::path convert_apk_dex_to_jar(
     std::error_code ec;
     std::filesystem::create_directories(scratch_dir, ec);
     std::filesystem::create_directories(out_jar.parent_path(), ec);
+    configure_bundled_jdk_environment();
 
     std::filesystem::path normalization_marker =
-        out_jar.string() + ".normalized-v1";
+        out_jar.string() + ".normalized-v2";
     if (std::filesystem::is_regular_file(out_jar, ec) &&
         std::filesystem::is_regular_file(normalization_marker, ec)) {
         auto output_time = std::filesystem::last_write_time(out_jar, ec);
@@ -352,7 +372,7 @@ int host_jvm_launch(const HostJvmLaunchConfig& config)
         }
     }
     std::string opt_home = "-Djava.home=" + jdk_home.string();
-    ::setenv("JAVA_HOME", jdk_home.string().c_str(), /*overwrite=*/0);
+    ::setenv("JAVA_HOME", jdk_home.string().c_str(), /*overwrite=*/1);
     std::cerr << "[HostJVM] java.home=" << jdk_home.string() << "\n";
 
     std::string opt_cp  = "-Djava.class.path=" + classpath;

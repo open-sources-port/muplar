@@ -7,6 +7,10 @@ public final class ComponentName {
         this.packageName = packageName;
         this.className = className;
     }
+    public ComponentName(Context context, Class<?> type) {
+        this(context == null ? "" : context.getPackageName(),
+            type == null ? "" : type.getName());
+    }
     public String getPackageName() { return packageName; }
     public String getClassName() { return className; }
     public String flattenToString() { return packageName + "/" + className; }

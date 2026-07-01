@@ -9,6 +9,8 @@ import java.util.Collections;
 import java.util.List;
 
 public class ActivityManager {
+    public static boolean isRunningInTestHarness() { return false; }
+    public static boolean isUserAMonkey() { return false; }
     public List<RunningAppProcessInfo> getRunningAppProcesses() {
         List<RunningAppProcessInfo> result = new ArrayList<RunningAppProcessInfo>();
         for (String[] task : queryTasks()) {
