@@ -4,6 +4,7 @@ import android.content.pm.PackageManager;
 import android.content.pm.ApplicationInfo;
 import android.content.res.Resources;
 import android.content.res.TypedArray;
+import android.graphics.drawable.Drawable;
 import android.util.AttributeSet;
 import android.content.pm.LauncherApps;
 import android.content.pm.ShortcutManager;
@@ -12,6 +13,7 @@ import android.app.ActivityManager;
 import android.app.WallpaperManager;
 import android.app.StatsManager;
 import android.app.NotificationManager;
+import android.app.KeyguardManager;
 import android.view.WindowManager;
 import android.view.SimpleWindowManager;
 import android.view.inputmethod.InputMethodManager;
@@ -40,6 +42,7 @@ public abstract class Context {
     public static final String WALLPAPER_SERVICE = "wallpaper";
     public static final String STATS_MANAGER = "stats";
     public static final String NOTIFICATION_SERVICE = "notification";
+    public static final String KEYGUARD_SERVICE = "keyguard";
     public static final int MODE_PRIVATE = 0;
     public static final int BIND_AUTO_CREATE = 1;
     public static final int BIND_NOT_FOREGROUND = 4;
@@ -63,6 +66,8 @@ public abstract class Context {
     private static final StatsManager statsManagerInstance = new StatsManager();
     private static final NotificationManager notificationManagerInstance =
         new NotificationManager();
+    private static final KeyguardManager keyguardManagerInstance =
+        new KeyguardManager();
     private final ContentResolver contentResolver = new ContentResolver(this);
     private final Resources.Theme theme = resourcesInstance.newTheme();
     private final Map<BroadcastReceiver, IntentFilter> receivers =
@@ -148,6 +153,9 @@ public abstract class Context {
     public String getString(int id) {
         return resourcesInstance.getString(id);
     }
+    public CharSequence getText(int id) { return resourcesInstance.getText(id); }
+    public int getColor(int id) { return resourcesInstance.getColor(id); }
+    public Drawable getDrawable(int id) { return resourcesInstance.getDrawable(id); }
 
     public Resources.Theme getTheme() { return theme; }
     public TypedArray obtainStyledAttributes(AttributeSet attributes, int[] styleable) {
@@ -176,6 +184,7 @@ public abstract class Context {
         if ("wallpaper".equals(name)) return WallpaperManager.getInstance(this);
         if ("stats".equals(name)) return statsManagerInstance;
         if ("notification".equals(name)) return notificationManagerInstance;
+        if ("keyguard".equals(name)) return keyguardManagerInstance;
         return null;
     }
 
@@ -202,6 +211,8 @@ public abstract class Context {
             return serviceClass.cast(statsManagerInstance);
         if (serviceClass == NotificationManager.class)
             return serviceClass.cast(notificationManagerInstance);
+        if (serviceClass == KeyguardManager.class)
+            return serviceClass.cast(keyguardManagerInstance);
         return null;
     }
 

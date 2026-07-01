@@ -78,4 +78,8 @@ public class ActivityManager {
     public static class RecentTaskInfo {
         public ComponentName topActivity;
     }
+    public static class RunningTaskInfo extends RecentTaskInfo {
+        public int taskId;
+        public int displayId;
+    }
 }

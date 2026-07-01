@@ -5,6 +5,7 @@ import java.awt.Toolkit;
 
 public class DisplayMetrics {
     public static final int DENSITY_DEFAULT = 160;
+    public static final int DENSITY_DEVICE_STABLE = DENSITY_DEFAULT;
     public int densityDpi = DENSITY_DEFAULT;
     public float density = 1.0f;
     public float scaledDensity = 1.0f;

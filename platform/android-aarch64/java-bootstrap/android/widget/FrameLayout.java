@@ -14,6 +14,10 @@ public class FrameLayout extends ViewGroup {
     public FrameLayout(Context context, AttributeSet attrs, int defStyleAttr,
             int defStyleRes) { this(context); }
 
+    @Override protected ViewGroup.LayoutParams generateDefaultLayoutParams() {
+        return new LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.MATCH_PARENT);
+    }
+
     public static class LayoutParams extends ViewGroup.MarginLayoutParams {
         public int gravity = -1;
         public LayoutParams(int width, int height) { super(width, height); }

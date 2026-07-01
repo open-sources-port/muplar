@@ -37,4 +37,9 @@ public class Configuration {
     public void setLocales(LocaleList locales) {
         if (locales != null && !locales.isEmpty()) locale = locales.get(0);
     }
+    public int getLayoutDirection() {
+        String language = locale == null ? "" : locale.getLanguage();
+        return "ar".equals(language) || "fa".equals(language) ||
+            "he".equals(language) || "ur".equals(language) ? 1 : 0;
+    }
 }

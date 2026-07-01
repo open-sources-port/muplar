@@ -4,7 +4,7 @@ import android.util.AttributeSet;
 import android.util.DisplayMetrics;
 import android.util.TypedValue;
 
-public final class TypedArray {
+public final class TypedArray implements AutoCloseable {
     private final AttributeSet attributes;
     private final int[] styleable;
     private final int[] positions;
@@ -68,6 +68,7 @@ public final class TypedArray {
             : attributes.getAttributeIntValue(position, parseInt(getString(index), fallback));
     }
     public int getInteger(int index, int fallback) { return getInt(index, fallback); }
+    public int getColor(int index, int fallback) { return getInt(index, fallback); }
     public boolean getBoolean(int index, boolean fallback) {
         if (arrayData != null)
             return position(index) >= 0 ? arrayData[index] != 0 : fallback;
@@ -127,6 +128,7 @@ public final class TypedArray {
         return value;
     }
     public void recycle() {}
+    @Override public void close() { recycle(); }
     private int position(int index) {
         return index < 0 || index >= positions.length ? -1 : positions[index];
     }

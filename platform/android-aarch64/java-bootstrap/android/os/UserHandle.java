@@ -13,6 +13,7 @@ public final class UserHandle {
             return 0;
         }
     }
+    public static int getCallingUserId() { return myUserId(); }
     @Override public boolean equals(Object other) {
         return other instanceof UserHandle &&
             ((UserHandle)other).identifier == identifier;

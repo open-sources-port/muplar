@@ -86,8 +86,9 @@ multidex conversion, resource-table loading, process startup, and
 `LauncherApplication.onCreate()`. `QuickstepLauncher.onCreate()` now initializes
 display/device profiles, `LauncherAppState`, package install-session tracking,
 settings observers, accessibility actions, and transition controllers. The
-official compiled launcher layout is parsed and custom APK views are inflated
-reflectively; `LauncherRootView` construction has reached its `SysUiScrim`
-drawing setup. The next checkpoint is completing the remaining graphics/view
-surface needed to finish root-view inflation and present the first Activity
-frame.
+official compiled launcher layout is parsed, `<include>` resources are expanded,
+and custom APK views are inflated reflectively. Root inflation now constructs
+`LauncherRootView`, `DragLayer`, `Workspace`, `Hotseat`, `CellLayout`, the page
+indicator, and drag/drop targets, and has reached `ScrimView`. The next checkpoint
+is completing the remaining core view behavior needed to finish inflation and
+present the first Activity frame.

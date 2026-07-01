@@ -44,6 +44,13 @@ public class ValueAnimator extends Animator {
     public long getCurrentPlayTime() { return 0; }
     public void setRepeatCount(int value) {}
     public void setRepeatMode(int value) {}
+    public void setFloatValues(float... values) {
+        if (values != null && values.length > 0)
+            animatedValue = Float.valueOf(values[values.length - 1]);
+    }
+    @Override public ValueAnimator setDuration(long duration) {
+        super.setDuration(duration); return this;
+    }
 
     @Override protected void applyFinalValue() {
         fraction = 1.0f;

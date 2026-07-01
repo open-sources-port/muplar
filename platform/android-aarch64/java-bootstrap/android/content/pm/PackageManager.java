@@ -1,6 +1,7 @@
 package android.content.pm;
 
 import android.content.Intent;
+import android.content.ComponentName;
 import android.graphics.drawable.Drawable;
 import java.io.File;
 import java.io.FileInputStream;
@@ -39,6 +40,7 @@ public class PackageManager {
         if (!startServiceWatcher()) startFileRegistryWatcher();
     }
     public boolean isSafeMode() { return false; }
+    public boolean hasSystemFeature(String feature) { return false; }
     public PackageInstaller getPackageInstaller() { return packageInstaller; }
     public void setApplicationEnabledSetting(String packageName, int newState,
             int flags) {}
@@ -76,6 +78,29 @@ public class PackageManager {
             }
         }
         return null;
+    }
+    public ActivityInfo getActivityInfo(ComponentName component, int flags)
+            throws NameNotFoundException {
+        if (component == null) throw new NameNotFoundException("null component");
+        for (ApplicationInfo app : applications) {
+            if (component.getPackageName().equals(app.packageName) &&
+                    component.getClassName().equals(app.launchActivity)) {
+                ActivityInfo info = new ActivityInfo();
+                info.applicationInfo = app;
+                info.packageName = app.packageName;
+                info.name = app.launchActivity;
+                return info;
+            }
+        }
+        if (component.getPackageName().equals(
+                System.getProperty("muplar.package.name", ""))) {
+            ActivityInfo info = new ActivityInfo();
+            info.applicationInfo = getApplicationInfo(component.getPackageName(), flags);
+            info.packageName = component.getPackageName();
+            info.name = component.getClassName();
+            return info;
+        }
+        throw new NameNotFoundException(component.toString());
     }
     public List<ResolveInfo> queryBroadcastReceivers(Intent intent, int flags) {
         return Collections.emptyList();

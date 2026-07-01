@@ -11,6 +11,7 @@ public class Paint {
     private float strokeWidth;
     private Xfermode xfermode;
     private Shader shader;
+    private Typeface typeface;
     public Paint() {}
     public Paint(int flags) {}
     public Paint(Paint source) {
@@ -30,6 +31,12 @@ public class Paint {
     public void setFilterBitmap(boolean enabled) {}
     public void setShadowLayer(float radius, float dx, float dy, int color) {}
     public void clearShadowLayer() {}
+    public Typeface setTypeface(Typeface value) {
+        Typeface previous = typeface;
+        typeface = value;
+        return previous;
+    }
+    public Typeface getTypeface() { return typeface; }
     public Xfermode setXfermode(Xfermode value) {
         Xfermode previous = xfermode;
         xfermode = value;

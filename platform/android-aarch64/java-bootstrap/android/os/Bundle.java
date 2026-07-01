@@ -2,6 +2,7 @@ package android.os;
 
 import java.util.HashMap;
 import java.util.Map;
+import android.util.SparseArray;
 
 public class Bundle implements Parcelable, Cloneable {
     public static final Bundle EMPTY = new Bundle();
@@ -34,6 +35,12 @@ public class Bundle implements Parcelable, Cloneable {
     public void putParcelable(String key, Parcelable value) { values.put(key, value); }
     public <T extends Parcelable> T getParcelable(String key) {
         return (T)values.get(key);
+    }
+    public void putSparseParcelableArray(String key,
+            SparseArray<? extends Parcelable> value) { values.put(key, value); }
+    public <T extends Parcelable> SparseArray<T> getSparseParcelableArray(String key) {
+        Object value = values.get(key);
+        return value instanceof SparseArray ? (SparseArray<T>) value : null;
     }
     public boolean containsKey(String key) { return values.containsKey(key); }
     public Object get(String key) { return values.get(key); }

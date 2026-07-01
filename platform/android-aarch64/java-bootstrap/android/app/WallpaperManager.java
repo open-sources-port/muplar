@@ -27,4 +27,7 @@ public final class WallpaperManager {
     }
     public boolean isWallpaperSupported() { return false; }
     public boolean isSetWallpaperAllowed() { return false; }
+    public int getDesiredMinimumWidth() { return 1800; }
+    public int getDesiredMinimumHeight() { return 1169; }
+    public void suggestDesiredDimensions(int minimumWidth, int minimumHeight) {}
 }

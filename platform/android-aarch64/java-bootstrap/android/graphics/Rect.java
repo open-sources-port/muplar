@@ -21,6 +21,12 @@ public class Rect {
     public float exactCenterY() { return (top + bottom) * 0.5f; }
     public void offset(int dx, int dy) { left += dx; right += dx; top += dy; bottom += dy; }
     public void inset(int dx, int dy) { left += dx; right -= dx; top += dy; bottom -= dy; }
+    public void inset(int left, int top, int right, int bottom) {
+        this.left += left;
+        this.top += top;
+        this.right -= right;
+        this.bottom -= bottom;
+    }
     public boolean contains(int x, int y) {
         return x >= left && x < right && y >= top && y < bottom;
     }

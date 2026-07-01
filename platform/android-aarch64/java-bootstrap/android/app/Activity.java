@@ -2,10 +2,15 @@ package android.app;
 
 import android.content.Context;
 import android.content.Intent;
+import android.content.ComponentName;
 import android.content.res.Configuration;
 import android.os.Bundle;
 import android.view.View;
 import android.view.LayoutInflater;
+import android.view.RemoteAnimationDefinition;
+import android.view.Window;
+import android.os.Binder;
+import android.os.IBinder;
 import android.window.OnBackInvokedDispatcher;
 import android.window.OnBackInvokedCallback;
 import java.util.TreeMap;
@@ -16,6 +21,12 @@ public class Activity extends Context {
     private String title = "Android";
     private View contentView;
     private final OnBackInvokedDispatcher backDispatcher = new BackDispatcher();
+    private RemoteAnimationDefinition remoteAnimations;
+    private final IApplicationThread applicationThread = new IApplicationThread() {
+        private final Binder binder = new Binder();
+        public IBinder asBinder() { return binder; }
+    };
+    private final Window window = new Window(this);
 
     public Activity() {}
 
@@ -23,6 +34,10 @@ public class Activity extends Context {
         Context context = getApplicationContext();
         return context instanceof Application ? (Application) context : null;
     }
+    public ComponentName getComponentName() {
+        return new ComponentName(getPackageName(), getClass().getName());
+    }
+    public Window getWindow() { return window; }
 
     protected void onCreate(Bundle savedInstanceState) {
         // stub
@@ -36,6 +51,8 @@ public class Activity extends Context {
     public void onConfigurationChanged(Configuration newConfig) {}
     public boolean isInMultiWindowMode() { return false; }
     public boolean isInPictureInPictureMode() { return false; }
+    public Object getLastNonConfigurationInstance() { return null; }
+    public Object onRetainNonConfigurationInstance() { return null; }
 
     public void setTitle(CharSequence title) {
         this.title = title == null ? "Android" : title.toString();
@@ -87,6 +104,11 @@ public class Activity extends Context {
     public OnBackInvokedDispatcher getOnBackInvokedDispatcher() {
         return backDispatcher;
     }
+    public void registerRemoteAnimations(RemoteAnimationDefinition definition) {
+        remoteAnimations = definition;
+    }
+    public void unregisterRemoteAnimations() { remoteAnimations = null; }
+    public IApplicationThread getIApplicationThread() { return applicationThread; }
 
     private static final class BackDispatcher implements OnBackInvokedDispatcher {
         private final TreeMap<Integer, OnBackInvokedCallback> callbacks =

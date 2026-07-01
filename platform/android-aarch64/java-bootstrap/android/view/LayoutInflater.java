@@ -5,12 +5,18 @@ import android.content.res.Resources;
 import android.widget.Button;
 import android.widget.CheckBox;
 import android.widget.ImageView;
+import android.widget.FrameLayout;
+import android.widget.EditText;
 import android.widget.LinearLayout;
 import android.widget.ListView;
+import android.widget.RelativeLayout;
 import android.widget.TextView;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayDeque;
 import java.util.Deque;
+import java.util.Collections;
+import java.util.IdentityHashMap;
+import java.util.Set;
 import java.lang.reflect.Constructor;
 import android.util.AttributeSet;
 
@@ -25,18 +31,32 @@ public class LayoutInflater {
     public static LayoutInflater from(Context context) {
         return new LayoutInflater(context);
     }
+    public Context getContext() { return context; }
+    public LayoutInflater cloneInContext(Context newContext) {
+        return new LayoutInflater(newContext);
+    }
 
     public View inflate(int resourceId, ViewGroup root) {
+        return inflate(resourceId, root, root != null);
+    }
+
+    public View inflate(int resourceId, ViewGroup root, boolean attachToRoot) {
         byte[] xml = context.getResources().readResourceFile(resourceId);
         View inflated = inflateBinary(xml);
-        if (root != null) root.addView(inflated);
+        if (root != null && attachToRoot) root.addView(inflated);
         return inflated;
     }
 
     private View inflateBinary(byte[] xml) {
+        return inflateBinary(xml, Collections.newSetFromMap(
+            new IdentityHashMap<View, Boolean>()));
+    }
+
+    private View inflateBinary(byte[] xml, Set<View> finished) {
         if (xml.length < 8 || u16(xml, 0) != 0x0003)
             throw new IllegalArgumentException("compiled Android XML required");
         String[] strings = new String[0];
+        int[] resourceIds = new int[0];
         Deque<View> stack = new ArrayDeque<View>();
         View root = null;
         int offset = 8;
@@ -47,24 +67,54 @@ public class LayoutInflater {
             if (size < header || offset + size > xml.length) break;
             if (type == 0x0001) {
                 strings = stringPool(xml, offset);
+            } else if (type == 0x0180) {
+                resourceIds = new int[(size - header) / 4];
+                for (int i = 0; i < resourceIds.length; ++i)
+                    resourceIds[i] = u32(xml, offset + header + i * 4);
             } else if (type == START_ELEMENT && offset + 36 <= xml.length) {
                 int nameIndex = u32(xml, offset + 20);
                 if (nameIndex < 0 || nameIndex >= strings.length)
                     throw new IllegalArgumentException("layout tag is invalid");
-                View view = createView(strings[nameIndex]);
+                String tagName = strings[nameIndex];
+                AttributeSet attributes = new ElementAttributeSet(
+                    xml, offset, size, strings, resourceIds);
+                View view;
+                if ("merge".equals(tagName)) {
+                    view = new MergeViewGroup(context);
+                } else if ("include".equals(tagName)) {
+                    int layoutId = attributeResource(xml, offset, size, strings,
+                        "layout");
+                    if (layoutId == 0)
+                        throw new IllegalArgumentException(
+                            "include tag is missing layout resource");
+                    view = inflateBinary(
+                        context.getResources().readResourceFile(layoutId), finished);
+                } else {
+                    view = createView(tagName, attributes);
+                }
                 applyAttributes(view, xml, offset, size, strings);
                 if (!stack.isEmpty()) {
                     View parent = stack.peek();
                     if (!(parent instanceof ViewGroup))
                         throw new IllegalArgumentException(
                             "layout parent is not a ViewGroup");
-                    ((ViewGroup) parent).addView(view);
+                    if (view instanceof MergeViewGroup) {
+                        ViewGroup merged = (ViewGroup) view;
+                        for (int i = 0; i < merged.getChildCount(); ++i) {
+                            View child = merged.getChildAt(i);
+                            child.setLayoutParams(null);
+                            ((ViewGroup) parent).addView(child);
+                        }
+                    } else {
+                        ((ViewGroup) parent).addView(view);
+                    }
                 } else {
                     root = view;
                 }
                 stack.push(view);
             } else if (type == END_ELEMENT && !stack.isEmpty()) {
-                stack.pop();
+                View view = stack.pop();
+                if (finished.add(view)) view.onFinishInflate();
             }
             offset += size;
         }
@@ -72,13 +122,27 @@ public class LayoutInflater {
         return root;
     }
 
-    private View createView(String name) {
-        if (name.endsWith("LinearLayout")) return new LinearLayout(context);
-        if (name.endsWith("TextView")) return new TextView(context);
-        if (name.endsWith("Button")) return new Button(context);
-        if (name.endsWith("CheckBox")) return new CheckBox(context);
-        if (name.endsWith("ImageView")) return new ImageView(context);
-        if (name.endsWith("ListView")) return new ListView(context);
+    private static final class MergeViewGroup extends ViewGroup {
+        MergeViewGroup(Context context) { super(context); }
+    }
+
+    private View createView(String name, AttributeSet attributes) {
+        if ("View".equals(name) || "android.view.View".equals(name))
+            return new View(context, attributes);
+        if ("fragment".equals(name)) return new FrameLayout(context, attributes);
+        if ("ViewGroup".equals(name) || "android.view.ViewGroup".equals(name))
+            return new ViewGroup(context, attributes);
+        if (builtIn(name, "LinearLayout")) return new LinearLayout(context, attributes);
+        if (builtIn(name, "FrameLayout")) return new FrameLayout(context, attributes);
+        if (builtIn(name, "RelativeLayout")) return new RelativeLayout(context, attributes);
+        if (builtIn(name, "TextView")) return new TextView(context, attributes);
+        if (builtIn(name, "EditText")) return new EditText(context, attributes);
+        if (builtIn(name, "Button")) return new Button(context, attributes);
+        if (builtIn(name, "CheckBox")) return new CheckBox(context, attributes);
+        if (builtIn(name, "ImageView")) return new ImageView(context, attributes);
+        if (builtIn(name, "ListView")) return new ListView(context, attributes);
+        if ("ViewStub".equals(name) || "android.view.ViewStub".equals(name))
+            return new ViewStub(context);
         try {
             ClassLoader loader = Thread.currentThread().getContextClassLoader();
             Class<?> type = Class.forName(name, true, loader);
@@ -87,7 +151,7 @@ public class LayoutInflater {
             try {
                 Constructor<?> constructor = type.getConstructor(
                     Context.class, AttributeSet.class);
-                return (View) constructor.newInstance(context, null);
+                return (View) constructor.newInstance(context, attributes);
             } catch (NoSuchMethodException ignored) {
                 Constructor<?> constructor = type.getConstructor(Context.class);
                 return (View) constructor.newInstance(context);
@@ -96,6 +160,82 @@ public class LayoutInflater {
             throw new IllegalArgumentException(
                 "cannot inflate layout view: " + name, error);
         }
+    }
+
+    private static final class ElementAttributeSet implements AttributeSet {
+        private final String[] names;
+        private final String[] rawValues;
+        private final int[] nameResources;
+        private final int[] types;
+        private final int[] data;
+
+        ElementAttributeSet(byte[] xml, int element, int chunkSize,
+                String[] strings, int[] resourceIds) {
+            int attributeStart = u16(xml, element + 24);
+            int attributeSize = u16(xml, element + 26);
+            int count = u16(xml, element + 28);
+            int start = element + 16 + attributeStart;
+            names = new String[count];
+            rawValues = new String[count];
+            nameResources = new int[count];
+            types = new int[count];
+            data = new int[count];
+            for (int i = 0; i < count; ++i) {
+                int item = start + i * attributeSize;
+                if (item + 20 > element + chunkSize) break;
+                int nameIndex = u32(xml, item + 4);
+                int rawIndex = u32(xml, item + 8);
+                names[i] = string(strings, nameIndex);
+                rawValues[i] = string(strings, rawIndex);
+                nameResources[i] = nameIndex >= 0 && nameIndex < resourceIds.length
+                    ? resourceIds[nameIndex] : 0;
+                types[i] = xml[item + 15] & 0xff;
+                data[i] = u32(xml, item + 16);
+            }
+        }
+        public int getAttributeCount() { return names.length; }
+        public String getAttributeName(int index) { return names[index]; }
+        public String getAttributeValue(int index) {
+            return rawValues[index] != null ? rawValues[index]
+                : Integer.toString(data[index]);
+        }
+        public String getAttributeValue(String namespace, String name) {
+            int index = indexOf(name);
+            return index < 0 ? null : getAttributeValue(index);
+        }
+        public int getAttributeNameResource(int index) { return nameResources[index]; }
+        public int getAttributeValueType(int index) { return types[index]; }
+        public int getAttributeValueData(int index) { return data[index]; }
+        public int getAttributeResourceValue(int index, int fallback) {
+            return types[index] == TYPE_REFERENCE ? data[index] : fallback;
+        }
+        public int getAttributeIntValue(int index, int fallback) {
+            return index < 0 || index >= data.length ? fallback : data[index];
+        }
+        public float getAttributeFloatValue(int index, float fallback) {
+            if (index < 0 || index >= data.length) return fallback;
+            return types[index] == 4 ? Float.intBitsToFloat(data[index]) : data[index];
+        }
+        public boolean getAttributeBooleanValue(int index, boolean fallback) {
+            return index < 0 || index >= data.length ? fallback : data[index] != 0;
+        }
+        public int getStyleAttribute() {
+            int index = indexOf("style");
+            return index < 0 ? 0 : data[index];
+        }
+        private int indexOf(String name) {
+            for (int i = 0; i < names.length; ++i)
+                if (name.equals(names[i])) return i;
+            return -1;
+        }
+        private static String string(String[] strings, int index) {
+            return index >= 0 && index < strings.length ? strings[index] : null;
+        }
+    }
+
+    private static boolean builtIn(String name, String simpleName) {
+        return simpleName.equals(name) ||
+            ("android.widget." + simpleName).equals(name);
     }
 
     private void applyAttributes(View view, byte[] xml, int element,
@@ -133,6 +273,24 @@ public class LayoutInflater {
                 ((ImageView) view).setImageResource(data);
             }
         }
+    }
+
+    private static int attributeResource(byte[] xml, int element,
+            int chunkSize, String[] strings, String wantedName) {
+        int attributeStart = u16(xml, element + 24);
+        int attributeSize = u16(xml, element + 26);
+        int attributeCount = u16(xml, element + 28);
+        int attributes = element + 16 + attributeStart;
+        for (int i = 0; i < attributeCount; ++i) {
+            int attribute = attributes + i * attributeSize;
+            if (attribute + 20 > element + chunkSize) break;
+            int nameIndex = u32(xml, attribute + 4);
+            if (nameIndex >= 0 && nameIndex < strings.length &&
+                wantedName.equals(strings[nameIndex]) &&
+                (xml[attribute + 15] & 0xff) == TYPE_REFERENCE)
+                return u32(xml, attribute + 16);
+        }
+        return 0;
     }
 
     private CharSequence textValue(String raw, int valueType, int data,

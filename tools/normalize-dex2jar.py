@@ -88,6 +88,11 @@ def main() -> int:
             for name in [interface_name(data)]
             if name
         }
+        # dex2jar cannot inspect JDK classes bundled outside the APK and may
+        # encode static Java 8 interface methods as Methodref entries.
+        interfaces.add("java/util/Comparator")
+        interfaces.add("java/util/stream/Stream")
+        interfaces.update({"java/util/List", "java/util/Set", "java/util/Map"})
         for info in source.infolist():
             data = contents[info.filename]
             if info.filename.endswith(".class") and data[:4] == b"\xca\xfe\xba\xbe":
@@ -96,7 +101,7 @@ def main() -> int:
                 rewritten_methodrefs += methodrefs
             destination.writestr(info, data)
     temporary.replace(jar)
-    marker = pathlib.Path(str(jar) + ".normalized-v2")
+    marker = pathlib.Path(str(jar) + ".normalized-v3")
     marker.write_text(
         f"classVersion=52\nchanged={changed}\n"
         f"interfaceMethodrefs={rewritten_methodrefs}\n"

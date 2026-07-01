@@ -1,6 +1,6 @@
 package android.window;
 
-public final class BackEvent {
+public class BackEvent {
     public static final int EDGE_LEFT = 0;
     public static final int EDGE_RIGHT = 1;
     private final float touchX;

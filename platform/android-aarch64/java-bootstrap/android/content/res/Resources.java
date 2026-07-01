@@ -181,13 +181,20 @@ public class Resources {
             throw new NotFoundException(id);
         return value.text;
     }
+    public CharSequence getText(int id) { return getString(id); }
 
     public int getColor(int id) {
         Value value = resolve(id);
+        if (value == null && (id >>> 24) == 1) return 0;
+        if ((id >>> 24) == 0x7f && (value == null ||
+                value.type < TYPE_FIRST_COLOR_INT ||
+                value.type > TYPE_LAST_COLOR_INT))
+            return value == null ? 0 : value.data;
         if (value == null || value.type < TYPE_FIRST_COLOR_INT ||
             value.type > TYPE_LAST_COLOR_INT) throw new NotFoundException(id);
         return value.data;
     }
+    public int getColor(int id, Theme theme) { return getColor(id); }
 
     public float getDimension(int id) {
         Value value = resolve(id);
@@ -203,13 +210,9 @@ public class Resources {
         Value value = resolve(id);
         if (value == null || value.type != TYPE_STRING || value.text == null)
             throw new NotFoundException(id);
-        String lower = value.text.toLowerCase();
-        if (!(lower.endsWith(".png") || lower.endsWith(".jpg") ||
-              lower.endsWith(".jpeg") || lower.endsWith(".gif"))) {
-            throw new NotFoundException(id);
-        }
         return new Drawable(extract(value.text));
     }
+    public Drawable getDrawable(int id, Theme theme) { return getDrawable(id); }
 
     private Value resolve(int id) {
         Value value = values.get(id);
