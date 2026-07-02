@@ -2,6 +2,8 @@ package android.widget;
 
 import android.app.PendingIntent;
 import android.view.View;
+import android.view.ViewGroup;
+import android.content.Context;
 
 public class RemoteViews {
     public interface InteractionHandler {
@@ -17,4 +19,13 @@ public class RemoteViews {
     }
     public String getPackage() { return packageName; }
     public int getLayoutId() { return layoutId; }
+    public View apply(Context context, ViewGroup parent) {
+        if (layoutId != 0)
+            return android.view.LayoutInflater.from(context).inflate(
+                layoutId, parent, false);
+        TextView placeholder = new TextView(context);
+        placeholder.setText(packageName);
+        return placeholder;
+    }
+    public void reapply(Context context, View view) {}
 }

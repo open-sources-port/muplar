@@ -313,13 +313,15 @@ std::filesystem::path build_android_package_registry(
         std::string activity;
         std::string apk_path;
         std::string icon_path;
+        std::string widget_provider;
     };
     std::vector<PackageRecord> records;
     for (const auto& path : apk_paths) {
         try {
             apk::ApkClassification classification = apk::classify_apk(path);
             if (!classification.manifest_package ||
-                !classification.manifest_launch_activity) {
+                (!classification.manifest_launch_activity &&
+                 !classification.manifest_widget_provider)) {
                 continue;
             }
             std::string icon_path;
@@ -347,9 +349,10 @@ std::filesystem::path build_android_package_registry(
                 *classification.manifest_package,
                 classification.manifest_application_label.value_or(
                     *classification.manifest_package),
-                *classification.manifest_launch_activity,
+                classification.manifest_launch_activity.value_or(""),
                 std::filesystem::absolute(path).string(),
                 icon_path,
+                classification.manifest_widget_provider.value_or(""),
             });
         } catch (const std::exception& error) {
             std::cerr << "[PackageManager] warning: skipping " << path
@@ -389,6 +392,8 @@ std::filesystem::path build_android_package_registry(
             << key << "activity=" << properties_escape(records[i].activity) << "\n"
             << key << "apk=" << properties_escape(records[i].apk_path) << "\n";
         out << key << "icon=" << properties_escape(records[i].icon_path) << "\n";
+        out << key << "widget="
+            << properties_escape(records[i].widget_provider) << "\n";
     }
     out.close();
     if (!out)

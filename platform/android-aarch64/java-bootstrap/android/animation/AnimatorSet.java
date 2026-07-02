@@ -23,6 +23,10 @@ public final class AnimatorSet extends Animator {
         return new Builder(animator);
     }
     public ArrayList<Animator> getChildAnimations() { return new ArrayList<>(children); }
+    @Override public AnimatorSet setDuration(long duration) {
+        super.setDuration(duration);
+        return this;
+    }
 
     @Override protected void applyFinalValue() {
         for (Animator animator : children) animator.start();

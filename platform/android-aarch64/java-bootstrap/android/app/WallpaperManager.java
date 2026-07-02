@@ -2,6 +2,7 @@ package android.app;
 
 import android.content.Context;
 import android.os.Handler;
+import android.os.IBinder;
 import java.util.concurrent.CopyOnWriteArrayList;
 
 public final class WallpaperManager {
@@ -30,4 +31,5 @@ public final class WallpaperManager {
     public int getDesiredMinimumWidth() { return 1800; }
     public int getDesiredMinimumHeight() { return 1169; }
     public void suggestDesiredDimensions(int minimumWidth, int minimumHeight) {}
+    public void setWallpaperZoomOut(IBinder windowToken, float zoom) {}
 }

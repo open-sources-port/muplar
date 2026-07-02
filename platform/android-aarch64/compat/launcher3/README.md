@@ -32,6 +32,14 @@ The importer validates the package and launch activity and writes source pin,
 APK hash, and provenance alongside `build/launcher3/fixture/Launcher3.apk`.
 No Launcher3 source or binary is checked into the Muplar repository.
 
+For a full AOSP checkout whose `packages/apps/Launcher3` project is at the
+pinned revision, build and import it in one command:
+
+```sh
+platform/android-aarch64/compat/launcher3/build-pinned-apk.sh \
+  /path/to/aosp aosp_arm64-trunk_staging-userdebug
+```
+
 An official system-image APK can be used for early runtime compatibility, but
 must identify its independent provenance rather than claim the source pin:
 
@@ -46,4 +54,13 @@ The complete download/extraction/import flow is automated by:
 
 ```sh
 platform/android-aarch64/compat/launcher3/fetch-official-apk.sh
+```
+
+Run the headless persistence smoke independently of the GUI. The visual smoke
+opens Launcher3, captures the All Apps frame, and rejects blank or undersized
+output:
+
+```sh
+platform/android-aarch64/compat/launcher3/test-persistence.sh
+platform/android-aarch64/compat/launcher3/visual-smoke.sh
 ```

@@ -91,7 +91,13 @@ def main() -> int:
         # dex2jar cannot inspect JDK classes bundled outside the APK and may
         # encode static Java 8 interface methods as Methodref entries.
         interfaces.add("java/util/Comparator")
-        interfaces.add("java/util/stream/Stream")
+        interfaces.update({
+            "java/util/stream/BaseStream",
+            "java/util/stream/Stream",
+            "java/util/stream/IntStream",
+            "java/util/stream/LongStream",
+            "java/util/stream/DoubleStream",
+        })
         interfaces.update({"java/util/List", "java/util/Set", "java/util/Map"})
         for info in source.infolist():
             data = contents[info.filename]

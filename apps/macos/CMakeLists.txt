@@ -25,12 +25,20 @@ add_custom_command(
     COMMAND ${CMAKE_COMMAND} -E env
         "JAVA_HOME=${JDK_BIN_DIR}" "JAVAC=${JDK_JAVAC}" "JAR=${JDK_JAR}"
         zsh "${BUILTIN_ANDROID_SOURCE_DIR}/build-launcher-apk.sh"
-    COMMAND ${CMAKE_COMMAND} -E copy
-        "${CMAKE_BINARY_DIR}/sysroot/data/local/tmp/javalauncher.apk"
-        "${BUILTIN_ANDROID_DIR}/muplar-launcher.apk"
-    COMMAND ${CMAKE_COMMAND} -E copy
-        "${CMAKE_BINARY_DIR}/sysroot/data/local/tmp/javalauncher-classes.jar"
-        "${BUILTIN_ANDROID_DIR}/muplar-launcher-classes.jar"
+    COMMAND zsh -c " \
+        mkdir -p \"${BUILTIN_ANDROID_DIR}\" && \
+        if [ -f \"${CMAKE_BINARY_DIR}/launcher3/fixture/Launcher3.apk\" ]; then \
+            echo '[CMake] Packaging AOSP Launcher3 as default launcher...'; \
+            cp \"${CMAKE_BINARY_DIR}/launcher3/fixture/Launcher3.apk\" \"${BUILTIN_ANDROID_DIR}/muplar-launcher.apk\"; \
+            if [ -x \"${CMAKE_SOURCE_DIR}/third_party/dex-tools-bin/d2j-dex2jar.sh\" ]; then \
+                \"${CMAKE_SOURCE_DIR}/third_party/dex-tools-bin/d2j-dex2jar.sh\" -f -o \"${BUILTIN_ANDROID_DIR}/muplar-launcher-classes.jar\" \"${BUILTIN_ANDROID_DIR}/muplar-launcher.apk\" || true; \
+                python3 \"${CMAKE_SOURCE_DIR}/tools/normalize-dex2jar.py\" \"${BUILTIN_ANDROID_DIR}/muplar-launcher-classes.jar\" || true; \
+            fi; \
+        else \
+            echo '[CMake] Launcher3 fixture missing, using simple launcher fallback...'; \
+            cp \"${CMAKE_BINARY_DIR}/sysroot/data/local/tmp/javalauncher.apk\" \"${BUILTIN_ANDROID_DIR}/muplar-launcher.apk\"; \
+            cp \"${CMAKE_BINARY_DIR}/sysroot/data/local/tmp/javalauncher-classes.jar\" \"${BUILTIN_ANDROID_DIR}/muplar-launcher-classes.jar\"; \
+        fi"
     DEPENDS
         "${CMAKE_SOURCE_DIR}/tools/build-art-bootstrap-jar.sh"
         "${BUILTIN_ANDROID_SOURCE_DIR}/build-launcher-apk.sh"

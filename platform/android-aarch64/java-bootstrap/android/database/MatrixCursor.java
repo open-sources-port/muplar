@@ -8,6 +8,7 @@ public class MatrixCursor implements Cursor {
     private final String[] columns;
     private final List<Object[]> rows = new ArrayList<>();
     private int position = -1;
+    private android.os.Bundle extras = android.os.Bundle.EMPTY;
     public MatrixCursor(String[] columns) { this.columns = columns.clone(); }
     public void addRow(Object[] values) { rows.add(values.clone()); }
     public int getCount() { return rows.size(); }
@@ -27,6 +28,10 @@ public class MatrixCursor implements Cursor {
     public long getLong(int index) { Object value = value(index); return value instanceof Number ? ((Number)value).longValue() : 0; }
     public byte[] getBlob(int index) { Object value = value(index); return value instanceof byte[] ? (byte[])value : null; }
     public boolean isNull(int index) { return value(index) == null; }
+    public android.os.Bundle getExtras() { return extras; }
+    public void setExtras(android.os.Bundle value) {
+        extras = value == null ? android.os.Bundle.EMPTY : value;
+    }
     public void close() {}
     private Object value(int index) {
         if (position < 0 || position >= rows.size()) throw new IllegalStateException("cursor not positioned");

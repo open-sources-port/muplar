@@ -14,6 +14,7 @@ import android.app.WallpaperManager;
 import android.app.StatsManager;
 import android.app.NotificationManager;
 import android.app.KeyguardManager;
+import android.app.admin.DevicePolicyManager;
 import android.view.WindowManager;
 import android.view.SimpleWindowManager;
 import android.view.inputmethod.InputMethodManager;
@@ -28,6 +29,7 @@ import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.Executor;
+import android.view.accessibility.AccessibilityManager;
 
 public abstract class Context {
     private static volatile Context processApplication;
@@ -43,6 +45,7 @@ public abstract class Context {
     public static final String STATS_MANAGER = "stats";
     public static final String NOTIFICATION_SERVICE = "notification";
     public static final String KEYGUARD_SERVICE = "keyguard";
+    public static final String ACCESSIBILITY_SERVICE = "accessibility";
     public static final int MODE_PRIVATE = 0;
     public static final int BIND_AUTO_CREATE = 1;
     public static final int BIND_NOT_FOREGROUND = 4;
@@ -68,6 +71,8 @@ public abstract class Context {
         new NotificationManager();
     private static final KeyguardManager keyguardManagerInstance =
         new KeyguardManager();
+    private static final DevicePolicyManager devicePolicyManagerInstance =
+        new DevicePolicyManager();
     private final ContentResolver contentResolver = new ContentResolver(this);
     private final Resources.Theme theme = resourcesInstance.newTheme();
     private final Map<BroadcastReceiver, IntentFilter> receivers =
@@ -120,6 +125,9 @@ public abstract class Context {
 
     public File getDataDir() { return appDirectory("data"); }
     public File getFilesDir() { return appDirectory("data/files"); }
+    public File getFileStreamPath(String name) {
+        return new File(getFilesDir(), name == null ? "" : name);
+    }
     public File getCacheDir() { return appDirectory("data/cache"); }
     public File getCodeCacheDir() { return appDirectory("data/code_cache"); }
     public File getNoBackupFilesDir() { return appDirectory("data/no_backup"); }
@@ -185,6 +193,7 @@ public abstract class Context {
         if ("stats".equals(name)) return statsManagerInstance;
         if ("notification".equals(name)) return notificationManagerInstance;
         if ("keyguard".equals(name)) return keyguardManagerInstance;
+        if ("accessibility".equals(name)) return AccessibilityManager.getInstance(this);
         return null;
     }
 
@@ -199,6 +208,8 @@ public abstract class Context {
             return serviceClass.cast(windowManagerInstance);
         if (serviceClass == InputMethodManager.class)
             return serviceClass.cast(inputMethodManagerInstance);
+        if (serviceClass == AccessibilityManager.class)
+            return serviceClass.cast(AccessibilityManager.getInstance(this));
         if (serviceClass == UserManager.class)
             return serviceClass.cast(userManagerInstance);
         if (serviceClass == Vibrator.class)
@@ -213,10 +224,13 @@ public abstract class Context {
             return serviceClass.cast(notificationManagerInstance);
         if (serviceClass == KeyguardManager.class)
             return serviceClass.cast(keyguardManagerInstance);
+        if (serviceClass == DevicePolicyManager.class)
+            return serviceClass.cast(devicePolicyManagerInstance);
         return null;
     }
 
     public ContentResolver getContentResolver() { return contentResolver; }
+    public void setLocusContext(LocusId locusId, Bundle bundle) {}
     public int checkSelfPermission(String permission) {
         return pmInstance.checkPermission(permission,
             System.getProperty("muplar.package.name", ""));
@@ -238,6 +252,10 @@ public abstract class Context {
             String broadcastPermission, Handler scheduler) {
         return registerReceiver(receiver, filter);
     }
+    public Intent registerReceiver(BroadcastReceiver receiver, IntentFilter filter,
+            String broadcastPermission, Handler scheduler, int flags) {
+        return registerReceiver(receiver, filter);
+    }
     public Executor getMainExecutor() {
         return new Executor() {
             public void execute(Runnable command) {
@@ -254,7 +272,21 @@ public abstract class Context {
                 entry.getKey().onReceive(this, intent);
     }
     public void startActivity(Intent intent) {
+        if (intent != null && (
+                "com.android.launcher3".equals(intent.getComponentPackage()) ||
+                (intent.getCategories() != null && intent.getCategories().contains(Intent.CATEGORY_HOME))
+           )) {
+            return;
+        }
+        if (intent != null && getPackageName().equals(intent.getComponentPackage()) &&
+                (getPackageName() + ".proxy.ProxyActivityStarter").equals(
+                    intent.getComponentClass())) {
+            return;
+        }
         com.muplar.runtime.IntentDispatcher.launch(intent, pmInstance);
+    }
+    public void startActivity(Intent intent, android.os.Bundle options) {
+        startActivity(intent);
     }
     public void registerComponentCallbacks(ComponentCallbacks callback) {
         if (callback != null) componentCallbacks.addIfAbsent(callback);

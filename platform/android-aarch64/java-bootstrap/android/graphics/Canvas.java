@@ -1,11 +1,13 @@
 package android.graphics;
 
 public class Canvas {
-    private final Bitmap bitmap;
+    private Bitmap bitmap;
     public Canvas() { bitmap = null; }
     public Canvas(Bitmap bitmap) { this.bitmap = bitmap; }
     public int getWidth() { return bitmap == null ? 0 : bitmap.getWidth(); }
     public int getHeight() { return bitmap == null ? 0 : bitmap.getHeight(); }
+    public void setBitmap(Bitmap bitmap) { this.bitmap = bitmap; }
+    public void setDrawFilter(DrawFilter filter) {}
     public int save() { return 1; }
     public void restore() {}
     public void restoreToCount(int saveCount) {}

@@ -53,6 +53,8 @@ public class ViewGroup extends View implements ViewParent {
     private boolean alwaysDrawnWithCacheEnabled;
     private boolean childrenDrawnWithCacheEnabled;
     private int descendantFocusability = FOCUS_BEFORE_DESCENDANTS;
+    private boolean touchIntercepted;
+    private View touchTarget;
 
     protected ViewGroup(Object peer) { super(peer); }
     protected ViewGroup(Object peer, Context context) { super(peer, context); }
@@ -80,6 +82,65 @@ public class ViewGroup extends View implements ViewParent {
     public boolean getClipToPadding() { return clipToPadding; }
     public void setClipChildren(boolean enabled) { clipChildren = enabled; }
     public boolean getClipChildren() { return clipChildren; }
+    public boolean onInterceptTouchEvent(MotionEvent event) { return false; }
+    @Override public boolean dispatchTouchEvent(MotionEvent event) {
+        int action = event == null ? MotionEvent.ACTION_CANCEL : event.getActionMasked();
+        if (action == MotionEvent.ACTION_DOWN) {
+            touchIntercepted = false;
+            touchTarget = null;
+        }
+        if (!touchIntercepted && onInterceptTouchEvent(event)) touchIntercepted = true;
+        if (touchIntercepted) {
+            boolean handled = onTouchEvent(event);
+            if (action == MotionEvent.ACTION_UP || action == MotionEvent.ACTION_CANCEL) {
+                touchIntercepted = false;
+                touchTarget = null;
+            }
+            return handled;
+        }
+
+        if (event != null) {
+            float x = event.getX();
+            float y = event.getY();
+            if (action != MotionEvent.ACTION_DOWN && touchTarget != null) {
+                int left = touchTarget.getLeft();
+                int top = touchTarget.getTop();
+                event.offsetLocation(-left, -top);
+                boolean handled = touchTarget.dispatchTouchEvent(event);
+                event.offsetLocation(left, top);
+                if (action == MotionEvent.ACTION_UP || action == MotionEvent.ACTION_CANCEL) {
+                    touchTarget = null;
+                }
+                return handled;
+            }
+            if (action == MotionEvent.ACTION_DOWN) {
+                for (int index = children.size() - 1; index >= 0; index--) {
+                    View child = children.get(index);
+                    if (child.getVisibility() == View.VISIBLE) {
+                        int left = child.getLeft();
+                        int top = child.getTop();
+                        int right = child.getRight();
+                        int bottom = child.getBottom();
+                        if (x >= left && x < right && y >= top && y < bottom) {
+                            event.offsetLocation(-left, -top);
+                            boolean handled = child.dispatchTouchEvent(event);
+                            event.offsetLocation(left, top);
+                            if (handled) {
+                                touchTarget = child;
+                                return true;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        boolean handled = super.dispatchTouchEvent(event);
+        if (action == MotionEvent.ACTION_UP || action == MotionEvent.ACTION_CANCEL) {
+            touchTarget = null;
+        }
+        return handled;
+    }
     public void setLayoutTransition(LayoutTransition transition) {
         layoutTransition = transition;
     }
@@ -129,7 +190,9 @@ public class ViewGroup extends View implements ViewParent {
     }
 
     public int getChildCount() { return children.size(); }
-    public View getChildAt(int index) { return children.get(index); }
+    public View getChildAt(int index) {
+        return index < 0 || index >= children.size() ? null : children.get(index);
+    }
     public int indexOfChild(View child) { return children.indexOf(child); }
     public void removeView(View child) {
         if (!children.remove(child)) return;
@@ -146,6 +209,13 @@ public class ViewGroup extends View implements ViewParent {
         if (hierarchyChangeListener != null)
             for (View child : removed)
                 hierarchyChangeListener.onChildViewRemoved(this, child);
+    }
+    @Override public void draw(android.graphics.Canvas canvas) {
+        super.draw(canvas);
+        dispatchDraw(canvas);
+    }
+    protected void dispatchDraw(android.graphics.Canvas canvas) {
+        for (View child : new ArrayList<View>(children)) child.draw(canvas);
     }
     public void setOnHierarchyChangeListener(OnHierarchyChangeListener listener) {
         hierarchyChangeListener = listener;

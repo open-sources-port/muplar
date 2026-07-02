@@ -7,6 +7,7 @@ public final class Message {
     public Object obj;
     public Handler target;
     Runnable callback;
+    private boolean asynchronous;
 
     public static Message obtain() { return new Message(); }
     public static Message obtain(Handler target) {
@@ -33,4 +34,6 @@ public final class Message {
     public void sendToTarget() {
         if (target != null) target.sendMessage(this);
     }
+    public void setAsynchronous(boolean value) { asynchronous = value; }
+    public boolean isAsynchronous() { return asynchronous; }
 }

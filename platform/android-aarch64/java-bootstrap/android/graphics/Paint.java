@@ -12,6 +12,7 @@ public class Paint {
     private Xfermode xfermode;
     private Shader shader;
     private Typeface typeface;
+    private MaskFilter maskFilter;
     public Paint() {}
     public Paint(int flags) {}
     public Paint(Paint source) {
@@ -47,6 +48,10 @@ public class Paint {
         Shader previous = shader; shader = value; return previous;
     }
     public Shader getShader() { return shader; }
+    public MaskFilter setMaskFilter(MaskFilter value) {
+        MaskFilter previous = maskFilter; maskFilter = value; return previous;
+    }
+    public MaskFilter getMaskFilter() { return maskFilter; }
     public float measureText(String text) {
         return text == null ? 0 : text.length() * textSize * 0.55f;
     }

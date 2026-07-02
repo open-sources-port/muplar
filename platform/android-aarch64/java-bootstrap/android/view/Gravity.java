@@ -16,6 +16,12 @@ public final class Gravity {
     public static final int START = 0x00800003;
     public static final int END = 0x00800005;
     private Gravity() {}
+    public static boolean isVertical(int gravity) {
+        return (gravity & FILL_VERTICAL) != 0;
+    }
+    public static boolean isHorizontal(int gravity) {
+        return (gravity & FILL_HORIZONTAL) != 0;
+    }
     public static int getAbsoluteGravity(int gravity, int layoutDirection) {
         int result = gravity;
         if ((result & START) == START)

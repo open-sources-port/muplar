@@ -13,7 +13,7 @@ of these milestones instead of creating more numbered phases.
 1. [x] Minimal ART bootstrap
 1. [x] Tiny Java Activity
 1. [x] Simple Java launcher app
-1. [ ] Launcher3 compatibility target
+1. [x] Launcher3 compatibility target
 
 - [Runtime](./runtime.md)
 - [Binder and AIDL](./binder-aidl.md)

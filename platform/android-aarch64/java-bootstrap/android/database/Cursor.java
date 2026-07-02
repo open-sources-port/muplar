@@ -1,6 +1,6 @@
 package android.database;
 
-public interface Cursor extends AutoCloseable {
+public interface Cursor extends java.io.Closeable {
     int getCount();
     boolean moveToFirst();
     boolean moveToNext();
@@ -11,5 +11,7 @@ public interface Cursor extends AutoCloseable {
     long getLong(int columnIndex);
     byte[] getBlob(int columnIndex);
     boolean isNull(int columnIndex);
+    android.os.Bundle getExtras();
+    void setExtras(android.os.Bundle extras);
     void close();
 }

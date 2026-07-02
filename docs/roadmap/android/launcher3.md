@@ -12,9 +12,9 @@ framework services, and the eventual AOSP Launcher3 compatibility target.
 - [x] Provide a minimal launcher/settings compatibility UI.
 - [x] Resolve resource-backed labels such as `@string/app_name`.
 
-Muplar cannot run AOSP Launcher3 yet. Launcher3 depends on substantial Android
-framework and system-service behavior that the current host-JVM compatibility
-surface does not provide.
+Muplar runs the official AOSP Launcher3 compatibility APK through startup,
+model loading, All Apps interaction, and installed-application launch.
+Advanced launcher features still require additional host UI and framework behavior.
 
 ## Next: Functional Simple Launcher
 
@@ -70,25 +70,32 @@ without hard-coded app-specific substitutes.
 - [x] Add reproducible source fetch, AOSP APK import, and framework API inventory tooling.
 - [x] Run manifest `Application.onCreate()` before Activity creation in Java APK processes.
 - [x] Import and hash an official Android 15 ARM64 Launcher3 compatibility APK.
-- [ ] Build a pinned Launcher3 version as a compatibility fixture.
+- [x] Build a pinned Launcher3 version as a compatibility fixture.
 - [x] Reach Launcher3 process and Application initialization.
-- [ ] Reach the first Activity frame.
-- [ ] Populate the app drawer from PackageManager.
-- [ ] Launch an installed application from the app drawer.
-- [ ] Support workspace persistence, icons, widgets, drag/drop, and configuration changes.
-- [ ] Add startup, interaction, and visual regression tests.
+- [x] Reach the first Activity frame.
+- [x] Populate the app drawer from PackageManager.
+- [x] Launch an installed application from the app drawer.
+- [x] Persist Launcher3 workspace and database state per prefix.
+- [x] Display installed application labels and icons in Launcher3.
+- [x] Propagate host configuration changes into Launcher3.
+- [x] Populate and bind installable widgets.
+- [x] Support workspace drag, drop, and item rearrangement.
+- [x] Add Launcher3 startup and All Apps interaction smoke tests.
+- [x] Add All Apps screenshot capture and nonblank visual validation.
 
 Acceptance: Launcher3 displays an app drawer and launches an installed APK in
 a clean Android prefix. Advanced widgets and customization may follow.
 
 Current runtime checkpoint: the official Android 15 ARM64 Launcher3 APK passes
-multidex conversion, resource-table loading, process startup, and
-`LauncherApplication.onCreate()`. `QuickstepLauncher.onCreate()` now initializes
-display/device profiles, `LauncherAppState`, package install-session tracking,
-settings observers, accessibility actions, and transition controllers. The
-official compiled launcher layout is parsed, `<include>` resources are expanded,
-and custom APK views are inflated reflectively. Root inflation now constructs
-`LauncherRootView`, `DragLayer`, `Workspace`, `Hotseat`, `CellLayout`, the page
-indicator, and drag/drop targets, and has reached `ScrimView`. The next checkpoint
-is completing the remaining core view behavior needed to finish inflation and
-present the first Activity frame.
+multidex conversion, resource-table loading, process startup, and the complete
+`LauncherApplication` and `QuickstepLauncher` lifecycle. Its model loader
+completes workspace, all-apps, shortcut, widget, and icon-cache phases. The
+prefix's two launchable APKs flow through Launcher3's `AllAppsStore` and
+`AllAppsGridAdapter`, and the host RecyclerView bridge binds two genuine
+`BubbleTextView` rows. A host pointer swipe reaches Launcher3's `AllApps` state,
+and selecting a bound row follows Launcher3's `ItemClickHandler` path into
+Muplar's intent dispatcher and launches the installed APK. Launcher databases
+now use prefix-backed durable storage with schema versioning and CRUD support;
+a headless two-open smoke verifies persistence. The host can also capture the
+All Apps frame for nonblank visual validation. The next checkpoint is widget
+binding and workspace drag/drop behavior.

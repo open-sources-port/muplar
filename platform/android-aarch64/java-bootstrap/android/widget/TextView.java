@@ -11,6 +11,8 @@ import java.util.concurrent.CopyOnWriteArrayList;
 import android.view.KeyEvent;
 import android.content.res.ColorStateList;
 import android.graphics.drawable.Drawable;
+import android.util.TypedValue;
+import android.text.TextUtils;
 
 public class TextView extends View {
     public interface OnEditorActionListener {
@@ -24,6 +26,9 @@ public class TextView extends View {
     private ColorStateList textColors = ColorStateList.valueOf(0xff000000);
     private final Drawable[] compoundDrawables = new Drawable[4];
     private int compoundDrawablePadding;
+    private float textSize = 16.0f;
+    private TextUtils.TruncateAt ellipsize;
+    private int maxLines = Integer.MAX_VALUE;
     public TextView(Context context) { super(HostUi.createTextView(), context); }
     public TextView(Context context, AttributeSet attributes) { this(context); }
     public TextView(Context context, AttributeSet attributes, int defStyleAttr) {
@@ -63,6 +68,14 @@ public class TextView extends View {
         compoundDrawables[2] = end;
         compoundDrawables[3] = bottom;
     }
+    public void setCompoundDrawables(Drawable left, Drawable top,
+            Drawable right, Drawable bottom) {
+        compoundDrawables[0] = left;
+        compoundDrawables[1] = top;
+        compoundDrawables[2] = right;
+        compoundDrawables[3] = bottom;
+    }
+    public Drawable[] getCompoundDrawables() { return compoundDrawables.clone(); }
     public Drawable[] getCompoundDrawablesRelative() {
         return compoundDrawables.clone();
     }
@@ -78,6 +91,17 @@ public class TextView extends View {
             bottom == 0 ? null : getResources().getDrawable(bottom));
     }
     public int getCompoundDrawablePadding() { return compoundDrawablePadding; }
+    public void setTextSize(int unit, float size) {
+        textSize = TypedValue.applyDimension(unit, size,
+            getResources().getDisplayMetrics());
+    }
+    public void setTextSize(float size) { setTextSize(TypedValue.COMPLEX_UNIT_SP, size); }
+    public float getTextSize() { return textSize; }
+    public void setEllipsize(TextUtils.TruncateAt where) { ellipsize = where; }
+    public TextUtils.TruncateAt getEllipsize() { return ellipsize; }
+    public void setMaxLines(int value) { maxLines = value; }
+    public int getMaxLines() { return maxLines; }
+    public void setShadowLayer(float radius, float dx, float dy, int color) {}
     public void addTextChangedListener(TextWatcher watcher) {
         if (watcher != null) textWatchers.add(watcher);
     }

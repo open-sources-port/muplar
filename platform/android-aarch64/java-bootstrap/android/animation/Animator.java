@@ -19,6 +19,7 @@ public abstract class Animator implements Cloneable {
     private long startDelay;
     private boolean running;
     private TimeInterpolator interpolator;
+    private Object target;
 
     public void start() {
         running = true;
@@ -50,6 +51,8 @@ public abstract class Animator implements Cloneable {
     public long getStartDelay() { return startDelay; }
     public void setInterpolator(TimeInterpolator value) { interpolator = value; }
     public TimeInterpolator getInterpolator() { return interpolator; }
+    public void setTarget(Object target) { this.target = target; }
+    public Object getTarget() { return target; }
     public void addListener(AnimatorListener listener) {
         if (listener != null && !listeners.contains(listener)) listeners.add(listener);
     }

@@ -52,7 +52,8 @@ public final class IntentDispatcher {
             processBuilder.environment().put("MUPLAR_DISPATCHED_APP", "1");
             Process process = processBuilder.start();
             System.out.println("[IntentDispatcher] launched " +
-                app.packageName + " from " + app.sourceDir);
+                app.packageName + "/" + intent.getComponentClass() +
+                " from " + app.sourceDir);
             return process;
         } catch (IOException error) {
             throw new IllegalStateException(
