@@ -7,6 +7,7 @@ public class Display {
     public static final int DEFAULT_DISPLAY = 0;
     public int getDisplayId() { return DEFAULT_DISPLAY; }
     public int getRotation() { return 0; }
+    public float getRefreshRate() { return 60.0f; }
     public void getMetrics(DisplayMetrics output) {
         DisplayMetrics current = new DisplayMetrics();
         output.widthPixels = current.widthPixels;

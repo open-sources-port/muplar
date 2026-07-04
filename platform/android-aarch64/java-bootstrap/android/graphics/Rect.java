@@ -20,12 +20,20 @@ public class Rect {
     public float exactCenterX() { return (left + right) * 0.5f; }
     public float exactCenterY() { return (top + bottom) * 0.5f; }
     public void offset(int dx, int dy) { left += dx; right += dx; top += dy; bottom += dy; }
+    public void offsetTo(int newLeft, int newTop) {
+        offset(newLeft - left, newTop - top);
+    }
     public void inset(int dx, int dy) { left += dx; right -= dx; top += dy; bottom -= dy; }
     public void inset(int left, int top, int right, int bottom) {
         this.left += left;
         this.top += top;
         this.right -= right;
         this.bottom -= bottom;
+    }
+    public void inset(Rect r) {
+        if (r != null) {
+            inset(r.left, r.top, r.right, r.bottom);
+        }
     }
     public boolean contains(int x, int y) {
         return x >= left && x < right && y >= top && y < bottom;

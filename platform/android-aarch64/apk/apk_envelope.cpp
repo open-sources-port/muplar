@@ -632,6 +632,31 @@ infer_plain_manifest_launch_activity(const std::string& manifest,
 }
 
 std::optional<std::string>
+infer_plain_manifest_widget_provider(const std::string& manifest,
+                                     const std::optional<std::string>& package_name)
+{
+    size_t pos = 0;
+    while (true) {
+        size_t start = manifest.find("<receiver", pos);
+        if (start == std::string::npos) return std::nullopt;
+        size_t open_end = manifest.find('>', start);
+        if (open_end == std::string::npos) return std::nullopt;
+        size_t end = manifest.find("</receiver>", open_end);
+        if (end == std::string::npos) end = open_end;
+        std::string tag = manifest.substr(start, open_end - start + 1);
+        std::string block = manifest.substr(start, end - start);
+        if (block.find("android.appwidget.action.APPWIDGET_UPDATE") !=
+                std::string::npos) {
+            auto name = tag_attribute(tag, "android:name");
+            if (!name) name = tag_attribute(tag, "name");
+            if (name) return normalize_activity_name(
+                package_name.value_or(std::string()), *name);
+        }
+        pos = end + 1;
+    }
+}
+
+std::optional<std::string>
 infer_binary_manifest_lib(const std::vector<uint8_t>& manifest,
                           const std::vector<std::string>& available_bases)
 {
@@ -903,6 +928,66 @@ std::optional<std::string> infer_binary_manifest_launch_activity(
     return first_activity;
 }
 
+std::optional<std::string> infer_binary_manifest_widget_provider(
+    const std::vector<uint8_t>& manifest,
+    const std::optional<std::string>& package_name)
+{
+    constexpr uint16_t START = 0x0102;
+    constexpr uint16_t END = 0x0103;
+    constexpr uint32_t NO_INDEX = 0xffffffffu;
+    constexpr uint8_t TYPE_STRING = 0x03;
+    std::vector<std::string> strings = axml_string_pool(manifest);
+    if (strings.empty()) return std::nullopt;
+    auto attribute = [&](size_t off, const std::string& wanted)
+        -> std::optional<std::string> {
+        uint32_t chunk_size = read_u32(manifest, off + 4);
+        uint16_t attr_start = read_u16(manifest, off + 24);
+        uint16_t attr_size = read_u16(manifest, off + 26);
+        uint16_t attr_count = read_u16(manifest, off + 28);
+        size_t attrs = off + 16u + attr_start;
+        for (uint16_t i = 0; i < attr_count; ++i) {
+            size_t item = attrs + static_cast<size_t>(i) * attr_size;
+            if (item + 20 > off + chunk_size) break;
+            uint32_t name = read_u32(manifest, item + 4);
+            if (name >= strings.size() || strings[name] != wanted) continue;
+            uint32_t raw = read_u32(manifest, item + 8);
+            if (raw != NO_INDEX && raw < strings.size()) return strings[raw];
+            if (manifest[item + 15] == TYPE_STRING) {
+                uint32_t value = read_u32(manifest, item + 16);
+                if (value < strings.size()) return strings[value];
+            }
+        }
+        return std::nullopt;
+    };
+    std::optional<std::string> receiver;
+    size_t off = manifest.size() >= 8 && read_u16(manifest, 0) == 0x0003 ? 8 : 0;
+    while (off + 8 <= manifest.size()) {
+        uint16_t type = read_u16(manifest, off);
+        uint16_t header_size = read_u16(manifest, off + 2);
+        uint32_t chunk_size = read_u32(manifest, off + 4);
+        if (chunk_size < header_size || off + chunk_size > manifest.size()) break;
+        if (type == START && off + 36 <= manifest.size()) {
+            uint32_t name = read_u32(manifest, off + 20);
+            std::string element = name < strings.size() ? strings[name] : std::string();
+            if (element == "receiver") {
+                auto value = attribute(off, "name");
+                receiver = value ? std::optional<std::string>(normalize_activity_name(
+                    package_name.value_or(std::string()), *value)) : std::nullopt;
+            } else if (receiver && element == "action" &&
+                    attribute(off, "name") == std::optional<std::string>(
+                        "android.appwidget.action.APPWIDGET_UPDATE")) {
+                return receiver;
+            }
+        } else if (type == END && off + 24 <= manifest.size()) {
+            uint32_t name = read_u32(manifest, off + 20);
+            if (receiver && name < strings.size() && strings[name] == "receiver")
+                receiver.reset();
+        }
+        off += chunk_size;
+    }
+    return std::nullopt;
+}
+
 struct ManifestInfo {
     std::optional<std::string> lib_name;
     std::optional<std::string> package_name;
@@ -912,6 +997,7 @@ struct ManifestInfo {
     std::optional<uint32_t> application_icon_resource;
     std::optional<std::string> application_class;
     std::optional<std::string> launch_activity;
+    std::optional<std::string> widget_provider;
 };
 
 ManifestInfo infer_manifest_info(const std::vector<uint8_t>& manifest,
@@ -949,7 +1035,8 @@ ManifestInfo infer_manifest_info(const std::vector<uint8_t>& manifest,
             application_icon,
             std::nullopt,
             application_class,
-            infer_plain_manifest_launch_activity(text, package_name)
+            infer_plain_manifest_launch_activity(text, package_name),
+            infer_plain_manifest_widget_provider(text, package_name)
         };
     }
     auto package_name = infer_binary_manifest_package(manifest);
@@ -967,7 +1054,8 @@ ManifestInfo infer_manifest_info(const std::vector<uint8_t>& manifest,
             return normalize_activity_name(
                 package_name.value_or(std::string()), *value);
         }(),
-        infer_binary_manifest_launch_activity(manifest, package_name)
+        infer_binary_manifest_launch_activity(manifest, package_name),
+        infer_binary_manifest_widget_provider(manifest, package_name)
     };
 }
 
@@ -1049,6 +1137,8 @@ ApkClassification classify_entries(const std::filesystem::path& apk_path,
             manifest_info.application_class;
         classification.manifest_launch_activity =
             manifest_info.launch_activity;
+        classification.manifest_widget_provider =
+            manifest_info.widget_provider;
     }
 
     std::sort(classification.arm64_libs.begin(),
@@ -1162,6 +1252,8 @@ ApkLaunchResult prepare_apk_launch(const ApkLaunchConfig& config)
         classification.manifest_application_class;
     std::optional<std::string> manifest_launch_activity =
         classification.manifest_launch_activity;
+    std::optional<std::string> manifest_widget_provider =
+        classification.manifest_widget_provider;
 
     const ZipEntry* selected = nullptr;
     if (config.lib_name) {
@@ -1220,6 +1312,7 @@ ApkLaunchResult prepare_apk_launch(const ApkLaunchConfig& config)
     result.manifest_application_icon = manifest_application_icon;
     result.manifest_application_class = manifest_application_class;
     result.manifest_launch_activity = manifest_launch_activity;
+    result.manifest_widget_provider = manifest_widget_provider;
 
     for (const ZipEntry& lib : arm64_libs) {
         std::vector<uint8_t> bytes = extract_entry_data(apk, lib);

@@ -20,6 +20,7 @@ public class HandlerThread extends Thread {
         if (looper == null) looper = new Looper(getName(), this);
         return looper;
     }
+    public int getThreadId() { return (int) getId(); }
     public boolean quit() { getLooper().quit(); interrupt(); return true; }
     public boolean quitSafely() { getLooper().quitSafely(); interrupt(); return true; }
 }

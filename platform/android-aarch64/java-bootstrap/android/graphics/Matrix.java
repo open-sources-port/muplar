@@ -43,6 +43,28 @@ public class Matrix {
     public boolean postScale(float sx, float sy, float px, float py) {
         postTranslate(-px, -py); postScale(sx, sy); postTranslate(px, py); return true;
     }
+    public boolean postConcat(Matrix other) {
+        if (other == null) return false;
+        float[] right = new float[9];
+        other.getValues(right);
+        float[] left = values.clone();
+        for (int row = 0; row < 3; row++) {
+            for (int column = 0; column < 3; column++) {
+                values[row * 3 + column] =
+                    left[row * 3] * right[column] +
+                    left[row * 3 + 1] * right[3 + column] +
+                    left[row * 3 + 2] * right[6 + column];
+            }
+        }
+        return true;
+    }
+    public boolean preConcat(Matrix other) {
+        if (other == null) return false;
+        Matrix result = new Matrix(other);
+        result.postConcat(this);
+        set(result);
+        return true;
+    }
     public boolean postRotate(float degrees) { return postRotate(degrees, 0, 0); }
     public boolean postRotate(float degrees, float px, float py) {
         double radians = Math.toRadians(degrees);

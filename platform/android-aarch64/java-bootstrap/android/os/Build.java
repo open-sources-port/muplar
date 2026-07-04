@@ -8,6 +8,7 @@ public final class Build {
     public static final String TYPE = "user";
     public static final String TAGS = "release-keys";
     public static final String FINGERPRINT = "muplar/android/15";
+    public static final boolean IS_DEBUGGABLE = false;
     private Build() {}
     public static final class VERSION {
         public static final int SDK_INT = 35;

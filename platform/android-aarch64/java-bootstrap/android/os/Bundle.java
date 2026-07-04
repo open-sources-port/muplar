@@ -32,6 +32,18 @@ public class Bundle implements Parcelable, Cloneable {
         Object value = values.get(key);
         return value instanceof String ? (String)value : null;
     }
+    public void putIntArray(String key, int[] value) { values.put(key, value); }
+    public int[] getIntArray(String key) {
+        Object value = values.get(key);
+        return value instanceof int[] ? (int[]) value : null;
+    }
+    public void putBinder(String key, IBinder value) { values.put(key, value); }
+    public IBinder getBinder(String key) {
+        Object value = values.get(key);
+        return value instanceof IBinder ? (IBinder) value : null;
+    }
+    public void putIBinder(String key, IBinder value) { putBinder(key, value); }
+    public IBinder getIBinder(String key) { return getBinder(key); }
     public void putParcelable(String key, Parcelable value) { values.put(key, value); }
     public <T extends Parcelable> T getParcelable(String key) {
         return (T)values.get(key);

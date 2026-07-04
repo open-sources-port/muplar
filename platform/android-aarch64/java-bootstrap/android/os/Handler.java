@@ -38,6 +38,17 @@ public class Handler {
     public boolean sendEmptyMessageDelayed(int what, long delayMillis) {
         return sendMessageDelayed(Message.obtain(this, what), delayMillis);
     }
+    public Message obtainMessage() { return Message.obtain(this); }
+    public Message obtainMessage(int what) { return Message.obtain(this, what); }
+    public Message obtainMessage(int what, Object object) {
+        return Message.obtain(this, what, object);
+    }
+    public Message obtainMessage(int what, int arg1, int arg2) {
+        return Message.obtain(this, what, arg1, arg2);
+    }
+    public Message obtainMessage(int what, int arg1, int arg2, Object object) {
+        return Message.obtain(this, what, arg1, arg2, object);
+    }
     public boolean sendMessageDelayed(final Message message, long delayMillis) {
         message.target = this;
         schedule(message, new Runnable() {
@@ -52,6 +63,11 @@ public class Handler {
     public boolean postDelayed(final Runnable action, long delayMillis) {
         schedule(action, action, delayMillis); return true;
     }
+    public boolean postAtTime(Runnable action, Object token, long uptimeMillis) {
+        schedule(token == null ? action : token, action,
+            Math.max(0, uptimeMillis - SystemClock.uptimeMillis()));
+        return true;
+    }
     public boolean postAtFrontOfQueue(Runnable action) { return post(action); }
     public void removeMessages(int what) {
         cancel(Integer.valueOf(what));
@@ -65,6 +81,7 @@ public class Handler {
         List<ScheduledFuture<?>> futures = pending.get(Integer.valueOf(what));
         return futures != null && !futures.isEmpty();
     }
+    public boolean hasMessages(int what, Object object) { return hasMessages(what); }
     private void schedule(Object key, Runnable action, long delayMillis) {
         ScheduledFuture<?> future = looper.executor.schedule(action,
             Math.max(0, delayMillis), TimeUnit.MILLISECONDS);

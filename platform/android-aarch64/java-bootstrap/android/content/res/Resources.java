@@ -1,7 +1,9 @@
 package android.content.res;
 
 import android.graphics.drawable.Drawable;
+import android.graphics.drawable.ColorDrawable;
 import java.io.ByteArrayOutputStream;
+import java.io.ByteArrayInputStream;
 import java.io.File;
 import java.io.FileOutputStream;
 import java.io.InputStream;
@@ -13,6 +15,8 @@ import java.util.ArrayList;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipFile;
 import android.util.DisplayMetrics;
+import android.util.TypedValue;
+import android.util.AttributeSet;
 
 public class Resources {
     private static final Resources SYSTEM = new Resources("");
@@ -56,7 +60,7 @@ public class Resources {
 
     public DisplayMetrics getDisplayMetrics() { return displayMetrics; }
     public Configuration getConfiguration() { return configuration; }
-    public Theme newTheme() { return new Theme(); }
+    public Theme newTheme() { return new Theme(this); }
     public void updateConfiguration(Configuration updated,
                                     DisplayMetrics metrics) {
         if (updated != null) {
@@ -82,6 +86,22 @@ public class Resources {
         Value value = resolve(id);
         if (value == null) throw new NotFoundException(id);
         return value.data;
+    }
+    public void getValue(int id, TypedValue output, boolean resolveReferences) {
+        if (output == null) throw new NullPointerException("output");
+        Value value = resolveReferences ? resolve(id) : values.get(id);
+        if (value == null) {
+            if ((id >>> 24) != 1) throw new NotFoundException(id);
+            output.type = 0;
+            output.data = 0;
+            output.resourceId = id;
+            output.string = null;
+            return;
+        }
+        output.type = value.type;
+        output.data = value.data;
+        output.resourceId = id;
+        output.string = value.text;
     }
     public boolean getBoolean(int id) {
         Value value = resolve(id);
@@ -140,6 +160,9 @@ public class Resources {
         } catch (Exception error) {
             throw new NotFoundException(path, error);
         }
+    }
+    public InputStream openRawResource(int id) {
+        return new ByteArrayInputStream(readResourceFile(id));
     }
     public XmlResourceParser getXml(int id) {
         return new BinaryXmlResourceParser(readResourceFile(id));
@@ -208,11 +231,18 @@ public class Resources {
 
     public Drawable getDrawable(int id) {
         Value value = resolve(id);
+        if (value == null && (id >>> 24) == 1) return new ColorDrawable(0);
         if (value == null || value.type != TYPE_STRING || value.text == null)
             throw new NotFoundException(id);
         return new Drawable(extract(value.text));
     }
     public Drawable getDrawable(int id, Theme theme) { return getDrawable(id); }
+    public Drawable getDrawableForDensity(int id, int density) {
+        return getDrawable(id);
+    }
+    public Drawable getDrawableForDensity(int id, int density, Theme theme) {
+        return getDrawable(id, theme);
+    }
 
     private Value resolve(int id) {
         Value value = values.get(id);
@@ -484,10 +514,23 @@ public class Resources {
     }
 
     public static class Theme {
+        private final Resources resources;
         private int styleResourceId;
+        Theme(Resources resources) { this.resources = resources; }
         public void applyStyle(int resourceId, boolean force) {
             if (force || styleResourceId == 0) styleResourceId = resourceId;
         }
         public int getAppliedStyleResourceId() { return styleResourceId; }
+        public TypedArray obtainStyledAttributes(int[] attributes) {
+            return resources.obtainStyledAttributes(styleResourceId, attributes);
+        }
+        public TypedArray obtainStyledAttributes(int resourceId, int[] attributes) {
+            return resources.obtainStyledAttributes(resourceId, attributes);
+        }
+        public TypedArray obtainStyledAttributes(AttributeSet set, int[] attributes,
+                int defStyleAttr, int defStyleRes) {
+            int style = defStyleRes != 0 ? defStyleRes : styleResourceId;
+            return resources.obtainStyledAttributes(style, attributes);
+        }
     }
 }

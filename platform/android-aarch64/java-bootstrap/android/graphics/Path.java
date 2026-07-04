@@ -18,8 +18,13 @@ public class Path {
     public void close() {}
     public void addRect(float left, float top, float right, float bottom,
             Direction direction) {}
+    public void addCircle(float x, float y, float radius, Direction direction) {}
     public void addRoundRect(RectF rectangle, float rx, float ry,
             Direction direction) {}
+    public void addRoundRect(float left, float top, float right, float bottom,
+            float rx, float ry, Direction direction) {}
+    public void addRoundRect(float left, float top, float right, float bottom,
+            float[] radii, Direction direction) {}
     public void setFillType(FillType fillType) {}
     public boolean isEmpty() { return false; }
     public boolean op(Path path, Op operation) { return true; }

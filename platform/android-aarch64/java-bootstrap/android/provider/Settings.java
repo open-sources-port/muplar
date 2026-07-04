@@ -31,6 +31,16 @@ public final class Settings {
         try { return Integer.parseInt(value); }
         catch (NumberFormatException ignored) { return defaultValue; }
     }
+    private static float getFloat(String namespace, String name, float defaultValue) {
+        String value = get(namespace, name);
+        if (value == null) return defaultValue;
+        try { return Float.parseFloat(value); }
+        catch (NumberFormatException ignored) { return defaultValue; }
+    }
+
+    public static class SettingNotFoundException extends Exception {
+        public SettingNotFoundException(String name) { super(name); }
+    }
 
     public static final class System {
         public static final Uri CONTENT_URI = Uri.parse("content://settings/system");
@@ -84,6 +94,19 @@ public final class Settings {
                 int defaultValue) { return Settings.getInt("global", name, defaultValue); }
         public static boolean putInt(ContentResolver resolver, String name, int value) {
             return put("global", name, Integer.toString(value));
+        }
+        public static float getFloat(ContentResolver resolver, String name,
+                float defaultValue) {
+            return Settings.getFloat("global", name, defaultValue);
+        }
+        public static float getFloat(ContentResolver resolver, String name)
+                throws SettingNotFoundException {
+            String value = get("global", name);
+            if (value == null) throw new SettingNotFoundException(name);
+            try { return Float.parseFloat(value); }
+            catch (NumberFormatException ignored) {
+                throw new SettingNotFoundException(name);
+            }
         }
     }
 }

@@ -3,6 +3,7 @@ package android.text;
 import java.util.Iterator;
 
 public final class TextUtils {
+    public enum TruncateAt { START, MIDDLE, END, MARQUEE, END_SMALL }
     private TextUtils() {}
 
     public static boolean isEmpty(CharSequence value) {
@@ -17,6 +18,15 @@ public final class TextUtils {
             if (first.charAt(index) != second.charAt(index)) return false;
         }
         return true;
+    }
+    public static int indexOf(CharSequence text, char character) {
+        return indexOf(text, character, 0);
+    }
+    public static int indexOf(CharSequence text, char character, int start) {
+        if (text == null) return -1;
+        for (int index = Math.max(0, start); index < text.length(); index++)
+            if (text.charAt(index) == character) return index;
+        return -1;
     }
 
     public static String join(CharSequence delimiter, Object[] values) {

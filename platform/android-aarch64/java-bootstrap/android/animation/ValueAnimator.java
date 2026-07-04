@@ -3,6 +3,7 @@ package android.animation;
 import java.util.ArrayList;
 
 public class ValueAnimator extends Animator {
+    public static boolean areAnimatorsEnabled() { return true; }
     public interface AnimatorUpdateListener {
         void onAnimationUpdate(ValueAnimator animation);
     }

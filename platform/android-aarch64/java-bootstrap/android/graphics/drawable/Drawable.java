@@ -5,6 +5,10 @@ import android.graphics.Canvas;
 import android.content.res.ColorStateList;
 
 public class Drawable {
+    public abstract static class ConstantState {
+        public abstract Drawable newDrawable();
+        public int getChangingConfigurations() { return 0; }
+    }
     public interface Callback {
         void invalidateDrawable(Drawable drawable);
         void scheduleDrawable(Drawable drawable, Runnable action, long when);
@@ -14,6 +18,8 @@ public class Drawable {
     private Callback callback;
     private final Rect bounds = new Rect();
     private int alpha = 255;
+    private boolean visible = true;
+    private int[] state = new int[0];
 
     public Drawable() { this(""); }
     public Drawable(String sourcePath) {
@@ -35,7 +41,27 @@ public class Drawable {
     }
     public void setAlpha(int alpha) { this.alpha = alpha; invalidateSelf(); }
     public int getAlpha() { return alpha; }
+    public boolean setVisible(boolean visible, boolean restart) {
+        boolean changed = this.visible != visible;
+        this.visible = visible;
+        if (changed) invalidateSelf();
+        return changed;
+    }
+    public boolean isVisible() { return visible; }
+    public boolean setState(int[] value) {
+        state = value == null ? new int[0] : value.clone();
+        invalidateSelf();
+        return true;
+    }
+    public int[] getState() { return state.clone(); }
+    public boolean isStateful() { return false; }
     public Drawable mutate() { return this; }
+    public ConstantState getConstantState() {
+        final String path = sourcePath;
+        return new ConstantState() {
+            @Override public Drawable newDrawable() { return new Drawable(path); }
+        };
+    }
     public void setTint(int color) {}
     public void setTintList(ColorStateList colors) {}
     public void draw(Canvas canvas) {}

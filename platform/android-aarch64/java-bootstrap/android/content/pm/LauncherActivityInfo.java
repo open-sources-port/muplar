@@ -22,4 +22,12 @@ public class LauncherActivityInfo {
     public CharSequence getLabel() { return applicationInfo.loadLabel(packageManager); }
     public Drawable getIcon(int density) { return applicationInfo.loadIcon(packageManager); }
     public ApplicationInfo getApplicationInfo() { return applicationInfo; }
+    public float getLoadingProgress() { return 1.0f; }
+    public ActivityInfo getActivityInfo() {
+        ActivityInfo info = new ActivityInfo();
+        info.applicationInfo = applicationInfo;
+        info.packageName = applicationInfo.packageName;
+        info.name = applicationInfo.launchActivity;
+        return info;
+    }
 }

@@ -9,9 +9,27 @@ import android.util.AttributeSet;
 import android.graphics.drawable.Drawable;
 import android.content.res.TypedArray;
 import android.os.Handler;
+import android.os.Binder;
+import android.os.IBinder;
 import android.graphics.Rect;
+import android.graphics.Matrix;
 
 public class View implements Drawable.Callback {
+    public static class MeasureSpec {
+        public static final int UNSPECIFIED = 0 << 30;
+        public static final int EXACTLY = 1 << 30;
+        public static final int AT_MOST = 2 << 30;
+        public static int makeMeasureSpec(int size, int mode) {
+            return (size & 0x3fffffff) | (mode & 0xc0000000);
+        }
+        public static int getMode(int spec) { return spec & 0xc0000000; }
+        public static int getSize(int spec) { return spec & 0x3fffffff; }
+    }
+    private static final IBinder WINDOW_TOKEN = new Binder();
+    private static final Display DISPLAY = new Display();
+    private static final WindowInsetsController WINDOW_INSETS_CONTROLLER =
+        new WindowInsetsController();
+    private final Matrix matrix = new Matrix();
     protected static final int[] EMPTY_STATE_SET = new int[0];
     protected static final int[] ENABLED_STATE_SET = new int[]{16842910};
     public static final int VISIBLE = 0;
@@ -60,6 +78,18 @@ public class View implements Drawable.Callback {
     public interface OnTouchListener {
         boolean onTouch(View view, MotionEvent event);
     }
+    public interface OnDragListener {
+        boolean onDrag(View view, DragEvent event);
+    }
+    public static class DragShadowBuilder {
+        private final View view;
+        public DragShadowBuilder() { this(null); }
+        public DragShadowBuilder(View view) { this.view = view; }
+        public View getView() { return view; }
+        public void onProvideShadowMetrics(android.graphics.Point size,
+                android.graphics.Point touch) {}
+        public void onDrawShadow(android.graphics.Canvas canvas) {}
+    }
     public interface OnAttachStateChangeListener {
         void onViewAttachedToWindow(View view);
         void onViewDetachedFromWindow(View view);
@@ -81,7 +111,11 @@ public class View implements Drawable.Callback {
     private OnLongClickListener longClickListener;
     private OnFocusChangeListener focusChangeListener;
     private OnTouchListener touchListener;
+    private OnDragListener dragListener;
     private boolean focused;
+    private boolean pressed;
+    private boolean selected;
+    private android.view.animation.Animation animation;
     private boolean willNotDraw;
     private boolean hapticFeedbackEnabled = true;
     private boolean defaultFocusHighlightEnabled = true;
@@ -105,6 +139,7 @@ public class View implements Drawable.Callback {
     private final Handler handler = new Handler();
     private boolean layoutRequested;
     private boolean clickable;
+    private boolean longClickable;
     private Rect clipBounds;
     private java.util.List<Rect> systemGestureExclusionRects =
         java.util.Collections.emptyList();
@@ -112,10 +147,17 @@ public class View implements Drawable.Callback {
     private int top;
     private int right;
     private int bottom;
+    private int measuredWidth;
+    private int measuredHeight;
     private int layerType;
+    private float pivotX = Float.NaN;
+    private float pivotY = Float.NaN;
+    private int backgroundColor;
     private ViewParent parent;
+    private WindowInsetsAnimation.Callback windowInsetsAnimationCallback;
     private int layoutDirection = -1;
     private CharSequence contentDescription;
+    private CharSequence accessibilityPaneTitle;
 
     protected View(Object peer) { this(peer, null); }
     protected View(Object peer, Context context) {
@@ -131,6 +173,13 @@ public class View implements Drawable.Callback {
             int defStyleRes) { this(context); }
     public final Object getPeer() { return peer; }
     public Context getContext() { return context; }
+    public IBinder getWindowToken() { return WINDOW_TOKEN; }
+    public Display getDisplay() { return DISPLAY; }
+    public WindowInsetsController getWindowInsetsController() {
+        return WINDOW_INSETS_CONTROLLER;
+    }
+    public WindowInsets getRootWindowInsets() { return new WindowInsets(); }
+    public Matrix getMatrix() { return matrix; }
     public Resources getResources() {
         return context == null ? Resources.getSystem() : context.getResources();
     }
@@ -145,6 +194,8 @@ public class View implements Drawable.Callback {
     public float getTranslationY() { return properties[2]; }
     public void setTranslationZ(float value) { properties[3] = value; }
     public float getTranslationZ() { return properties[3]; }
+    public void setElevation(float value) { properties[11] = value; }
+    public float getElevation() { return properties[11]; }
     public void setScaleX(float value) { properties[4] = value; }
     public float getScaleX() { return properties[4]; }
     public void setScaleY(float value) { properties[5] = value; }
@@ -161,8 +212,21 @@ public class View implements Drawable.Callback {
     public float getY() { return properties[10]; }
     public void setZ(float value) { properties[11] = value; }
     public float getZ() { return properties[11]; }
-    public void setVisibility(int visibility) { this.visibility = visibility; }
+    public void setVisibility(int visibility) {
+        this.visibility = visibility;
+        HostUi.setVisibility(peer, visibility == VISIBLE);
+    }
     public int getVisibility() { return visibility; }
+    public int getWindowVisibility() { return visibility; }
+    public boolean isShown() {
+        if (visibility != VISIBLE) return false;
+        ViewParent current = parent;
+        while (current instanceof View) {
+            if (((View) current).getVisibility() != VISIBLE) return false;
+            current = ((View) current).getParent();
+        }
+        return true;
+    }
     public ViewTreeObserver getViewTreeObserver() { return viewTreeObserver; }
     public void setLayoutParams(ViewGroup.LayoutParams params) { layoutParams = params; }
     public ViewGroup.LayoutParams getLayoutParams() { return layoutParams; }
@@ -176,10 +240,43 @@ public class View implements Drawable.Callback {
         return layoutParams != null && layoutParams.height > 0 ? layoutParams.height
             : getResources().getDisplayMetrics().heightPixels;
     }
-    public int getMeasuredWidth() { return getWidth(); }
-    public int getMeasuredHeight() { return getHeight(); }
+    public int getMeasuredWidth() { return measuredWidth > 0 ? measuredWidth : getWidth(); }
+    public int getMeasuredHeight() { return measuredHeight > 0 ? measuredHeight : getHeight(); }
+    public final void measure(int widthMeasureSpec, int heightMeasureSpec) {
+        onMeasure(widthMeasureSpec, heightMeasureSpec);
+    }
+    protected void onMeasure(int widthMeasureSpec, int heightMeasureSpec) {
+        setMeasuredDimension(MeasureSpec.getSize(widthMeasureSpec),
+            MeasureSpec.getSize(heightMeasureSpec));
+    }
+    protected final void setMeasuredDimension(int width, int height) {
+        measuredWidth = Math.max(0, width);
+        measuredHeight = Math.max(0, height);
+    }
     public int getLeft() { return left; }
     public int getTop() { return top; }
+    public void getHitRect(Rect outRect) {
+        if (outRect != null) outRect.set(left, top, right, bottom);
+    }
+    public void getDrawingRect(Rect outRect) {
+        if (outRect != null) outRect.set(0, 0, getWidth(), getHeight());
+    }
+    public void getLocationOnScreen(int[] location) {
+        if (location == null || location.length < 2)
+            throw new IllegalArgumentException("location must contain two values");
+        int x = left;
+        int y = top;
+        ViewParent current = parent;
+        while (current instanceof View) {
+            View ancestor = (View) current;
+            x += ancestor.getLeft() - ancestor.getScrollX();
+            y += ancestor.getTop() - ancestor.getScrollY();
+            current = ancestor.getParent();
+        }
+        location[0] = x;
+        location[1] = y;
+    }
+    public void getLocationInWindow(int[] location) { getLocationOnScreen(location); }
     public int getRight() { return right > left ? right : left + getWidth(); }
     public int getBottom() { return bottom > top ? bottom : top + getHeight(); }
     public void layout(int left, int top, int right, int bottom) {
@@ -193,10 +290,18 @@ public class View implements Drawable.Callback {
     public void offsetTopAndBottom(int offset) { top += offset; bottom += offset; }
     public void setLayerType(int type, android.graphics.Paint paint) { layerType = type; }
     public int getLayerType() { return layerType; }
+    public void setPivotX(float value) { pivotX = value; }
+    public float getPivotX() { return Float.isNaN(pivotX) ? getWidth() * 0.5f : pivotX; }
+    public void setPivotY(float value) { pivotY = value; }
+    public float getPivotY() { return Float.isNaN(pivotY) ? getHeight() * 0.5f : pivotY; }
     public void setContentDescription(CharSequence description) {
         contentDescription = description;
     }
     public CharSequence getContentDescription() { return contentDescription; }
+    public void setAccessibilityPaneTitle(CharSequence title) {
+        accessibilityPaneTitle = title;
+    }
+    public CharSequence getAccessibilityPaneTitle() { return accessibilityPaneTitle; }
     public void addOnAttachStateChangeListener(OnAttachStateChangeListener listener) {
         if (listener != null) attachListeners.add(listener);
     }
@@ -227,12 +332,19 @@ public class View implements Drawable.Callback {
     public java.util.List<Rect> getSystemGestureExclusionRects() {
         return java.util.Collections.unmodifiableList(systemGestureExclusionRects);
     }
+    public static void setTraceLayoutSteps(boolean enabled) {}
+    public static void setTraceRequestLayoutClass(boolean enabled) {}
+    public static void setTracedRequestLayoutClassClass(String className) {}
     public void setOnClickListener(OnClickListener listener) {
         clickListener = listener;
         clickable = listener != null;
+        HostUi.setOnViewClickListener(peer, listener == null ? null : new Runnable() {
+            @Override public void run() { performClick(); }
+        });
     }
     public void setOnLongClickListener(OnLongClickListener listener) {
         longClickListener = listener;
+        longClickable = listener != null;
     }
     public void setOnFocusChangeListener(OnFocusChangeListener listener) {
         focusChangeListener = listener;
@@ -240,18 +352,57 @@ public class View implements Drawable.Callback {
     public void setOnTouchListener(OnTouchListener listener) {
         touchListener = listener;
     }
+    public void setOnDragListener(OnDragListener listener) { dragListener = listener; }
+    public boolean dispatchDragEvent(DragEvent event) {
+        return dragListener != null && dragListener.onDrag(this, event);
+    }
+    public boolean startDragAndDrop(android.content.ClipData data,
+            DragShadowBuilder shadowBuilder, Object localState, int flags) {
+        return dispatchDragEvent(DragEvent.obtain(DragEvent.ACTION_DRAG_STARTED,
+            0, 0, localState, data == null ? null : data.getDescription(), data, false));
+    }
+    public boolean startDrag(android.content.ClipData data,
+            DragShadowBuilder shadowBuilder, Object localState, int flags) {
+        return startDragAndDrop(data, shadowBuilder, localState, flags);
+    }
     public boolean dispatchTouchEvent(MotionEvent event) {
-        return touchListener != null && touchListener.onTouch(this, event);
+        if (touchListener != null && touchListener.onTouch(this, event)) return true;
+        return onTouchEvent(event);
+    }
+    public boolean onTouchEvent(MotionEvent event) {
+        if (!clickable || event == null) return false;
+        if (event.getActionMasked() == MotionEvent.ACTION_UP) performClick();
+        return true;
     }
     public boolean performClick() {
         if (clickListener == null) return false;
         clickListener.onClick(this); return true;
     }
+    public void refreshDrawableState() { drawableStateChanged(); }
+    protected void drawableStateChanged() {}
+    public int[] getDrawableState() { return ENABLED_STATE_SET.clone(); }
     public void setClickable(boolean value) { clickable = value; }
+    public void setPressed(boolean value) { pressed = value; }
+    public boolean isPressed() { return pressed; }
+    public void setSelected(boolean value) { selected = value; }
+    public boolean isSelected() { return selected; }
+    public void startAnimation(android.view.animation.Animation value) {
+        animation = value;
+        if (value != null) value.start();
+    }
+    public void clearAnimation() {
+        if (animation != null) animation.cancel();
+        animation = null;
+    }
+    public android.view.animation.Animation getAnimation() { return animation; }
+    public ViewRootImpl getViewRootImpl() { return null; }
     public boolean isClickable() { return clickable; }
+    public void setLongClickable(boolean value) { longClickable = value; }
+    public boolean isLongClickable() { return longClickable; }
     public boolean performLongClick() {
         return longClickListener != null && longClickListener.onLongClick(this);
     }
+    public void cancelLongPress() {}
     public boolean requestFocus() {
         if (!focused) {
             focused = true;
@@ -266,6 +417,11 @@ public class View implements Drawable.Callback {
         }
     }
     public boolean hasFocus() { return focused; }
+    public boolean hasWindowFocus() { return isShown(); }
+    public boolean performHapticFeedback(int feedbackConstant, int flags) {
+        return performHapticFeedback(feedbackConstant);
+    }
+    public void sendAccessibilityEvent(int eventType) {}
     public void setWillNotDraw(boolean value) { willNotDraw = value; }
     public boolean willNotDraw() { return willNotDraw; }
     public void setHapticFeedbackEnabled(boolean enabled) {
@@ -312,6 +468,15 @@ public class View implements Drawable.Callback {
         if (background != null) background.setCallback(this);
     }
     public Drawable getBackground() { return background; }
+    public void setBackgroundResource(int resourceId) {
+        setBackground(resourceId == 0 ? null : getResources().getDrawable(resourceId));
+    }
+    public void setBackgroundColor(int color) { backgroundColor = color; }
+    public void draw(android.graphics.Canvas canvas) {
+        if (background != null) background.draw(canvas);
+        onDraw(canvas);
+    }
+    protected void onDraw(android.graphics.Canvas canvas) {}
     public void setSystemUiVisibility(int visibility) {
         systemUiVisibility = visibility;
     }
@@ -337,6 +502,24 @@ public class View implements Drawable.Callback {
         return getLayoutDirection() == LAYOUT_DIRECTION_RTL ? paddingLeft : paddingRight;
     }
     public ViewParent getParent() { return parent; }
+    public View getRootView() {
+        View root = this;
+        ViewParent current = parent;
+        while (current instanceof View) {
+            root = (View) current;
+            current = root.getParent();
+        }
+        return root;
+    }
+    public boolean getLocalVisibleRect(Rect rectangle) {
+        if (rectangle == null || visibility != VISIBLE) return false;
+        rectangle.set(0, 0, getWidth(), getHeight());
+        return !rectangle.isEmpty();
+    }
+    public void setWindowInsetsAnimationCallback(
+            WindowInsetsAnimation.Callback callback) {
+        windowInsetsAnimationCallback = callback;
+    }
     void assignParent(ViewParent value) { parent = value; }
     public boolean post(Runnable action) { return handler.post(action); }
     public boolean postDelayed(Runnable action, long delayMillis) {

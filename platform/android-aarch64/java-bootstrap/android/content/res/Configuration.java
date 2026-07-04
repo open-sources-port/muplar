@@ -42,4 +42,19 @@ public class Configuration {
         return "ar".equals(language) || "fa".equals(language) ||
             "he".equals(language) || "ur".equals(language) ? 1 : 0;
     }
+    public boolean equals(Configuration other) { return equals((Object) other); }
+    @Override public boolean equals(Object value) {
+        if (!(value instanceof Configuration)) return false;
+        Configuration other = (Configuration) value;
+        return orientation == other.orientation && sdkVersion == other.sdkVersion &&
+            densityDpi == other.densityDpi && screenWidthDp == other.screenWidthDp &&
+            screenHeightDp == other.screenHeightDp &&
+            smallestScreenWidthDp == other.smallestScreenWidthDp &&
+            uiMode == other.uiMode && Float.compare(fontScale, other.fontScale) == 0 &&
+            java.util.Objects.equals(locale, other.locale);
+    }
+    @Override public int hashCode() {
+        return java.util.Objects.hash(orientation, sdkVersion, locale, densityDpi,
+            screenWidthDp, screenHeightDp, smallestScreenWidthDp, uiMode, fontScale);
+    }
 }

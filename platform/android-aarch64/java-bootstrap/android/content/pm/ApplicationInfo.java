@@ -9,10 +9,13 @@ public class ApplicationInfo {
     public String sourceDir;
     public String launchActivity;
     public String iconPath;
+    public String widgetProvider;
+    public boolean isInstantApp() { return false; }
     public int flags;
     public int targetSdkVersion = 35;
     public int uid = 10000;
     public boolean enabled = true;
+    public boolean isArchived;
     private boolean enableOnBackInvokedCallback;
 
     public void setEnableOnBackInvokedCallback(boolean enabled) {

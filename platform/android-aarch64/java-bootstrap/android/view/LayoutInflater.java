@@ -43,6 +43,8 @@ public class LayoutInflater {
     public View inflate(int resourceId, ViewGroup root, boolean attachToRoot) {
         byte[] xml = context.getResources().readResourceFile(resourceId);
         View inflated = inflateBinary(xml);
+        if (root != null && inflated.getLayoutParams() == null)
+            inflated.setLayoutParams(root.generateDefaultLayoutParams());
         if (root != null && attachToRoot) root.addView(inflated);
         return inflated;
     }

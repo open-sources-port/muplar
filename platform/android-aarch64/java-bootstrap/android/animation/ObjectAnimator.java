@@ -22,6 +22,10 @@ public class ObjectAnimator extends ValueAnimator {
             animator.finalValue = Integer.valueOf(values[values.length - 1]);
         return animator;
     }
+    public static ObjectAnimator ofArgb(Object target, Property property,
+            int... values) {
+        return ofInt(target, property, values);
+    }
     @Override public ObjectAnimator setDuration(long duration) {
         super.setDuration(duration); return this;
     }

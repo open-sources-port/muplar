@@ -5,7 +5,7 @@ import java.util.Map;
 import java.util.TreeMap;
 
 public class SparseArray<E> implements Cloneable {
-    private final TreeMap<Integer, E> values;
+    private TreeMap<Integer, E> values;
 
     public SparseArray() { this(10); }
     public SparseArray(int initialCapacity) { values = new TreeMap<>(); }
@@ -55,9 +55,13 @@ public class SparseArray<E> implements Cloneable {
 
     @Override
     public SparseArray<E> clone() {
-        SparseArray<E> copy = new SparseArray<>(size());
-        copy.values.putAll(values);
-        return copy;
+        try {
+            SparseArray<E> copy = (SparseArray<E>) super.clone();
+            copy.values = new TreeMap<Integer, E>(values);
+            return copy;
+        } catch (CloneNotSupportedException impossible) {
+            throw new AssertionError(impossible);
+        }
     }
 
     @Override

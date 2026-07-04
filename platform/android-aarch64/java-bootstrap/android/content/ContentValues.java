@@ -15,6 +15,7 @@ public final class ContentValues {
     public void put(String key, byte[] value) { values.put(key, value); }
     public void putNull(String key) { values.put(key, null); }
     public Object get(String key) { return values.get(key); }
+    public boolean containsKey(String key) { return values.containsKey(key); }
     public String getAsString(String key) {
         Object value = values.get(key); return value == null ? null : value.toString();
     }

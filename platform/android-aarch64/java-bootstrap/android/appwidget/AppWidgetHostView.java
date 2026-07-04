@@ -16,10 +16,15 @@ public class AppWidgetHostView extends FrameLayout {
     public void setAppWidget(int id, AppWidgetProviderInfo info) {
         appWidgetId = id;
         appWidgetInfo = info;
+        RemoteViews views = AppWidgetManager.viewsFor(id);
+        if (views != null) updateAppWidget(views);
     }
     public int getAppWidgetId() { return appWidgetId; }
     public AppWidgetProviderInfo getAppWidgetInfo() { return appWidgetInfo; }
-    public void updateAppWidget(RemoteViews views) {}
+    public void updateAppWidget(RemoteViews views) {
+        removeAllViews();
+        if (views != null) addView(views.apply(getContext(), this));
+    }
     public void setExecutor(Executor executor) {}
     public static Rect getDefaultPaddingForWidget(Context context,
             android.content.ComponentName component, Rect padding) {

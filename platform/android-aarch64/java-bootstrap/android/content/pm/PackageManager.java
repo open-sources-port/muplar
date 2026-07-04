@@ -23,6 +23,25 @@ import java.nio.file.WatchService;
 import com.muplar.runtime.FrameworkServiceClient;
 
 public class PackageManager {
+    public static final class PackageInfoFlags {
+        private final long value;
+        private PackageInfoFlags(long value) { this.value = value; }
+        public static PackageInfoFlags of(long value) { return new PackageInfoFlags(value); }
+        public long getValue() { return value; }
+    }
+    public static final class ApplicationInfoFlags {
+        private final long value;
+        private ApplicationInfoFlags(long value) { this.value = value; }
+        public static ApplicationInfoFlags of(long value) {
+            return new ApplicationInfoFlags(value);
+        }
+        public long getValue() { return value; }
+    }
+    public static final class Property {
+        private final boolean booleanValue;
+        public Property(boolean value) { booleanValue = value; }
+        public boolean getBoolean() { return booleanValue; }
+    }
     private final PackageInstaller packageInstaller = new PackageInstaller();
     private volatile List<ApplicationInfo> applications;
     private final List<Runnable> packageChangeListeners =
@@ -41,12 +60,48 @@ public class PackageManager {
     }
     public boolean isSafeMode() { return false; }
     public boolean hasSystemFeature(String feature) { return false; }
+    public Property getProperty(String name, ComponentName component)
+            throws NameNotFoundException {
+        if (component == null) throw new NameNotFoundException("null component");
+        return new Property(false);
+    }
+    public Property getProperty(String name, String packageName)
+            throws NameNotFoundException {
+        getApplicationInfo(packageName, 0);
+        return new Property(false);
+    }
     public PackageInstaller getPackageInstaller() { return packageInstaller; }
     public void setApplicationEnabledSetting(String packageName, int newState,
             int flags) {}
 
     public List<ApplicationInfo> getInstalledApplications(int flags) {
         return Collections.unmodifiableList(applications);
+    }
+    public List<PackageInfo> getInstalledPackages(int flags) {
+        List<PackageInfo> result = new ArrayList<PackageInfo>();
+        for (ApplicationInfo application : applications) {
+            PackageInfo info = new PackageInfo();
+            info.packageName = application.packageName;
+            info.applicationInfo = application;
+            result.add(info);
+        }
+        return result;
+    }
+    public PackageInfo getPackageInfo(String packageName, int flags)
+            throws NameNotFoundException {
+        ApplicationInfo application = getApplicationInfo(packageName, flags);
+        PackageInfo info = new PackageInfo();
+        info.packageName = application.packageName;
+        info.applicationInfo = application;
+        return info;
+    }
+    public PackageInfo getPackageInfo(String packageName, PackageInfoFlags flags)
+            throws NameNotFoundException {
+        return getPackageInfo(packageName, (int) flags.getValue());
+    }
+    public ApplicationInfo getApplicationInfo(String packageName,
+            ApplicationInfoFlags flags) throws NameNotFoundException {
+        return getApplicationInfo(packageName, (int) flags.getValue());
     }
 
     public void registerPackageChangeListener(Runnable listener) {
@@ -66,6 +121,15 @@ public class PackageManager {
     public Drawable getApplicationIcon(String packageName)
             throws NameNotFoundException {
         return getApplicationIcon(getApplicationInfo(packageName, 0));
+    }
+
+    public Drawable getUserBadgedIcon(Drawable icon, android.os.UserHandle user) {
+        return icon;
+    }
+    public boolean isDefaultApplicationIcon(Drawable icon) { return icon == null; }
+    public CharSequence getUserBadgedLabel(CharSequence label,
+            android.os.UserHandle user) {
+        return label;
     }
 
     public Intent getLaunchIntentForPackage(String packageName) {
@@ -117,6 +181,9 @@ public class PackageManager {
         }
         return result;
     }
+    public List<ResolveInfo> queryIntentServices(Intent intent, int flags) {
+        return Collections.emptyList();
+    }
     public ResolveInfo resolveActivity(Intent intent, int flags) {
         List<ResolveInfo> results = queryIntentActivities(intent, flags);
         return results.isEmpty() ? null : results.get(0);
@@ -138,6 +205,14 @@ public class PackageManager {
                 if (packageName.equals(app.packageName)) return app;
             }
         }
+        if (packageName != null && packageName.equals(
+                System.getProperty("muplar.package.name", ""))) {
+            ApplicationInfo app = new ApplicationInfo();
+            app.packageName = packageName;
+            app.name = packageName;
+            app.sourceDir = System.getProperty("muplar.apk.resource.path", "");
+            return app;
+        }
         throw new NameNotFoundException(packageName);
     }
 
@@ -156,13 +231,16 @@ public class PackageManager {
                 String key = "package." + i + ".";
                 String packageName = registry.getProperty(key + "name", "");
                 String activity = registry.getProperty(key + "activity", "");
-                if (packageName.isEmpty() || activity.isEmpty()) continue;
+                String widget = registry.getProperty(key + "widget", "");
+                if (packageName.isEmpty() || (activity.isEmpty() && widget.isEmpty()))
+                    continue;
                 ApplicationInfo app = new ApplicationInfo();
                 app.packageName = packageName;
                 app.name = registry.getProperty(key + "label", packageName);
                 app.sourceDir = registry.getProperty(key + "apk", "");
                 app.launchActivity = activity;
                 app.iconPath = registry.getProperty(key + "icon", "");
+                app.widgetProvider = widget;
                 result.add(app);
             }
         } catch (RuntimeException error) {

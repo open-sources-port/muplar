@@ -2737,9 +2737,15 @@ static NSString* MapLinuxIconToSFSymbol(NSString* icon)
                 apk.manifest_application_label->front() != '@') {
                 name = NSStringFromStdString(*apk.manifest_application_label);
             } else if (apk.manifest_package && !apk.manifest_package->empty()) {
-                name = NSStringFromStdString(*apk.manifest_package);
-                if (*apk.manifest_package == "com.android.settings")
-                    name = @"Android Settings";
+                // No hardcoded names — derive display name from the last segment of the package.
+                // e.g. "com.android.launcher3" -> "Launcher3"
+                //      "com.android.settings"  -> "Settings"
+                std::string pkg = *apk.manifest_package;
+                std::string last = pkg;
+                auto dot = pkg.rfind('.');
+                if (dot != std::string::npos) last = pkg.substr(dot + 1);
+                if (!last.empty()) last[0] = std::toupper((unsigned char)last[0]);
+                name = NSStringFromStdString(last);
             }
         } @catch (...) {
             // Keep malformed APKs visible so launch can report the full error.
@@ -4171,10 +4177,11 @@ static NSString* MapLinuxIconToSFSymbol(NSString* icon)
             [self->_launchingAppPaths removeObject:key];
             [self->_runningTasks removeObjectForKey:key];
             [self->_appsTableView reloadData];
-            if (finished.terminationStatus != 0) {
+            int status = finished.terminationStatus;
+            if (status != 0 && status != 143 && status != 130) {
                 [self showError:[NSString stringWithFormat:
                     @"%@ stopped with exit code %d. See the instance log for details.",
-                    app.name, finished.terminationStatus]];
+                    app.name, status]];
             }
         });
     };
