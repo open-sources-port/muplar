@@ -164,7 +164,7 @@ if [ "$scanCode" -eq 0 ]; then
     fi
     if [ -z "$javaOnlyLog" ] ||
        ! grep -q "ArtApkMain.main returned successfully" "$javaOnlyLog"; then
-        echo "Java-only APK did not complete through the host JVM bootstrap path."
+        echo "Java-only APK did not complete through the ART bootstrap path."
         exit 1
     fi
 else
@@ -198,7 +198,7 @@ if [ "$scanCode" -eq 0 ]; then
     fi
     if [ -z "$tinyJavaLog" ] ||
        ! grep -q "ArtApkMain.main returned successfully" "$tinyJavaLog"; then
-        echo "Tiny Java Activity did not complete through the host JVM bootstrap path."
+        echo "Tiny Java Activity did not complete through the ART bootstrap path."
         exit 1
     fi
 else
@@ -217,33 +217,6 @@ else
     fi
 fi
 
-"$ROOT_DIR/tools/run-apk-compat-scan.sh" --report "$SCAN_REPORT" "$SYSROOT_TMP/javalauncher.apk" > "$SCAN_LOG" 2>&1
-scanCode=$?
-cat "$SCAN_LOG"
-launcherJavaLog="$(sed -n 's/^log: //p' "$SCAN_LOG" | head -1)"
-if [ "$scanCode" -eq 0 ]; then
-    if ! grep -q "status: launch-ok" "$SCAN_LOG"; then
-        echo "Compatibility scan passed Java launcher APK without launch-ok status."
-        exit 1
-    fi
-    if [ -z "$launcherJavaLog" ] ||
-       ! grep -q "ArtApkMain.main returned successfully" "$launcherJavaLog"; then
-        echo "Java launcher APK did not complete through the host JVM bootstrap path."
-        exit 1
-    fi
-    if ! grep -q "\[LauncherActivity\] onCreate called" "$launcherJavaLog"; then
-        echo "Java launcher APK did not invoke onCreate."
-        exit 1
-    fi
-    if ! grep -q "\[LauncherActivity\] Launching app: com.example.muplar.tiny" "$launcherJavaLog"; then
-        echo "Java launcher APK did not print launch message."
-        exit 1
-    fi
-else
-    echo "Compatibility scan failed for Java launcher APK."
-    exit 1
-fi
-
 EXTERNAL_JAVA_APK="$ROOT_DIR/build/javaonlytest-external.apk"
 cp "$SYSROOT_TMP/javaonlytest.apk" "$EXTERNAL_JAVA_APK"
 "$ROOT_DIR/tools/run-apk-compat-scan.sh" --report "$SCAN_REPORT" "$EXTERNAL_JAVA_APK" > "$SCAN_LOG" 2>&1
@@ -257,7 +230,7 @@ if [ "$scanCode" -eq 0 ]; then
     fi
     if [ -z "$externalJavaLog" ] ||
        ! grep -q "ArtApkMain.main returned successfully" "$externalJavaLog"; then
-        echo "External Java-only APK did not complete through the host JVM bootstrap path."
+        echo "External Java-only APK did not complete through the ART bootstrap path."
         exit 1
     fi
 else

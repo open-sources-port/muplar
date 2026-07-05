@@ -15,5 +15,4 @@ else
     CMD=("$@")
 fi
 
-ELFUSE_GUEST_UID=0 ELFUSE_GUEST_GID=0 \
-build/bin/mup --prefix "$INSTANCE_NAME" "${CMD[@]}"
+build/bin/mup --fakeroot --prefix "$INSTANCE_NAME" "${CMD[@]}"

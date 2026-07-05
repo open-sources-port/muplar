@@ -66,6 +66,26 @@ without hard-coded app-specific substitutes.
 
 ## Later: AOSP Launcher3
 
+Production Launcher3 must run through guest ART/app_process64 and Muplar's
+native host-window/GPU path. The old host JVM/Swing launcher harness has been
+removed from the production runtime and app bundle; Java APKs now enter through
+guest ART only.
+
+Required production inputs:
+
+```sh
+tools/import-android-art-sysroot.sh \
+  --from ~/.muplar/sysroots/android-arm64/api-35 \
+  --sysroot build/sysroot
+
+tools/prepare-android-sysroot.sh \
+  --android-root ~/.muplar/sysroots/android-arm64/api-35 \
+  --sysroot build/sysroot \
+  --strict-art
+
+tools/check-android-art-sysroot.sh --sysroot build/sysroot
+```
+
 - [x] Pin the official Android 15 Launcher3 source revision and provenance workflow.
 - [x] Add reproducible source fetch, AOSP APK import, and framework API inventory tooling.
 - [x] Run manifest `Application.onCreate()` before Activity creation in Java APK processes.
@@ -84,7 +104,8 @@ without hard-coded app-specific substitutes.
 - [x] Add All Apps screenshot capture and nonblank visual validation.
 
 Acceptance: Launcher3 displays an app drawer and launches an installed APK in
-a clean Android prefix. Advanced widgets and customization may follow.
+a clean Android prefix through guest ART/app_process64, not the host JVM/Swing
+development harness. Advanced widgets and customization may follow.
 
 Current runtime checkpoint: the official Android 15 ARM64 Launcher3 APK passes
 multidex conversion, resource-table loading, process startup, and the complete

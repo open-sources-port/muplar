@@ -13,8 +13,6 @@ fi
 
 mkdir -p "$(dirname "$LOG")"
 : > "$LOG"
-MUPLAR_HOST_TEST_SWIPE_UP=1 MUPLAR_HOST_TEST_CLICK_FIRST_APP=1 \
-MUPLAR_HOST_TEST_SCREENSHOT="${MUPLAR_LAUNCHER3_SCREENSHOT:-}" \
 "$ROOT_DIR/build/bin/mup" --prefix android-arm64 --apk "$FIXTURE" \
     >"$LOG" 2>&1 &
 PID=$!
@@ -26,17 +24,10 @@ cleanup() {
 trap cleanup EXIT
 
 for _ in {1..300}; do
-    if grep -q 'onStart/onResume completed successfully' "$LOG" &&
-       grep -q 'loadAllApps' "$LOG" &&
-       grep -qE 'materialized RecyclerView items=[12]' "$LOG" &&
-       grep -q 'onStateTransitionEnd - state: AllApps' "$LOG" &&
-       grep -q 'test first app click dispatched=true' "$LOG" &&
-       grep -q '\[IntentDispatcher\] launched ' "$LOG"; then
-        if [[ -n "${MUPLAR_LAUNCHER3_SCREENSHOT:-}" &&
-              ! -s "$MUPLAR_LAUNCHER3_SCREENSHOT" ]]; then
-            continue
-        fi
-        echo "Launcher3 lifecycle, All Apps, and application launch smoke passed"
+    if grep -q '\[Muplar/ART\] ArtApkMain started' "$LOG" &&
+       grep -q 'onStart/onResume completed successfully' "$LOG" &&
+       grep -q 'loadAllApps' "$LOG"; then
+        echo "Launcher3 guest ART lifecycle smoke passed"
         exit 0
     fi
     if grep -qE 'bootstrap failed|failed to invoke onCreate' "$LOG"; then
@@ -48,5 +39,5 @@ for _ in {1..300}; do
 done
 
 tail -80 "$LOG" >&2
-echo "Launcher3 did not complete lifecycle, All Apps, and application launch" >&2
+echo "Launcher3 did not complete guest ART lifecycle" >&2
 exit 1

@@ -28,6 +28,7 @@ struct PlatformLaunchConfig {
     bool verbose = false;
     bool quiet = false;
     int timeout_sec = 0;
+    bool fakeroot = false;
 
     std::optional<prefix::PrefixLayout> active_prefix;
     bool linux_guest = false;

@@ -188,53 +188,86 @@ for old in old_bodies:
 PY
 }
 
+ensure_policy_rc_d() {
+    local root="$1"
+    if [[ "$DISTRO" == "ubuntu" || "$DISTRO" == "debian" ]]; then
+        local policy_file="$root/usr/sbin/policy-rc.d"
+        if [[ ! -f "$policy_file" ]]; then
+            echo "[linux-rootfs] Creating policy-rc.d to prevent service autostart"
+            mkdir -p "$root/usr/sbin"
+            cat >"$policy_file" <<'EOF'
+#!/bin/sh
+exit 101
+EOF
+            chmod 755 "$policy_file"
+        fi
+    fi
+}
+
+ensure_coreutils_multicall_wrapper() {
+    local root="$1"
+    if [[ "$DISTRO" == "ubuntu" || "$DISTRO" == "debian" ]]; then
+        local coreutils="$root/usr/bin/coreutils"
+        local real_coreutils="$root/usr/bin/coreutils.real"
+
+        # Check if already diverted
+        if [[ ! -f "$real_coreutils" ]]; then
+            echo "[linux-rootfs] Diverting /usr/bin/coreutils to /usr/bin/coreutils.real"
+            # Run dpkg-divert in the guest to register the diversion
+            run_guest_root 'dpkg-divert --add --rename --divert /usr/bin/coreutils.real /usr/bin/coreutils'
+        fi
+
+        cat >"$coreutils" <<'EOF'
+#!/bin/sh
+cmd="${0##*/}"
+if [ "$cmd" = "coreutils" ]; then
+    if [ $# -eq 0 ]; then
+        exec /usr/bin/coreutils.real coreutils
+    else
+        exec /usr/bin/coreutils.real "$@"
+    fi
+else
+    exec /usr/bin/coreutils.real "$cmd" "$@"
+fi
+EOF
+        chmod 755 "$coreutils"
+    fi
+
+    # Also wrap the cargo uutils-coreutils directory to bypass the Rosetta argv[0] bug in Ubuntu 26.04+
+    local cargo_dir="$root/usr/lib/cargo/bin/coreutils"
+    local real_dir="$root/usr/lib/cargo/bin/coreutils.real"
+    if [[ -d "$cargo_dir" && ! -d "$real_dir" ]]; then
+        echo "[linux-rootfs] Wrapping Cargo uutils-coreutils directory to bypass Rosetta bug"
+        mv "$cargo_dir" "$real_dir"
+        mkdir -p "$cargo_dir"
+        
+        cat >"$cargo_dir/wrapper.sh" <<'EOF'
+#!/bin/sh
+cmd="${0##*/}"
+exec /usr/lib/cargo/bin/coreutils.real/"$cmd" "$@"
+EOF
+        chmod 755 "$cargo_dir/wrapper.sh"
+        
+        # Create symlinks for all applets pointing to the wrapper
+        local applet
+        for applet in "$real_dir"/*; do
+            [[ -f "$applet" ]] || continue
+            local name=$(basename "$applet")
+            [[ "$name" != "wrapper.sh" ]] || continue
+            ln -sf "wrapper.sh" "$cargo_dir/$name"
+        done
+    fi
+}
+
 run_guest_root() {
-    ELFUSE_GUEST_UID=0 ELFUSE_GUEST_GID=0 \
-        DEBIAN_FRONTEND=noninteractive DEBCONF_NONINTERACTIVE_SEEN=true \
-        TZ=Etc/UTC "$MUP" --quiet --prefix "$PREFIX" \
+    DEBIAN_FRONTEND=noninteractive DEBCONF_NONINTERACTIVE_SEEN=true \
+        TZ=Etc/UTC "$MUP" --fakeroot --quiet --prefix "$PREFIX" \
         /bin/sh -c "$1"
 }
 
 install_sudo() {
-    echo "[linux-rootfs] Installing sudo"
-    local rc=0
-    case "$DISTRO" in
-        ubuntu|debian)
-            # The managed /usr/local/bin/sudo works without setuid or Linux
-            # capabilities. Installing distro sudo here replaces files while
-            # dpkg is still bootstrapping and can leave a fresh rootfs in a
-            # half-configured state before the terminal transaction starts.
-            echo "[linux-rootfs] Using Muplar compatibility sudo"
-            return 0
-            ;;
-        alpine)
-            run_guest_root \
-                'apk add --no-cache sudo' || rc=$?
-            ;;
-
-        arch)
-            run_guest_root \
-                'pacman -Sy --needed --noconfirm sudo' || rc=$?
-            ;;
-
-        fedora)
-            run_guest_root \
-                'dnf -y install sudo' || rc=$?
-            ;;
-
-        opensuse)
-            run_guest_root \
-                'zypper --non-interactive install sudo' || rc=$?
-            ;;
-        *)
-            echo "[linux-rootfs] WARNING: unsupported distro: $DISTRO" >&2
-            return 0
-            ;;
-    esac
-    if [[ "$rc" -ne 0 ]]; then
-        echo "[linux-rootfs] WARNING: distro sudo package failed to install; Muplar compatibility sudo remains available" >&2
-    fi
-    return "$rc"
+    echo "[linux-rootfs] Using Muplar compatibility sudo"
+    return 0
 }
 
 install_terminal() {
@@ -318,7 +351,7 @@ ensure_arch_pacman_keyring() {
     rm -rf "$gpgdir"
     mkdir -p "$gpgdir"
 
-    ELFUSE_GUEST_UID=0 ELFUSE_GUEST_GID=0 "$MUP" --quiet --prefix "$PREFIX" \
+    "$MUP" --fakeroot --quiet --prefix "$PREFIX" \
         /bin/sh -c 'set -e
             gpg --dearmor --yes --output /etc/pacman.d/gnupg/pubring.gpg /usr/share/pacman/keyrings/archlinuxarm.gpg
             : > /etc/pacman.d/gnupg/secring.gpg
@@ -548,7 +581,7 @@ ensure_debian_dpkg_deb_config() {
     esac
 
     echo "[linux-rootfs] Bootstrapping Debian dpkg-deb compatibility"
-    ELFUSE_GUEST_UID=0 ELFUSE_GUEST_GID=0 "$MUP" --quiet --prefix "$PREFIX" \
+    "$MUP" --fakeroot --quiet --prefix "$PREFIX" \
         /bin/sh -c "set -e
             cd /home/muplar
             apt-get update
@@ -571,10 +604,10 @@ ensure_debian_dpkg_deb_config() {
         for deb in "${debs[@]}"; do
             guest_debs+=("/home/muplar/$(basename "$deb")")
         done
-        ELFUSE_GUEST_UID=0 ELFUSE_GUEST_GID=0 DEBIAN_FRONTEND=noninteractive \
-            "$MUP" --quiet --prefix "$PREFIX" /usr/bin/dpkg -i "${guest_debs[@]}" || true
-        ELFUSE_GUEST_UID=0 ELFUSE_GUEST_GID=0 DEBIAN_FRONTEND=noninteractive \
-            "$MUP" --quiet --prefix "$PREFIX" /usr/bin/apt-get -f install -y
+        DEBIAN_FRONTEND=noninteractive \
+            "$MUP" --fakeroot --quiet --prefix "$PREFIX" /usr/bin/dpkg -i "${guest_debs[@]}" || true
+        DEBIAN_FRONTEND=noninteractive \
+            "$MUP" --fakeroot --quiet --prefix "$PREFIX" /usr/bin/apt-get -f install -y
     fi
 }
 
@@ -1146,6 +1179,8 @@ ensure_certificate_symlink_config "$rootfs"
 ensure_dpkg_casefold_config "$rootfs"
 ensure_apt_cache_config "$rootfs"
 ensure_debconf_pipe_compat "$rootfs"
+ensure_policy_rc_d "$rootfs"
+ensure_coreutils_multicall_wrapper "$rootfs"
 if [[ "$DISTRO" == "arch" ]]; then
     ensure_arch_pacman_trust_config "$rootfs"
     ensure_arch_pacman_local_db_config "$rootfs"
@@ -1158,6 +1193,8 @@ MUPLAR_SKIP_LINUX_BOOTSTRAP=1 "$MUP" "${prefix_create_args[@]}" >/dev/null
 ensure_resolver_config "$rootfs"
 ensure_certificate_symlink_config "$rootfs"
 ensure_debconf_pipe_compat "$rootfs"
+ensure_policy_rc_d "$rootfs"
+ensure_coreutils_multicall_wrapper "$rootfs"
 if [[ "$DISTRO" == "debian" ]]; then
     ensure_debian_dpkg_deb_config "$rootfs"
 fi
