@@ -77,17 +77,25 @@ fi
 rm -rf "$CLASSES_DIR"
 mkdir -p "$CLASSES_DIR" "$(dirname "$OUT")"
 
-# Find all Java files recursively
-find "$SRC_DIR" -name "*.java" > "$BUILD_DIR/sources.txt"
+cat > "$BUILD_DIR/sources.txt" <<EOF
+$SRC_DIR/com/muplar/runtime/ArtApkMain.java
+$SRC_DIR/com/muplar/runtime/FrameworkProcessSession.java
+$SRC_DIR/com/muplar/runtime/FrameworkServiceClient.java
+EOF
 
 if "$JAVAC_BIN" --help 2>&1 | grep -q -- '--release'; then
-    "$JAVAC_BIN" -Xlint:-options --release 8 -d "$CLASSES_DIR" @"$BUILD_DIR/sources.txt"
+    "$JAVAC_BIN" -Xlint:-options --release 8 -sourcepath "$SRC_DIR" \
+        -d "$CLASSES_DIR" @"$BUILD_DIR/sources.txt"
 else
     "$JAVAC_BIN" -Xlint:-options -source 8 -target 8 \
-        -d "$CLASSES_DIR" @"$BUILD_DIR/sources.txt"
+        -sourcepath "$SRC_DIR" -d "$CLASSES_DIR" @"$BUILD_DIR/sources.txt"
 fi
 
-(cd "$CLASSES_DIR" && "$JAR_BIN" cf "$OUT" com android org)
+(cd "$CLASSES_DIR" && "$JAR_BIN" cf "$OUT" \
+    com/muplar/runtime/ArtApkMain.class \
+    com/muplar/runtime/FrameworkProcessSession.class \
+    com/muplar/runtime/FrameworkProcessSession\$1.class \
+    com/muplar/runtime/FrameworkServiceClient.class)
 
 echo "[ART] Built bootstrap jar: $OUT"
 file "$OUT"

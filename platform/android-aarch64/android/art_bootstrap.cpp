@@ -409,16 +409,27 @@ ArtBootstrapPlan build_art_bootstrap_plan(const ArtBootstrapConfig& config)
     }
     plan.env.push_back("ANDROID_ROOT=/system");
     plan.env.push_back("ANDROID_DATA=/data");
+    if (exists_dir(sysroot_join(plan.sysroot, "/apex/com.android.runtime")))
+        plan.env.push_back("ANDROID_RUNTIME_ROOT=/apex/com.android.runtime");
     if (exists_dir(sysroot_join(plan.sysroot, "/apex/com.android.art")))
         plan.env.push_back("ANDROID_ART_ROOT=/apex/com.android.art");
     if (exists_dir(sysroot_join(plan.sysroot, "/apex/com.android.i18n")))
         plan.env.push_back("ANDROID_I18N_ROOT=/apex/com.android.i18n");
     if (exists_dir(sysroot_join(plan.sysroot, "/apex/com.android.tzdata")))
         plan.env.push_back("ANDROID_TZDATA_ROOT=/apex/com.android.tzdata");
+    plan.env.push_back("ANDROID_PRINTF_LOG=stdio");
 
     if (!plan.app_process64_guest_path.empty())
         plan.argv.push_back(plan.app_process64_guest_path);
+    if (!guest_classpath.empty()) {
+        plan.argv.push_back("-classpath");
+        plan.argv.push_back(join_strings(guest_classpath, ":"));
+        plan.argv.push_back("-Djava.class.path=" +
+                            join_strings(guest_classpath, ":"));
+    }
     plan.argv.push_back("/system/bin");
+    plan.argv.push_back("--application");
+    plan.argv.push_back("--nice-name=muplar-art");
     plan.argv.push_back("com.muplar.runtime.ArtApkMain");
     plan.argv.push_back(plan.guest_apk_path.empty()
         ? plan.apk_path.string()
@@ -478,6 +489,16 @@ void print_art_bootstrap_plan(const ArtBootstrapPlan& plan)
         std::cerr << "[ART] guest library paths="
                   << plan.native_library_paths.size() << "\n";
         for (const auto& entry : plan.native_library_paths)
+            std::cerr << "[ART]   " << entry << "\n";
+    }
+    if (!plan.argv.empty()) {
+        std::cerr << "[ART] argv=" << plan.argv.size() << "\n";
+        for (size_t i = 0; i < plan.argv.size(); ++i)
+            std::cerr << "[ART]   argv[" << i << "]=" << plan.argv[i] << "\n";
+    }
+    if (!plan.env.empty()) {
+        std::cerr << "[ART] env=" << plan.env.size() << "\n";
+        for (const auto& entry : plan.env)
             std::cerr << "[ART]   " << entry << "\n";
     }
     if (!plan.ready()) {

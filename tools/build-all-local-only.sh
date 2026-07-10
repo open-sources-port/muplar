@@ -130,17 +130,6 @@ fi
 echo "Building Java ART bootstrap jar done."
 
 echo "========================================="
-echo "Building Java launcher APK test..."
-export scriptToRun=$ROOT_DIR/platform/android-aarch64/builtin-apps/build-launcher-apk.sh
-zsh ${scriptToRun}
-returnCode=$?
-if [ "$returnCode" -ne 0 ]; then
-    echo "Building Java launcher APK test error."
-  exit 1
-fi
-echo "Building Java launcher APK test done."
-
-echo "========================================="
 echo "Building APK unsupported import trap test..."
 export scriptToRun=$ROOT_DIR/tests/assets/apk/create-native-unsupported-import-apk.sh
 sh ${scriptToRun}

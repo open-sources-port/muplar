@@ -2,8 +2,6 @@ package com.muplar.runtime;
 
 import java.io.File;
 import java.lang.reflect.Constructor;
-import java.net.URL;
-import java.net.URLClassLoader;
 
 public final class ArtApkMain {
     private ArtApkMain() {
@@ -142,24 +140,17 @@ public final class ArtApkMain {
             // Not running in ART — fall through.
         }
 
-        // 3rd choice: java.net.URLClassLoader  (running in host JDK via libjvm)
-        // The APK has been pre-converted from DEX to a plain JAR by d8
-        // (host_jvm_launcher.cpp calls convert_apk_dex_to_jar() before launch).
-        URL apkUrl = new File(apkPath).toURI().toURL();
-        ClassLoader loader = new URLClassLoader(new URL[]{apkUrl}, parent);
-        System.out.println("[Muplar/ART] classLoader=URLClassLoader (host JDK)");
-        return loader;
+        throw new IllegalStateException(
+            "ART DexClassLoader/PathClassLoader is unavailable");
     }
 
     private static String ensureDexOptDir(String packageName) {
-        // Portable scratch dir: works in ART (/data/local/tmp) and host JDK.
         String base;
         String artBase = "/data/local/tmp/muplar/art/dexopt";
         File artParent = new File(artBase).getParentFile();
         if (artParent != null && artParent.canWrite()) {
             base = artBase;
         } else {
-            // Host JDK: java.io.tmpdir is set by host_jvm_launcher.cpp
             base = System.getProperty("java.io.tmpdir",
                        System.getProperty("user.home"))
                  + "/muplar/art/dexopt";

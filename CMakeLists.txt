@@ -238,8 +238,9 @@ include_directories(
 )
 
 # =========================================
-# Bundled JDK (Eclipse Temurin 21)
-# Used for Java-only APK bootstrap via host JNI_CreateJavaVM.
+# Build-time JDK (Eclipse Temurin 21)
+# Used only to compile Muplar's tiny ART bootstrap jar. It is not bundled into
+# production releases or used as a runtime host JVM.
 # Run tools/setup-jdk.sh once to download.
 # =========================================
 if(APPLE)
@@ -250,22 +251,19 @@ if(APPLE)
     endif()
 
     set(JDK_BIN_DIR     ${CMAKE_SOURCE_DIR}/third_party/jdk-bin/${JDK_BIN_ARCH})
-    set(JDK_LIBJVM      ${JDK_BIN_DIR}/lib/server/libjvm.dylib)
-    set(JDK_LIBJLI      ${JDK_BIN_DIR}/lib/jli/libjli.dylib)
-    set(JDK_INCLUDE_DIR ${JDK_BIN_DIR}/include)
     set(JDK_JAVA        ${JDK_BIN_DIR}/bin/java)
     set(JDK_JAVAC       ${JDK_BIN_DIR}/bin/javac)
     set(JDK_JAR         ${JDK_BIN_DIR}/bin/jar)
 
-    if(EXISTS "${JDK_LIBJVM}" AND EXISTS "${JDK_JAVAC}" AND EXISTS "${JDK_JAR}")
-        message(STATUS "Bundled JDK: ${JDK_LIBJVM}")
-        set(MUPLAR_HAS_BUNDLED_JDK ON)
+    if(EXISTS "${JDK_JAVAC}" AND EXISTS "${JDK_JAR}")
+        message(STATUS "Build JDK: ${JDK_BIN_DIR}")
+        set(MUPLAR_HAS_BUILD_JDK ON)
     else()
         message(WARNING
-            "Complete bundled JDK not found at ${JDK_BIN_DIR}\n"
+            "Build JDK not found at ${JDK_BIN_DIR}\n"
             "  Run: tools/setup-jdk.sh\n"
-            "  Java-only APK bootstrap will be disabled until then.")
-        set(MUPLAR_HAS_BUNDLED_JDK OFF)
+            "  Android ART bootstrap jar generation will fail until then.")
+        set(MUPLAR_HAS_BUILD_JDK OFF)
     endif()
 endif()
 

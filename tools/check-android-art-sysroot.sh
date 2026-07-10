@@ -91,6 +91,8 @@ fi
 check_any_file "app_process64" true \
     system/bin/app_process64 \
     apex/com.android.art/bin/app_process64
+check_any_file "linker64" true \
+    system/bin/linker64
 check_any_file "core-oj.jar" true \
     apex/com.android.art/javalib/core-oj.jar \
     system/framework/core-oj.jar

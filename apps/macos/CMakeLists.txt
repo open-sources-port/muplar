@@ -5,50 +5,39 @@ set(APP_BUNDLE_NAME "Muplar Instance Manager")
 set(APP_BUNDLE "${CMAKE_BINARY_DIR}/bin/${APP_BUNDLE_NAME}.app")
 set(APP_CONTENTS "${APP_BUNDLE}/Contents")
 set(WINE_PREFIX_DIR "${CMAKE_BINARY_DIR}/wine-prefix")
-set(BUILTIN_ANDROID_SOURCE_DIR
-    "${CMAKE_SOURCE_DIR}/platform/android-aarch64/builtin-apps")
 set(BUILTIN_ANDROID_DIR "${CMAKE_BINARY_DIR}/builtin-android")
-file(GLOB_RECURSE BUILTIN_ANDROID_SOURCES CONFIGURE_DEPENDS
-    "${BUILTIN_ANDROID_SOURCE_DIR}/launcher/*")
 file(GLOB_RECURSE ANDROID_BOOTSTRAP_JAVA CONFIGURE_DEPENDS
     "${CMAKE_SOURCE_DIR}/platform/android-aarch64/java-bootstrap/*.java")
 
 add_custom_command(
     OUTPUT
         "${BUILTIN_ANDROID_DIR}/muplar-launcher.apk"
-        "${BUILTIN_ANDROID_DIR}/muplar-launcher-classes.jar"
+        "${BUILTIN_ANDROID_DIR}/muplar-art-bootstrap.jar"
     COMMAND ${CMAKE_COMMAND} -E make_directory "${BUILTIN_ANDROID_DIR}"
     COMMAND ${CMAKE_COMMAND} -E env
         "JAVA_HOME=${JDK_BIN_DIR}" "JAVAC=${JDK_JAVAC}" "JAR=${JDK_JAR}"
         zsh "${CMAKE_SOURCE_DIR}/tools/build-art-bootstrap-jar.sh"
             --sysroot "${CMAKE_BINARY_DIR}/sysroot"
-    COMMAND ${CMAKE_COMMAND} -E env
-        "JAVA_HOME=${JDK_BIN_DIR}" "JAVAC=${JDK_JAVAC}" "JAR=${JDK_JAR}"
-        zsh "${BUILTIN_ANDROID_SOURCE_DIR}/build-launcher-apk.sh"
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        "${CMAKE_BINARY_DIR}/sysroot/data/local/tmp/muplar/art/muplar-art-bootstrap.jar"
+        "${BUILTIN_ANDROID_DIR}/muplar-art-bootstrap.jar"
     COMMAND zsh -c " \
         mkdir -p \"${BUILTIN_ANDROID_DIR}\" && \
         if [ -f \"${CMAKE_BINARY_DIR}/launcher3/fixture/Launcher3.apk\" ]; then \
             echo '[CMake] Packaging AOSP Launcher3 as default launcher...'; \
             cp \"${CMAKE_BINARY_DIR}/launcher3/fixture/Launcher3.apk\" \"${BUILTIN_ANDROID_DIR}/muplar-launcher.apk\"; \
-            if [ -x \"${CMAKE_SOURCE_DIR}/third_party/dex-tools-bin/d2j-dex2jar.sh\" ]; then \
-                \"${CMAKE_SOURCE_DIR}/third_party/dex-tools-bin/d2j-dex2jar.sh\" -f -o \"${BUILTIN_ANDROID_DIR}/muplar-launcher-classes.jar\" \"${BUILTIN_ANDROID_DIR}/muplar-launcher.apk\" || true; \
-                python3 \"${CMAKE_SOURCE_DIR}/tools/normalize-dex2jar.py\" \"${BUILTIN_ANDROID_DIR}/muplar-launcher-classes.jar\" || true; \
-            fi; \
         else \
-            echo '[CMake] Launcher3 fixture missing, using simple launcher fallback...'; \
-            cp \"${CMAKE_BINARY_DIR}/sysroot/data/local/tmp/javalauncher.apk\" \"${BUILTIN_ANDROID_DIR}/muplar-launcher.apk\"; \
-            cp \"${CMAKE_BINARY_DIR}/sysroot/data/local/tmp/javalauncher-classes.jar\" \"${BUILTIN_ANDROID_DIR}/muplar-launcher-classes.jar\"; \
+            echo '[CMake] Launcher3 fixture missing. Run platform/android-aarch64/compat/launcher3/fetch-official-apk.sh or import-apk.sh.' >&2; \
+            exit 1; \
         fi"
     DEPENDS
         "${CMAKE_SOURCE_DIR}/tools/build-art-bootstrap-jar.sh"
-        "${BUILTIN_ANDROID_SOURCE_DIR}/build-launcher-apk.sh"
-        ${BUILTIN_ANDROID_SOURCES}
         ${ANDROID_BOOTSTRAP_JAVA}
     VERBATIM)
 
 add_custom_target(muplar_android_builtin_apps DEPENDS
     "${BUILTIN_ANDROID_DIR}/muplar-launcher.apk"
-    "${BUILTIN_ANDROID_DIR}/muplar-launcher-classes.jar")
+    "${BUILTIN_ANDROID_DIR}/muplar-art-bootstrap.jar")
 
 set(WAWONA_DIR "${CMAKE_SOURCE_DIR}/third_party/muplar-wayland")
 
@@ -134,13 +123,31 @@ add_custom_target(populate_manager_bundle ALL
         "${CMAKE_SOURCE_DIR}/tools/provision-linux-rootfs.sh"
         "${APP_CONTENTS}/Resources/tools/provision-linux-rootfs.sh"
     COMMAND chmod 755 "${APP_CONTENTS}/Resources/tools/provision-linux-rootfs.sh"
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        "${CMAKE_SOURCE_DIR}/tools/ensure-android-art-sysroot.sh"
+        "${APP_CONTENTS}/Resources/tools/ensure-android-art-sysroot.sh"
+    COMMAND chmod 755 "${APP_CONTENTS}/Resources/tools/ensure-android-art-sysroot.sh"
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        "${CMAKE_SOURCE_DIR}/tools/check-android-art-sysroot.sh"
+        "${APP_CONTENTS}/Resources/tools/check-android-art-sysroot.sh"
+    COMMAND chmod 755 "${APP_CONTENTS}/Resources/tools/check-android-art-sysroot.sh"
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        "${CMAKE_SOURCE_DIR}/tools/import-android-art-sysroot.sh"
+        "${APP_CONTENTS}/Resources/tools/import-android-art-sysroot.sh"
+    COMMAND chmod 755 "${APP_CONTENTS}/Resources/tools/import-android-art-sysroot.sh"
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        "${CMAKE_SOURCE_DIR}/tools/build-art-bootstrap-jar.sh"
+        "${APP_CONTENTS}/Resources/tools/build-art-bootstrap-jar.sh"
+    COMMAND chmod 755 "${APP_CONTENTS}/Resources/tools/build-art-bootstrap-jar.sh"
 
     COMMAND ${CMAKE_COMMAND} -E copy_if_different
         "${BUILTIN_ANDROID_DIR}/muplar-launcher.apk"
         "${APP_CONTENTS}/Resources/android/muplar-launcher.apk"
-    COMMAND ${CMAKE_COMMAND} -E copy_if_different
-        "${BUILTIN_ANDROID_DIR}/muplar-launcher-classes.jar"
+    COMMAND ${CMAKE_COMMAND} -E rm -f
         "${APP_CONTENTS}/Resources/android/muplar-launcher-classes.jar"
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        "${BUILTIN_ANDROID_DIR}/muplar-art-bootstrap.jar"
+        "${APP_CONTENTS}/Resources/android/muplar-art-bootstrap.jar"
 
     # ── Windows compatibility defaults → Resources/ ─────────────────────────
     COMMAND ${CMAKE_COMMAND} -E copy_if_different
@@ -210,11 +217,13 @@ add_custom_target(populate_manager_bundle ALL
              patch_deps '${APP_CONTENTS}/Frameworks/libcrypto.3.dylib' '@loader_path/'; \
              patch_deps '${APP_CONTENTS}/Frameworks/libxkbcommon.0.dylib' '@loader_path/'; \
              patch_deps '${APP_CONTENTS}/Frameworks/libpixman-1.0.dylib' '@loader_path/'; \
-             for lib in libpixman-1.0.dylib libxkbcommon.0.dylib libssl.3.dylib libcrypto.3.dylib; do \
-                 if [ -f '${APP_CONTENTS}/Frameworks/'\"\$lib\" ]; then \
-                     codesign --force -s - '${APP_CONTENTS}/Frameworks/'\"\$lib\" 2>/dev/null || true; \
-                 fi; \
-             done; \
+              for lib in libpixman-1.0.dylib libxkbcommon.0.dylib libssl.3.dylib libcrypto.3.dylib; do \
+                  if [ -f '${APP_CONTENTS}/Frameworks/'\"\$lib\" ] ; then \
+                      codesign --force -s - '${APP_CONTENTS}/Frameworks/'\"\$lib\" 2>/dev/null || true; \
+                  fi; \
+              done; \
+              codesign --force -s - '${APP_CONTENTS}/MacOS/${APP_BUNDLE_NAME}' 2>/dev/null || true; \
+              codesign --force -s - '${APP_CONTENTS}/MacOS/mup' 2>/dev/null || true; \
          fi"
 
     # ── Guest EGL/GLESv2 Stubs → Frameworks/ ─────────────────────────────────

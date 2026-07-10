@@ -67,25 +67,6 @@ ditto "$APP_SRC" "$APP_STAGE"
 FRAMEWORKS_DIR="$APP_STAGE/Contents/Frameworks"
 mkdir -p "$FRAMEWORKS_DIR"
 
-# Bundle the JDK in the same layout used by the source tree:
-#   Contents/Frameworks/jdk-bin/macos-aarch64/lib/server/libjvm.dylib
-# This avoids baking the developer machine's absolute JDK path into releases.
-JDK_BIN_SRC="$ROOT_DIR/third_party/jdk-bin"
-JDK_BIN_DST="$FRAMEWORKS_DIR/jdk-bin"
-if [ -d "$JDK_BIN_SRC" ]; then
-  rm -rf "$JDK_BIN_DST"
-  rsync -a --delete \
-    --exclude '.DS_Store' \
-    --exclude '*/demo/' \
-    --exclude '*/man/' \
-    --exclude '*/src.zip' \
-    "$JDK_BIN_SRC/" "$JDK_BIN_DST/"
-else
-  echo "WARN: $JDK_BIN_SRC not found; Java-only APK bootstrap will be disabled." >&2
-fi
-
-normalize_tree_permissions "${JDK_BIN_DST}"
-
 # Basic release sanity checks based on the current Muplar bundle layout.
 required_paths=(
   "$APP_STAGE/Contents/MacOS/$APP_EXECUTABLE"
@@ -100,10 +81,6 @@ for path in "${required_paths[@]}"; do
     echo "WARN: expected bundle path missing: $path" >&2
   fi
 done
-
-if [ ! -f "$APP_STAGE/Contents/Frameworks/jdk-bin/macos-aarch64/lib/server/libjvm.dylib" ]; then
-  echo "WARN: bundled macos-aarch64 libjvm.dylib not found under Contents/Frameworks/jdk-bin." >&2
-fi
 
 # Remove local quarantine/resource attributes before signing and zipping.
 xattr -cr "$APP_STAGE" 2>/dev/null || true

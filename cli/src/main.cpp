@@ -41,6 +41,7 @@
 
 extern "C" {
 #include "runtime/forkipc.h"
+void proc_set_fakeroot_enabled(bool enabled);
 }
 
 #ifdef MUPLAR_HAS_WINE
@@ -82,6 +83,130 @@ static bool write_session_command(const std::filesystem::path& fifo,
     ssize_t written = write(fd, line.data(), line.size());
     close(fd);
     return written == static_cast<ssize_t>(line.size());
+}
+
+static std::filesystem::path current_executable_path()
+{
+#ifdef __APPLE__
+    char buffer[PROC_PIDPATHINFO_MAXSIZE];
+    int len = proc_pidpath(getpid(), buffer, sizeof(buffer));
+    if (len > 0)
+        return std::filesystem::path(std::string(buffer, len));
+#endif
+    return {};
+}
+
+static std::filesystem::path workspace_root_from_executable()
+{
+    std::filesystem::path current = current_executable_path();
+    if (current.empty())
+        current = std::filesystem::current_path();
+    if (std::filesystem::is_regular_file(current))
+        current = current.parent_path();
+    for (int i = 0; i < 8 && !current.empty(); ++i) {
+        if (std::filesystem::is_regular_file(current / "CMakeLists.txt"))
+            return current;
+        current = current.parent_path();
+    }
+    return std::filesystem::current_path();
+}
+
+static std::filesystem::path find_bundled_tool(const std::string& name)
+{
+    std::filesystem::path exe = current_executable_path();
+    if (!exe.empty()) {
+        std::filesystem::path macos = exe.parent_path();
+        std::filesystem::path bundled =
+            macos.parent_path() / "Resources" / "tools" / name;
+        if (std::filesystem::is_regular_file(bundled))
+            return bundled;
+    }
+    std::filesystem::path workspace_tool =
+        workspace_root_from_executable() / "tools" / name;
+    if (std::filesystem::is_regular_file(workspace_tool))
+        return workspace_tool;
+    return {};
+}
+
+static int run_script(const std::filesystem::path& script,
+                      const std::vector<std::string>& args)
+{
+    if (script.empty())
+        return 127;
+    pid_t pid = fork();
+    if (pid < 0) {
+        std::cerr << "fork failed: " << std::strerror(errno) << "\n";
+        return 127;
+    }
+    if (pid == 0) {
+        std::vector<std::string> storage;
+        storage.push_back("/bin/zsh");
+        storage.push_back(script.string());
+        storage.insert(storage.end(), args.begin(), args.end());
+        std::vector<char*> argv;
+        for (std::string& item : storage)
+            argv.push_back(item.data());
+        argv.push_back(nullptr);
+        execv("/bin/zsh", argv.data());
+        std::fprintf(stderr, "exec failed for %s: %s\n",
+                     script.string().c_str(), std::strerror(errno));
+        _exit(127);
+    }
+
+    int status = 0;
+    while (waitpid(pid, &status, 0) < 0) {
+        if (errno == EINTR)
+            continue;
+        std::cerr << "waitpid failed: " << std::strerror(errno) << "\n";
+        return 127;
+    }
+    if (WIFEXITED(status))
+        return WEXITSTATUS(status);
+    if (WIFSIGNALED(status))
+        return 128 + WTERMSIG(status);
+    return 127;
+}
+
+static std::filesystem::path default_android_art_sysroot()
+{
+    const char* override_path = std::getenv("MUPLAR_ANDROID_SYSROOT");
+    if (override_path && override_path[0])
+        return std::filesystem::path(override_path);
+    const char* home = std::getenv("HOME");
+    if (!home || !home[0])
+        return {};
+    return std::filesystem::path(home) / ".muplar" / "sysroots" /
+        "android-arm64" / "api-35" / "sysroot";
+}
+
+static bool ensure_android_art_sysroot(std::filesystem::path& runtime_sysroot)
+{
+    if (!runtime_sysroot.empty() &&
+        std::filesystem::is_directory(runtime_sysroot))
+        return true;
+
+    if (runtime_sysroot.empty())
+        runtime_sysroot = default_android_art_sysroot();
+    if (runtime_sysroot.empty()) {
+        std::cerr << "Unable to choose Android ART sysroot path: HOME is unset\n";
+        return false;
+    }
+
+    std::filesystem::path script =
+        find_bundled_tool("ensure-android-art-sysroot.sh");
+    if (script.empty()) {
+        std::cerr << "Android ART sysroot helper is unavailable.\n";
+        return false;
+    }
+
+    std::cout << "[android-sysroot] ensuring production ART sysroot...\n";
+    int rc = run_script(script, {"--sysroot", runtime_sysroot.string()});
+    if (rc != 0) {
+        std::cerr << "Android ART sysroot setup failed with exit code "
+                  << rc << "\n";
+        return false;
+    }
+    return true;
 }
 
 static void stream_session_log(const std::filesystem::path& log_path,
@@ -254,7 +379,7 @@ static void print_usage(const char* prog)
               << "              [--prefix NAME|PATH]\n"
               << "              [--apk] [--apk-lib NAME] [--apk-extract-dir PATH]\n"
               << "              [--native-activity]\n"
-              << "              [--strict-direct-imports]\n"
+              << "              [--strict-direct-imports] [--fakeroot]\n"
               << "              [--host-window] [--host-window-ms VALUE]\n"
               << "              [--jni-call CLASS METHOD SIGNATURE]"
               << " [--jni-static|--jni-instance] [--jni-int VALUE ...]\n"
@@ -638,6 +763,11 @@ static int handle_prefix_command(int argc, char** argv)
     if (!arch_set && kind == muplar::runtime::prefix::PrefixKind::Wine) {
         arch = muplar::runtime::prefix::GuestArch::X86_64;
     }
+    if (kind == muplar::runtime::prefix::PrefixKind::Android &&
+        runtime_sysroot.empty()) {
+        if (!ensure_android_art_sysroot(runtime_sysroot))
+            return 1;
+    }
 
     try {
         auto prefix = root.empty()
@@ -668,6 +798,8 @@ static int run_platform_runtime(
     const muplar::runtime::PlatformLaunchConfig& cfg)
 {
     namespace prefix = muplar::runtime::prefix;
+
+    proc_set_fakeroot_enabled(cfg.fakeroot);
 
     if (!cfg.active_prefix) {
         muplar::runtime::android::AndroidAarch64Runtime runtime;
@@ -905,6 +1037,12 @@ static int handle_instance_command(int argc, char** argv)
             muplar::runtime::PlatformLaunchConfig cfg;
             cfg.input_path   = program_path;
             cfg.guest_args   = program_args;
+            if (program_path == "sudo" ||
+                program_path == "/usr/bin/sudo" ||
+                program_path == "/usr/local/bin/sudo" ||
+                program_path == "/bin/sudo") {
+                cfg.fakeroot = true;
+            }
             cfg.verbose      = true;
             cfg.timeout_sec  = 0;
             cfg.active_prefix = layout;
@@ -1018,7 +1156,8 @@ int main(int argc, char** argv)
             break;
         if ((flag == "--apk-lib" || flag == "--apk-extract-dir" ||
              flag == "--sysroot" || flag == "--prefix" ||
-             flag == "--host-window-ms" || flag == "--jni-int" ||
+             flag == "--host-window-ms" || flag == "--android-runtime" ||
+             flag == "--jni-int" ||
              flag == "--jni-arg") &&
             i + 1 < argc) {
             ++i;
@@ -1064,6 +1203,10 @@ int main(int argc, char** argv)
             launch_cfg.apk_mode = true;
             launch_cfg.apk_extract_dir = argv[arg_start + 1];
             arg_start += 2;
+        } else if ((flag == "--android-runtime") && arg_start + 1 < argc) {
+            std::cerr << "--android-runtime was removed. Android Java APKs now "
+                         "run through guest ART/app_process64 only.\n";
+            return 1;
         } else if ((flag == "--sysroot") && arg_start + 1 < argc) {
             launch_cfg.sysroot = argv[arg_start + 1];
             arg_start  += 2;
@@ -1075,6 +1218,9 @@ int main(int argc, char** argv)
             ++arg_start;
         } else if (flag == "--strict-direct-imports") {
             launch_cfg.strict_direct_imports = true;
+            ++arg_start;
+        } else if (flag == "--fakeroot") {
+            launch_cfg.fakeroot = true;
             ++arg_start;
         } else if (flag == "--host-window") {
             launch_cfg.host_window = true;
@@ -1131,6 +1277,13 @@ int main(int argc, char** argv)
     }
 
     launch_cfg.input_path = argv[arg_start];
+
+    if (launch_cfg.input_path == "sudo" ||
+        launch_cfg.input_path == "/usr/bin/sudo" ||
+        launch_cfg.input_path == "/usr/local/bin/sudo" ||
+        launch_cfg.input_path == "/bin/sudo") {
+        launch_cfg.fakeroot = true;
+    }
 
     if (prefix_spec) {
         try {

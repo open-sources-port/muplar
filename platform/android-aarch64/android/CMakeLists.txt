@@ -7,13 +7,6 @@ set(MUPLAR_ANDROID_SOURCES
     art_bootstrap.cpp
 )
 
-if(MUPLAR_HAS_BUNDLED_JDK)
-    list(APPEND MUPLAR_ANDROID_SOURCES host_jvm_launcher.cpp)
-    if(APPLE)
-        set_source_files_properties(host_jvm_launcher.cpp PROPERTIES LANGUAGE OBJCXX)
-    endif()
-endif()
-
 add_library(muplar_runtime_android STATIC
     ${MUPLAR_ANDROID_SOURCES}
 )
@@ -51,26 +44,6 @@ target_link_libraries(muplar_runtime_android
         ${ANGLE_LIB_DIR}/libEGL.dylib
         ${ANGLE_LIB_DIR}/libGLESv2.dylib
 )
-
-if(APPLE AND MUPLAR_HAS_BUNDLED_JDK)
-    target_link_libraries(muplar_runtime_android PRIVATE "-framework AppKit")
-endif()
-
-
-
-
-
-# ── Bundled JDK (optional — enabled when tools/setup-jdk.sh has been run) ────
-if(MUPLAR_HAS_BUNDLED_JDK)
-    target_compile_definitions(muplar_runtime_android PRIVATE
-        MUPLAR_HAS_BUNDLED_JDK=1
-        MUPLAR_JDK_LIBJVM_PATH="${JDK_LIBJVM}"
-    )
-    target_include_directories(muplar_runtime_android PRIVATE
-        ${JDK_INCLUDE_DIR}
-        ${JDK_INCLUDE_DIR}/darwin
-    )
-endif()
 
 # Tell the dynamic linker where to find the dylibs at runtime
 set_target_properties(muplar_runtime_android PROPERTIES
