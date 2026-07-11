@@ -64,3 +64,6 @@ output:
 platform/android-aarch64/compat/launcher3/test-persistence.sh
 platform/android-aarch64/compat/launcher3/visual-smoke.sh
 ```
+
+See `docs/roadmap/android/launcher3.md` for the current Launcher3 execution
+status and the remaining production-readiness checklist.

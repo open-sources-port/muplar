@@ -12,25 +12,27 @@
 #include "gpu_bridge.h"
 
 extern "C" {
-    #include "core/guest.h"
+#include "core/guest.h"
 }
 
-namespace muplar::runtime::android {
+namespace muplar::runtime::android
+{
 
 using BuiltinSymbols = std::unordered_map<std::string, uint64_t>;
 
-using StubHandler = std::function<uint64_t(guest_t*, const uint64_t[8])>;
+using StubHandler = std::function<uint64_t(guest_t *, const uint64_t[8])>;
 using GuestFunctionInvoker =
-    std::function<int64_t(uint64_t, const std::vector<uint64_t>&)>;
+    std::function<int64_t(uint64_t, const std::vector<uint64_t> &)>;
 
 struct StubEntry {
-    std::string  soname;
-    std::string  symbol;
-    uint32_t     hvc_nr;
-    StubHandler  handler;
+    std::string soname;
+    std::string symbol;
+    uint32_t hvc_nr;
+    StubHandler handler;
 };
 
-class AndroidRuntime : public GpuBridge {
+class AndroidRuntime : public GpuBridge
+{
 public:
     struct PendingPthreadCall {
         uint64_t handle = 0;
@@ -53,7 +55,7 @@ public:
         uint64_t data = 0;
     };
 
-    AndroidRuntime(guest_t* guest,
+    AndroidRuntime(guest_t *guest,
                    uint64_t stub_arena_gpa,
                    bool host_window_enabled = false);
     ~AndroidRuntime();
@@ -67,20 +69,34 @@ public:
 
 
     // Return the builtin symbol map for a given soname.
-    BuiltinSymbols builtin_symbols(const std::string& soname) const override;
+    BuiltinSymbols builtin_symbols(const std::string &soname) const override;
 
 
-    static constexpr const char* KNOWN_SONAMES[] = {
-        "libc.so", "libm.so", "libdl.so", "libdl_android.so", "liblog.so",
-        "libandroid.so", "libbinder_ndk.so", "libstdc++.so",
-        "libEGL.so", "libGLESv2.so", "libGLESv3.so",
-        "libc++_shared.so", "libc++abi.so", "libunwind.so",
-        "libandroid_support.so", "libjnigraphics.so",
-        nullptr
-    };
+    static constexpr const char *KNOWN_SONAMES[] = {"libc.so",
+                                                    "libm.so",
+                                                    "libdl.so",
+                                                    "libdl_android.so",
+                                                    "liblog.so",
+                                                    "libandroid.so",
+                                                    "libbinder_ndk.so",
+                                                    "libcutils.so",
+                                                    "libstdc++.so",
+                                                    "libEGL.so",
+                                                    "libGLESv2.so",
+                                                    "libGLESv3.so",
+                                                    "libc++_shared.so",
+                                                    "libc++abi.so",
+                                                    "libunwind.so",
+                                                    "libandroid_support.so",
+                                                    "libjnigraphics.so",
+                                                    "libnativebridge.so",
+                                                    nullptr};
 
-    // HVC dispatch — call from the HVC exit handler when X8 is in [0x2000, 0x2FFF].
-    bool try_dispatch(uint32_t hvc_nr, const uint64_t regs[8], uint64_t* x0_out) override;
+    // HVC dispatch — call from the HVC exit handler when X8 is in [0x2000,
+    // 0x2FFF].
+    bool try_dispatch(uint32_t hvc_nr,
+                      const uint64_t regs[8],
+                      uint64_t *x0_out) override;
 
     // EGL state accessors (used by NativeWindow bridge)
     uint64_t input_queue_handle() const { return GUEST_INPUT_QUEUE; }
@@ -109,16 +125,22 @@ private:
     void register_libbinder_stubs();
 
     // Allocate a passthrough stub that saves/restores and calls a host fn ptr.
-    // Used by eglGetProcAddress so the guest can resolve arbitrary GLES symbols.
-    uint64_t alloc_passthrough_stub(void* host_fn, uint32_t hvc_nr);
+    // Used by eglGetProcAddress so the guest can resolve arbitrary GLES
+    // symbols.
+    uint64_t alloc_passthrough_stub(void *host_fn, uint32_t hvc_nr);
 
     // ── Bump allocator for malloc stubs ──────────────────────────────────────
-    uint64_t heap_base_  = 0;
-    uint64_t heap_bump_  = 0;
-    static constexpr uint64_t HEAP_SIZE = 8 * 1024 * 1024; // 8MB for libc++ objects
+    uint64_t heap_base_ = 0;
+    uint64_t heap_bump_ = 0;
+    static constexpr uint64_t HEAP_SIZE =
+        8 * 1024 * 1024;  // 8MB for libc++ objects
 
-    // ── pthread handle table ──────────────────────────────────────────────────
-    struct PthreadEntry { uint64_t stack_gpa; uint64_t stack_size; };
+    // ── pthread handle table
+    // ──────────────────────────────────────────────────
+    struct PthreadEntry {
+        uint64_t stack_gpa;
+        uint64_t stack_size;
+    };
     std::unordered_map<uint64_t, PthreadEntry> threads_;
     std::vector<PendingPthreadCall> pending_pthreads_;
     std::unordered_map<uint64_t, uint64_t> pthread_returns_;
@@ -194,8 +216,12 @@ private:
     bool thread_yield_enabled_ = false;
     bool thread_yielded_ = false;
 
-    // ── dlopen handle table ───────────────────────────────────────────────────
-    struct DlopenEntry { std::string path; uint64_t load_base; };
+    // ── dlopen handle table
+    // ───────────────────────────────────────────────────
+    struct DlopenEntry {
+        std::string path;
+        uint64_t load_base;
+    };
     std::unordered_map<uint64_t, DlopenEntry> dl_handles_;
     uint64_t next_dl_handle_ = 0x9000'0001ULL;
 
@@ -290,10 +316,10 @@ private:
     GuestFunctionInvoker guest_function_invoker_;
 
     void rearm_looper_fd(int32_t fd);
-    HostPipe* pipe_for_fd(int32_t fd);
-    const HostPipe* pipe_for_fd(int32_t fd) const;
+    HostPipe *pipe_for_fd(int32_t fd);
+    const HostPipe *pipe_for_fd(int32_t fd) const;
     bool looper_fd_ready(int32_t fd) const;
     void release_binder_strong(uint64_t handle);
 };
 
-} // namespace muplar::runtime::android
+}  // namespace muplar::runtime::android

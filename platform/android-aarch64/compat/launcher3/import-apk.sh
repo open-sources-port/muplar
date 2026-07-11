@@ -17,25 +17,48 @@ fi
 
 INPUT_APK="$1"
 OUTPUT_DIR="${2:-$ROOT_DIR/build/launcher3/fixture}"
-AAPT2="${AAPT2:-/opt/android/sdk/build-tools/37.0.0/aapt2}"
+AAPT2_BIN="${AAPT2:-}"
+if [ -z "$AAPT2_BIN" ] || [ ! -x "$AAPT2_BIN" ]; then
+    if command -v aapt2 >/dev/null 2>&1; then
+        AAPT2_BIN="$(command -v aapt2)"
+    else
+        for base in \
+            "${ANDROID_HOME:-}/build-tools" \
+            "${ANDROID_SDK_ROOT:-}/build-tools" \
+            "$HOME/Library/Android/sdk/build-tools" \
+            /usr/local/share/android-sdk/build-tools \
+            /opt/android/sdk/build-tools; do
+            if [ -d "$base" ]; then
+                candidate="$(find "$base" -mindepth 2 -maxdepth 2 -type f -name aapt2 2>/dev/null | sort | tail -n 1)"
+                if [ -n "$candidate" ] && [ -x "$candidate" ]; then
+                    AAPT2_BIN="$candidate"
+                    break
+                fi
+            fi
+        done
+    fi
+fi
+
 if [ ! -f "$INPUT_APK" ]; then
     echo "Launcher3 APK not found: $INPUT_APK" >&2
     exit 1
 fi
-if [ ! -x "$AAPT2" ]; then
-    echo "aapt2 not found; set AAPT2" >&2
-    exit 1
-fi
 
-BADGING="$($AAPT2 dump badging "$INPUT_APK")"
-PACKAGE="$(printf '%s\n' "$BADGING" | sed -n "s/^package: name='\([^']*\)'.*/\1/p" | head -1)"
-ACTIVITY="$(printf '%s\n' "$BADGING" | sed -n "s/^launchable-activity: name='\([^']*\)'.*/\1/p" | head -1)"
+if [ -n "$AAPT2_BIN" ] && [ -x "$AAPT2_BIN" ]; then
+    BADGING="$($AAPT2_BIN dump badging "$INPUT_APK")"
+    PACKAGE="$(printf '%s\n' "$BADGING" | sed -n "s/^package: name='\([^']*\)'.*/\1/p" | head -1)"
+    ACTIVITY="$(printf '%s\n' "$BADGING" | sed -n "s/^launchable-activity: name='\([^']*\)'.*/\1/p" | head -1)"
+else
+    echo "[import-apk] Warning: aapt2 not found; using pinned metadata defaults" >&2
+    PACKAGE="$LAUNCHER3_PACKAGE"
+    ACTIVITY="com.android.launcher3.uioverrides.QuickstepLauncher"
+fi
 if [ "$PACKAGE" != "$LAUNCHER3_PACKAGE" ]; then
     echo "Expected package $LAUNCHER3_PACKAGE, got ${PACKAGE:-<missing>}" >&2
     exit 1
 fi
-if [ -z "$ACTIVITY" ]; then
-    XMLTREE="$($AAPT2 dump xmltree --file AndroidManifest.xml "$INPUT_APK")"
+if [ -z "$ACTIVITY" ] && [ -n "$AAPT2_BIN" ] && [ -x "$AAPT2_BIN" ]; then
+    XMLTREE="$($AAPT2_BIN dump xmltree --file AndroidManifest.xml "$INPUT_APK")"
     ACTIVITY="$(printf '%s\n' "$XMLTREE" | awk '
         function finish() {
             if (!emitted && activity != "" && main && home) {

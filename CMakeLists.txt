@@ -34,11 +34,13 @@ file(WRITE ${ELFUSE_BUILD_SCRIPT}
 set(ELFUSE_SRC_DIR  \"${ELFUSE_SRC_DIR}\")
 set(ELFUSE_BUILD_DIR \"${ELFUSE_BUILD_DIR}\")
 set(ELFUSE_STATIC_LIB \"${ELFUSE_STATIC_LIB}\")
+set(CMAKE_C_COMPILER \"${CMAKE_C_COMPILER}\")
+set(CMAKE_AR \"${CMAKE_AR}\")
 
 # Step 1: run elfuse's Makefile with explicit target 'elfuse'
 message(STATUS \"build_elfuse: running make elfuse ...\")
 execute_process(
-    COMMAND make elfuse CC=clang SIGN_IDENTITY=-
+    COMMAND make elfuse \"CC=${CMAKE_C_COMPILER}\" SIGN_IDENTITY=-
     WORKING_DIRECTORY \${ELFUSE_SRC_DIR}
     RESULT_VARIABLE RC
 )
@@ -64,7 +66,7 @@ endif()
 # Step 3: create the static library
 file(REMOVE \"\${ELFUSE_STATIC_LIB}\")
 execute_process(
-    COMMAND ar rcs \"\${ELFUSE_STATIC_LIB}\" \${ELFUSE_OBJECTS}
+    COMMAND \"\${CMAKE_AR}\" rcs \"\${ELFUSE_STATIC_LIB}\" \${ELFUSE_OBJECTS}
     RESULT_VARIABLE RC
 )
 if(NOT RC EQUAL 0)

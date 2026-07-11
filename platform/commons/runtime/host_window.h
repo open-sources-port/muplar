@@ -3,7 +3,8 @@
 #include <cstdint>
 #include <vector>
 
-namespace muplar::runtime {
+namespace muplar::runtime
+{
 
 struct HostInputEvent {
     int32_t type = 0;
@@ -15,20 +16,21 @@ struct HostInputEvent {
     float y = 0.0f;
 };
 
-class HostWindow {
+class HostWindow
+{
 public:
     struct Impl;
 
     HostWindow(int width, int height);
     ~HostWindow();
 
-    HostWindow(const HostWindow&) = delete;
-    HostWindow& operator=(const HostWindow&) = delete;
+    HostWindow(const HostWindow &) = delete;
+    HostWindow &operator=(const HostWindow &) = delete;
 
     bool valid() const;
     bool closed() const;
 
-    void present_rgba(const uint8_t* pixels,
+    void present_rgba(const uint8_t *pixels,
                       int width,
                       int height,
                       int stride_pixels);
@@ -38,7 +40,7 @@ public:
     void run_until_closed();
 
 private:
-    Impl* impl_ = nullptr;
+    Impl *impl_ = nullptr;
 };
 
-} // namespace muplar::runtime
+}  // namespace muplar::runtime

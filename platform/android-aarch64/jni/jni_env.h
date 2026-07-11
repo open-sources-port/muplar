@@ -8,21 +8,22 @@
 #include <vector>
 #include <functional>
 
-namespace muplar::runtime::jni {
+namespace muplar::runtime::jni
+{
 
 // Opaque guest-side JNI pointer types (GPA values stored as uint64_t)
-using jobject   = uint64_t;
-using jclass    = uint64_t;
+using jobject = uint64_t;
+using jclass = uint64_t;
 using jmethodID = uint64_t;
-using jfieldID  = uint64_t;
-using jstring   = uint64_t;
-using jarray    = uint64_t;
+using jfieldID = uint64_t;
+using jstring = uint64_t;
+using jarray = uint64_t;
 using jobjectArray = uint64_t;
 using jbyteArray = uint64_t;
-using jintArray  = uint64_t;
+using jintArray = uint64_t;
 using jlongArray = uint64_t;
 using jfloatArray = uint64_t;
-using jvalue    = uint64_t;
+using jvalue = uint64_t;
 
 static constexpr jobject JNI_NULL = 0;
 
@@ -30,7 +31,7 @@ static constexpr jobject JNI_NULL = 0;
 static constexpr int JNI_VERSION_1_6 = 0x00010006;
 
 // JNI return codes
-static constexpr int JNI_OK  =  0;
+static constexpr int JNI_OK = 0;
 static constexpr int JNI_ERR = -1;
 
 // ────────────────────────────────────────────────────────────────────────────
@@ -39,14 +40,14 @@ static constexpr int JNI_ERR = -1;
 struct NativeMethod {
     std::string name;
     std::string signature;
-    uint64_t    fnptr_guest = 0;  // GPA of the registered JNI function
+    uint64_t fnptr_guest = 0;  // GPA of the registered JNI function
 };
 
 // ────────────────────────────────────────────────────────────────────────────
 // A host-side representation of a Java class seen through JNI
 // ────────────────────────────────────────────────────────────────────────────
 struct JClass {
-    std::string          descriptor;   // e.g. "com/example/Foo"
+    std::string descriptor;  // e.g. "com/example/Foo"
     std::vector<NativeMethod> methods;
 };
 
@@ -84,7 +85,8 @@ struct JClass {
 //   0x101E  GetDirectBufferCapacity
 //   0x101F  GetArrayLength
 // ────────────────────────────────────────────────────────────────────────────
-class JniEnv {
+class JniEnv
+{
 public:
     JniEnv();
 
@@ -105,15 +107,15 @@ public:
     void install_table(uint64_t table_gpa, uint64_t stub_base_gpa);
 
     // ── Host-side helpers called by the Android framework layer ─────────
-    void   register_class(const std::string& descriptor);
-    jclass find_class(const std::string& descriptor);
-    jobject register_object(const std::string& class_descriptor);
-    jstring make_string(const std::string& value);
+    void register_class(const std::string &descriptor);
+    jclass find_class(const std::string &descriptor);
+    jobject register_object(const std::string &class_descriptor);
+    jstring make_string(const std::string &value);
     jbyteArray make_byte_array(size_t length);
     jintArray make_int_array(size_t length);
     jlongArray make_long_array(size_t length);
     jfloatArray make_float_array(size_t length);
-    jobjectArray make_object_array(const std::string& element_descriptor,
+    jobjectArray make_object_array(const std::string &element_descriptor,
                                    size_t length,
                                    jobject initial = JNI_NULL);
     jobject make_direct_buffer(uint64_t guest_address, uint64_t capacity);
@@ -121,113 +123,122 @@ public:
                          std::string package_code_path);
 
     // Called by JniBridge to resolve char* GPAs before dispatch
-    void intern_string(uint64_t gpa, const std::string& value);
-    const std::string* get_string(uint64_t handle) const;
+    void intern_string(uint64_t gpa, const std::string &value);
+    const std::string *get_string(uint64_t handle) const;
 
     // Called by JniBridge after RegisterNatives to walk guest array
     void register_native(uint64_t class_handle,
-                         const std::string& name,
-                         const std::string& sig,
+                         const std::string &name,
+                         const std::string &sig,
                          uint64_t fnptr_guest);
 
     // Look up a registered native GPA by class+name+sig
     uint64_t find_native(uint64_t class_handle,
-                         const std::string& name,
-                         const std::string& sig) const;
+                         const std::string &name,
+                         const std::string &sig) const;
 
     // Called by JniBridge after SetByteArrayRegion to copy guest bytes in
     void set_byte_array_region(uint64_t handle,
-                                size_t start,
-                                const uint8_t* src,
-                                size_t len);
+                               size_t start,
+                               const uint8_t *src,
+                               size_t len);
     void set_int_array_region(uint64_t handle,
                               size_t start,
-                              const int32_t* src,
+                              const int32_t *src,
                               size_t len);
     void set_long_array_region(uint64_t handle,
                                size_t start,
-                               const int64_t* src,
+                               const int64_t *src,
                                size_t len);
     void set_float_array_region(uint64_t handle,
                                 size_t start,
-                                const float* src,
+                                const float *src,
                                 size_t len);
 
     // Read back a byte array buffer (e.g. to pass to host code)
-    const std::vector<uint8_t>* get_byte_array(uint64_t handle) const;
-    const std::vector<int32_t>* get_int_array(uint64_t handle) const;
-    const std::vector<int64_t>* get_long_array(uint64_t handle) const;
-    const std::vector<float>* get_float_array(uint64_t handle) const;
-    const std::vector<jobject>* get_object_array(uint64_t handle) const;
+    const std::vector<uint8_t> *get_byte_array(uint64_t handle) const;
+    const std::vector<int32_t> *get_int_array(uint64_t handle) const;
+    const std::vector<int64_t> *get_long_array(uint64_t handle) const;
+    const std::vector<float> *get_float_array(uint64_t handle) const;
+    const std::vector<jobject> *get_object_array(uint64_t handle) const;
     size_t array_length(uint64_t handle) const;
 
     // Returns (slot_index, stub_gpa) pairs for JniBridge::install()
-    std::vector<std::pair<int,uint64_t>> install_entries(uint64_t stub_base_gpa) const;
+    std::vector<std::pair<int, uint64_t>> install_entries(
+        uint64_t stub_base_gpa) const;
 
 private:
     // ── JNI call implementations ─────────────────────────────────────────
-    uint64_t jni_GetVersion(const uint64_t* a);
-    uint64_t jni_FindClass(const uint64_t* a);
-    uint64_t jni_RegisterNatives(const uint64_t* a);
-    uint64_t jni_GetMethodID(const uint64_t* a);
-    uint64_t jni_CallVoidMethod(const uint64_t* a);
-    uint64_t jni_CallIntMethod(const uint64_t* a);
-    uint64_t jni_NewStringUTF(const uint64_t* a);
-    uint64_t jni_GetStringUTFChars(const uint64_t* a);
-    uint64_t jni_ReleaseStringUTFChars(const uint64_t* a);
-    uint64_t jni_GetArrayLength(const uint64_t* a);
-    uint64_t jni_NewObjectArray(const uint64_t* a);
-    uint64_t jni_GetObjectArrayElement(const uint64_t* a);
-    uint64_t jni_SetObjectArrayElement(const uint64_t* a);
-    uint64_t jni_NewByteArray(const uint64_t* a);
-    uint64_t jni_NewIntArray(const uint64_t* a);
-    uint64_t jni_NewLongArray(const uint64_t* a);
-    uint64_t jni_NewFloatArray(const uint64_t* a);
-    uint64_t jni_SetByteArrayRegion(const uint64_t* a);
-    uint64_t jni_GetByteArrayElements(const uint64_t* a);
-    uint64_t jni_ReleaseByteArrayElements(const uint64_t* a);
-    uint64_t jni_GetIntArrayElements(const uint64_t* a);
-    uint64_t jni_GetLongArrayElements(const uint64_t* a);
-    uint64_t jni_GetFloatArrayElements(const uint64_t* a);
-    uint64_t jni_ReleaseIntArrayElements(const uint64_t* a);
-    uint64_t jni_ReleaseLongArrayElements(const uint64_t* a);
-    uint64_t jni_ReleaseFloatArrayElements(const uint64_t* a);
-    uint64_t jni_GetIntArrayRegion(const uint64_t* a);
-    uint64_t jni_GetLongArrayRegion(const uint64_t* a);
-    uint64_t jni_GetFloatArrayRegion(const uint64_t* a);
-    uint64_t jni_SetIntArrayRegion(const uint64_t* a);
-    uint64_t jni_SetLongArrayRegion(const uint64_t* a);
-    uint64_t jni_SetFloatArrayRegion(const uint64_t* a);
-    uint64_t jni_ExceptionCheck(const uint64_t* a);
-    uint64_t jni_ExceptionClear(const uint64_t* a);
-    uint64_t jni_DeleteLocalRef(const uint64_t* a);
-    uint64_t jni_ExceptionOccurred(const uint64_t* a);
-    uint64_t jni_ExceptionDescribe(const uint64_t* a);
-    uint64_t jni_PushLocalFrame(const uint64_t* a);
-    uint64_t jni_PopLocalFrame(const uint64_t* a);
-    uint64_t jni_NewGlobalRef(const uint64_t* a);
-    uint64_t jni_DeleteGlobalRef(const uint64_t* a);
-    uint64_t jni_IsSameObject(const uint64_t* a);
-    uint64_t jni_NewLocalRef(const uint64_t* a);
-    uint64_t jni_EnsureLocalCapacity(const uint64_t* a);
-    uint64_t jni_NewDirectByteBuffer(const uint64_t* a);
-    uint64_t jni_GetDirectBufferAddress(const uint64_t* a);
-    uint64_t jni_GetDirectBufferCapacity(const uint64_t* a);
-    uint64_t jni_GetObjectClass(const uint64_t* a);
-    uint64_t jni_CallObjectMethod(const uint64_t* a);
-    uint64_t jni_GetFieldID(const uint64_t* a);
+    uint64_t jni_GetVersion(const uint64_t *a);
+    uint64_t jni_FindClass(const uint64_t *a);
+    uint64_t jni_RegisterNatives(const uint64_t *a);
+    uint64_t jni_GetMethodID(const uint64_t *a);
+    uint64_t jni_CallVoidMethod(const uint64_t *a);
+    uint64_t jni_CallIntMethod(const uint64_t *a);
+    uint64_t jni_NewStringUTF(const uint64_t *a);
+    uint64_t jni_GetStringUTFChars(const uint64_t *a);
+    uint64_t jni_ReleaseStringUTFChars(const uint64_t *a);
+    uint64_t jni_GetArrayLength(const uint64_t *a);
+    uint64_t jni_NewObjectArray(const uint64_t *a);
+    uint64_t jni_GetObjectArrayElement(const uint64_t *a);
+    uint64_t jni_SetObjectArrayElement(const uint64_t *a);
+    uint64_t jni_NewByteArray(const uint64_t *a);
+    uint64_t jni_NewIntArray(const uint64_t *a);
+    uint64_t jni_NewLongArray(const uint64_t *a);
+    uint64_t jni_NewFloatArray(const uint64_t *a);
+    uint64_t jni_SetByteArrayRegion(const uint64_t *a);
+    uint64_t jni_GetByteArrayElements(const uint64_t *a);
+    uint64_t jni_ReleaseByteArrayElements(const uint64_t *a);
+    uint64_t jni_GetIntArrayElements(const uint64_t *a);
+    uint64_t jni_GetLongArrayElements(const uint64_t *a);
+    uint64_t jni_GetFloatArrayElements(const uint64_t *a);
+    uint64_t jni_ReleaseIntArrayElements(const uint64_t *a);
+    uint64_t jni_ReleaseLongArrayElements(const uint64_t *a);
+    uint64_t jni_ReleaseFloatArrayElements(const uint64_t *a);
+    uint64_t jni_GetIntArrayRegion(const uint64_t *a);
+    uint64_t jni_GetLongArrayRegion(const uint64_t *a);
+    uint64_t jni_GetFloatArrayRegion(const uint64_t *a);
+    uint64_t jni_SetIntArrayRegion(const uint64_t *a);
+    uint64_t jni_SetLongArrayRegion(const uint64_t *a);
+    uint64_t jni_SetFloatArrayRegion(const uint64_t *a);
+    uint64_t jni_ExceptionCheck(const uint64_t *a);
+    uint64_t jni_ExceptionClear(const uint64_t *a);
+    uint64_t jni_DeleteLocalRef(const uint64_t *a);
+    uint64_t jni_ExceptionOccurred(const uint64_t *a);
+    uint64_t jni_ExceptionDescribe(const uint64_t *a);
+    uint64_t jni_PushLocalFrame(const uint64_t *a);
+    uint64_t jni_PopLocalFrame(const uint64_t *a);
+    uint64_t jni_NewGlobalRef(const uint64_t *a);
+    uint64_t jni_DeleteGlobalRef(const uint64_t *a);
+    uint64_t jni_IsSameObject(const uint64_t *a);
+    uint64_t jni_NewLocalRef(const uint64_t *a);
+    uint64_t jni_EnsureLocalCapacity(const uint64_t *a);
+    uint64_t jni_NewDirectByteBuffer(const uint64_t *a);
+    uint64_t jni_GetDirectBufferAddress(const uint64_t *a);
+    uint64_t jni_GetDirectBufferCapacity(const uint64_t *a);
+    uint64_t jni_GetObjectClass(const uint64_t *a);
+    uint64_t jni_CallObjectMethod(const uint64_t *a);
+    uint64_t jni_GetFieldID(const uint64_t *a);
 
     // ── Object / handle tables ────────────────────────────────────────────
     // Classes indexed by a host-assigned handle (= jclass value seen by guest)
-    std::unordered_map<uint64_t, JClass>  classes_;      // handle → JClass
-    std::unordered_map<std::string, uint64_t> class_by_desc_; // desc → handle
+    std::unordered_map<uint64_t, JClass> classes_;  // handle → JClass
+    std::unordered_map<std::string, uint64_t> class_by_desc_;  // desc → handle
 
     // Methods indexed by a host-assigned handle (= jmethodID seen by guest)
-    struct MethodEntry { uint64_t class_handle; std::string name; std::string sig; };
+    struct MethodEntry {
+        uint64_t class_handle;
+        std::string name;
+        std::string sig;
+    };
     std::unordered_map<uint64_t, MethodEntry> methods_;
 
     // Fields indexed by a host-assigned handle (= jfieldID seen by guest)
-    struct FieldEntry { uint64_t class_handle; std::string name; std::string sig; };
+    struct FieldEntry {
+        uint64_t class_handle;
+        std::string name;
+        std::string sig;
+    };
     std::unordered_map<uint64_t, FieldEntry> fields_;
 
     // Objects indexed by a host-assigned handle (= jobject seen by guest)
@@ -261,4 +272,4 @@ private:
     std::string package_code_path_;
 };
 
-} // namespace muplar::runtime::jni
+}  // namespace muplar::runtime::jni

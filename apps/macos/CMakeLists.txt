@@ -13,6 +13,7 @@ add_custom_command(
     OUTPUT
         "${BUILTIN_ANDROID_DIR}/muplar-launcher.apk"
         "${BUILTIN_ANDROID_DIR}/muplar-art-bootstrap.jar"
+        "${BUILTIN_ANDROID_DIR}/libmuplar_android_art_shim.so"
     COMMAND ${CMAKE_COMMAND} -E make_directory "${BUILTIN_ANDROID_DIR}"
     COMMAND ${CMAKE_COMMAND} -E env
         "JAVA_HOME=${JDK_BIN_DIR}" "JAVAC=${JDK_JAVAC}" "JAR=${JDK_JAR}"
@@ -21,6 +22,11 @@ add_custom_command(
     COMMAND ${CMAKE_COMMAND} -E copy_if_different
         "${CMAKE_BINARY_DIR}/sysroot/data/local/tmp/muplar/art/muplar-art-bootstrap.jar"
         "${BUILTIN_ANDROID_DIR}/muplar-art-bootstrap.jar"
+    COMMAND zsh "${CMAKE_SOURCE_DIR}/tools/build-android-art-shim.sh"
+        --output "${CMAKE_BINARY_DIR}/sysroot/data/local/tmp/muplar/art/libmuplar_android_art_shim.so"
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        "${CMAKE_BINARY_DIR}/sysroot/data/local/tmp/muplar/art/libmuplar_android_art_shim.so"
+        "${BUILTIN_ANDROID_DIR}/libmuplar_android_art_shim.so"
     COMMAND zsh -c " \
         mkdir -p \"${BUILTIN_ANDROID_DIR}\" && \
         if [ -f \"${CMAKE_BINARY_DIR}/launcher3/fixture/Launcher3.apk\" ]; then \
@@ -32,12 +38,15 @@ add_custom_command(
         fi"
     DEPENDS
         "${CMAKE_SOURCE_DIR}/tools/build-art-bootstrap-jar.sh"
+        "${CMAKE_SOURCE_DIR}/tools/build-android-art-shim.sh"
+        "${CMAKE_SOURCE_DIR}/platform/android-aarch64/art-shim/muplar_android_art_shim.c"
         ${ANDROID_BOOTSTRAP_JAVA}
     VERBATIM)
 
 add_custom_target(muplar_android_builtin_apps DEPENDS
     "${BUILTIN_ANDROID_DIR}/muplar-launcher.apk"
-    "${BUILTIN_ANDROID_DIR}/muplar-art-bootstrap.jar")
+    "${BUILTIN_ANDROID_DIR}/muplar-art-bootstrap.jar"
+    "${BUILTIN_ANDROID_DIR}/libmuplar_android_art_shim.so")
 
 set(WAWONA_DIR "${CMAKE_SOURCE_DIR}/third_party/muplar-wayland")
 
@@ -139,6 +148,10 @@ add_custom_target(populate_manager_bundle ALL
         "${CMAKE_SOURCE_DIR}/tools/build-art-bootstrap-jar.sh"
         "${APP_CONTENTS}/Resources/tools/build-art-bootstrap-jar.sh"
     COMMAND chmod 755 "${APP_CONTENTS}/Resources/tools/build-art-bootstrap-jar.sh"
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        "${CMAKE_SOURCE_DIR}/tools/build-android-art-shim.sh"
+        "${APP_CONTENTS}/Resources/tools/build-android-art-shim.sh"
+    COMMAND chmod 755 "${APP_CONTENTS}/Resources/tools/build-android-art-shim.sh"
 
     COMMAND ${CMAKE_COMMAND} -E copy_if_different
         "${BUILTIN_ANDROID_DIR}/muplar-launcher.apk"
@@ -148,6 +161,9 @@ add_custom_target(populate_manager_bundle ALL
     COMMAND ${CMAKE_COMMAND} -E copy_if_different
         "${BUILTIN_ANDROID_DIR}/muplar-art-bootstrap.jar"
         "${APP_CONTENTS}/Resources/android/muplar-art-bootstrap.jar"
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        "${BUILTIN_ANDROID_DIR}/libmuplar_android_art_shim.so"
+        "${APP_CONTENTS}/Resources/android/libmuplar_android_art_shim.so"
 
     # ── Windows compatibility defaults → Resources/ ─────────────────────────
     COMMAND ${CMAKE_COMMAND} -E copy_if_different

@@ -22,29 +22,31 @@
 #include "jni_env.h"
 
 extern "C" {
-    #include "core/guest.h"   // guest_t, guest_read_str, guest_read, guest_write
+#include "core/guest.h"  // guest_t, guest_read_str, guest_read, guest_write
 }
 
 #include <cstdint>
 #include <string>
 
-namespace muplar::runtime::jni {
+namespace muplar::runtime::jni
+{
 
 // JNINativeMethod as laid out in AArch64 guest memory (3 × 8-byte pointers).
 struct GuestJNINativeMethod {
-    uint64_t name_gpa;      // char*
-    uint64_t signature_gpa; // char*
-    uint64_t fnptr_gpa;     // void*
+    uint64_t name_gpa;       // char*
+    uint64_t signature_gpa;  // char*
+    uint64_t fnptr_gpa;      // void*
 };
 
-class JniBridge {
+class JniBridge
+{
 public:
     // guest   : the running guest (must outlive JniBridge)
     // jni_env : the JniEnv to dispatch into
-    // jni_table_gpa    : where in guest memory the JNINativeInterface* table lives
-    // jni_stub_base_gpa: where the shim stubs start (see jni_env.h)
-    JniBridge(guest_t* guest,
-              JniEnv*  jni_env,
+    // jni_table_gpa    : where in guest memory the JNINativeInterface* table
+    // lives jni_stub_base_gpa: where the shim stubs start (see jni_env.h)
+    JniBridge(guest_t *guest,
+              JniEnv *jni_env,
               uint64_t jni_table_gpa,
               uint64_t jni_stub_base_gpa);
 
@@ -52,16 +54,16 @@ public:
     // back into JniEnv.
     void install();
 
-    // Called from the HVC exit handler in GuestRunner when X8 is in [0x1000, 0x10FF].
-    // vcpu_regs[0..7] = X0..X7 at the HVC site.
-    // Returns the value to write back into X0.
+    // Called from the HVC exit handler in GuestRunner when X8 is in [0x1000,
+    // 0x10FF]. vcpu_regs[0..7] = X0..X7 at the HVC site. Returns the value to
+    // write back into X0.
     uint64_t handle_hvc(uint32_t call_nr, uint64_t vcpu_regs[8]);
 
 private:
     // ── guest memory helpers ──────────────────────────────────────────────
     std::string read_str(uint64_t gpa);
-    void        write_u64(uint64_t gpa, uint64_t value);
-    uint64_t    rebase_if_needed(uint64_t gpa) const;
+    void write_u64(uint64_t gpa, uint64_t value);
+    uint64_t rebase_if_needed(uint64_t gpa) const;
 
     // Pre-resolve any GPA arguments that are char* pointers before the call.
     void intern_char_arg(uint64_t gpa);
@@ -76,14 +78,14 @@ private:
                                      uint64_t array_gpa,
                                      uint64_t count);
 
-    guest_t*  guest_;
-    JniEnv*   env_;
-    uint64_t  table_gpa_;
-    uint64_t  stub_base_gpa_;
-    uint64_t  string_chars_base_gpa_;
-    uint64_t  string_chars_bump_ = 0;
-    uint64_t  array_elements_base_gpa_;
-    uint64_t  array_elements_bump_ = 0;
+    guest_t *guest_;
+    JniEnv *env_;
+    uint64_t table_gpa_;
+    uint64_t stub_base_gpa_;
+    uint64_t string_chars_base_gpa_;
+    uint64_t string_chars_bump_ = 0;
+    uint64_t array_elements_base_gpa_;
+    uint64_t array_elements_bump_ = 0;
 };
 
-} // namespace muplar::runtime::jni
+}  // namespace muplar::runtime::jni

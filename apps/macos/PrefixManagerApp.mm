@@ -141,6 +141,68 @@ static NSData* SanitizeWindowsCompatibilityLogData(NSData* data)
     return sanitized ? [sanitized dataUsingEncoding:NSUTF8StringEncoding] : data;
 }
 
+static constexpr unsigned long long kMaxLogFileBytes = 5ULL * 1024ULL * 1024ULL;
+static constexpr NSInteger kMaxLogHistoryFiles = 5;
+
+static unsigned long long LogFileSize(NSString* path)
+{
+    NSDictionary<NSFileAttributeKey, id>* attributes =
+        [NSFileManager.defaultManager attributesOfItemAtPath:path error:nil];
+    NSNumber* size = attributes[NSFileSize];
+    return size ? size.unsignedLongLongValue : 0;
+}
+
+static void RotateLogFileIfNeeded(NSString* logPath)
+{
+    NSFileManager* fm = NSFileManager.defaultManager;
+    if (LogFileSize(logPath) < kMaxLogFileBytes)
+        return;
+
+    NSString* oldest =
+        [NSString stringWithFormat:@"%@.%ld", logPath, (long)kMaxLogHistoryFiles];
+    [fm removeItemAtPath:oldest error:nil];
+
+    for (NSInteger index = kMaxLogHistoryFiles - 1; index >= 1; --index) {
+        NSString* from = [NSString stringWithFormat:@"%@.%ld", logPath, (long)index];
+        NSString* to = [NSString stringWithFormat:@"%@.%ld", logPath, (long)(index + 1)];
+        if ([fm fileExistsAtPath:from])
+            [fm moveItemAtPath:from toPath:to error:nil];
+    }
+
+    NSString* first = [logPath stringByAppendingString:@".1"];
+    if ([fm fileExistsAtPath:logPath])
+        [fm moveItemAtPath:logPath toPath:first error:nil];
+    [fm createFileAtPath:logPath contents:[NSData data] attributes:nil];
+}
+
+static NSFileHandle* OpenRotatingLogForAppend(NSString* logPath)
+{
+    NSFileManager* fm = NSFileManager.defaultManager;
+    NSString* logDir = [logPath stringByDeletingLastPathComponent];
+    [fm createDirectoryAtPath:logDir
+  withIntermediateDirectories:YES
+                   attributes:nil
+                        error:nil];
+    RotateLogFileIfNeeded(logPath);
+    if (![fm fileExistsAtPath:logPath])
+        [fm createFileAtPath:logPath contents:[NSData data] attributes:nil];
+
+    NSFileHandle* handle = [NSFileHandle fileHandleForWritingAtPath:logPath];
+    [handle seekToEndOfFile];
+    return handle;
+}
+
+static NSData* LogRolloverMarkerData()
+{
+    NSDateFormatter* formatter = [[NSDateFormatter alloc] init];
+    formatter.dateFormat = @"yyyy-MM-dd HH:mm:ss";
+    NSString* timestamp = [formatter stringFromDate:[NSDate date]];
+    NSString* marker =
+        [NSString stringWithFormat:@"\n=== [%@] Log continued after rollover ===\n",
+                                   timestamp];
+    return [marker dataUsingEncoding:NSUTF8StringEncoding];
+}
+
 static void ApplyDefaultLinuxDisplayEnvironment(
     NSMutableDictionary<NSString*, NSString*>* env)
 {
@@ -3725,8 +3787,9 @@ static NSString* MapLinuxIconToSFSymbol(NSString* icon)
                                                     error:nil];
     NSString* logPath = [logDir stringByAppendingPathComponent:@"default-packages.log"];
     [[NSFileManager defaultManager] createFileAtPath:logPath contents:[NSData data] attributes:nil];
-    NSFileHandle* logHandle = [NSFileHandle fileHandleForWritingAtPath:logPath];
+    __block NSFileHandle* logHandle = [NSFileHandle fileHandleForWritingAtPath:logPath];
     [logHandle truncateFileAtOffset:0];
+    __block unsigned long long logBytes = 0;
 
     pipe.fileHandleForReading.readabilityHandler = ^(NSFileHandle* handle) {
         NSData* data = [handle availableData];
@@ -3734,7 +3797,18 @@ static NSString* MapLinuxIconToSFSymbol(NSString* icon)
             handle.readabilityHandler = nil;
             return;
         }
-        @try { [logHandle writeData:data]; } @catch (NSException* __unused e) {}
+        @try {
+            if (logBytes + data.length >= kMaxLogFileBytes) {
+                [logHandle closeFile];
+                RotateLogFileIfNeeded(logPath);
+                logHandle = OpenRotatingLogForAppend(logPath);
+                NSData* marker = LogRolloverMarkerData();
+                [logHandle writeData:marker];
+                logBytes = LogFileSize(logPath);
+            }
+            [logHandle writeData:data];
+            logBytes += data.length;
+        } @catch (NSException* __unused e) {}
         NSString* text = [[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding];
         if (text.length == 0)
             return;
@@ -3838,14 +3912,8 @@ static NSString* MapLinuxIconToSFSymbol(NSString* icon)
     [[NSFileManager defaultManager] createDirectoryAtPath:logDir withIntermediateDirectories:YES attributes:nil error:nil];
 
     NSString* logPath = [logDir stringByAppendingPathComponent:@"muplar.log"];
-    if (![[NSFileManager defaultManager] fileExistsAtPath:logPath]) {
-        [[NSFileManager defaultManager] createFileAtPath:logPath contents:[NSData data] attributes:nil];
-    }
-
-    NSFileHandle* logHandle = [NSFileHandle fileHandleForWritingAtPath:logPath];
+    NSFileHandle* logHandle = OpenRotatingLogForAppend(logPath);
     if (logHandle) {
-        [logHandle seekToEndOfFile];
-
         NSDateFormatter* formatter = [[NSDateFormatter alloc] init];
         formatter.dateFormat = @"yyyy-MM-dd HH:mm:ss";
         NSString* timestamp = [formatter stringFromDate:[NSDate date]];
@@ -3875,10 +3943,8 @@ static NSString* MapLinuxIconToSFSymbol(NSString* icon)
     // Also write to the per-prefix log
     NSString* prefixLogDir = NSStringFromPath(selected->logs_dir);
     NSString* prefixLogPath = [prefixLogDir stringByAppendingPathComponent:@"muplar.log"];
-    NSFileHandle* prefixHandle = [NSFileHandle fileHandleForWritingAtPath:prefixLogPath];
-    if (prefixHandle) {
-        [prefixHandle seekToEndOfFile];
-    }
+    __block NSFileHandle* prefixHandle = OpenRotatingLogForAppend(prefixLogPath);
+    __block unsigned long long prefixLogBytes = LogFileSize(prefixLogPath);
 
     prefix::PrefixKind kind = selected->kind;
 
@@ -3895,7 +3961,18 @@ static NSString* MapLinuxIconToSFSymbol(NSString* icon)
             data = SanitizeWindowsCompatibilityLogData(data);
         }
         if (prefixHandle) {
-            @try { [prefixHandle writeData:data]; } @catch (NSException* __unused e) {}
+            @try {
+                if (prefixLogBytes + data.length >= kMaxLogFileBytes) {
+                    [prefixHandle closeFile];
+                    RotateLogFileIfNeeded(prefixLogPath);
+                    prefixHandle = OpenRotatingLogForAppend(prefixLogPath);
+                    NSData* marker = LogRolloverMarkerData();
+                    [prefixHandle writeData:marker];
+                    prefixLogBytes = LogFileSize(prefixLogPath);
+                }
+                [prefixHandle writeData:data];
+                prefixLogBytes += data.length;
+            } @catch (NSException* __unused e) {}
         }
     };
 }
@@ -4346,6 +4423,7 @@ static NSString* MapLinuxIconToSFSymbol(NSString* icon)
     }
 
     NSString* logPath = [NSStringFromPath(selected->logs_dir) stringByAppendingPathComponent:@"shell.log"];
+    RotateLogFileIfNeeded(logPath);
     NSString* command = [NSString stringWithFormat:
         @"MUP=%@\n"
         @"PREFIX=%@\n"
@@ -4428,6 +4506,7 @@ static NSString* MapLinuxIconToSFSymbol(NSString* icon)
             ? [angleDir stringByAppendingFormat:@":%@", existing]
             : angleDir;
     }
+    ApplyDefaultLinuxDisplayEnvironment(env);
     task.environment = env;
     [self setupLoggingForTask:task prefix:selected appName:app.name];
 
@@ -4607,6 +4686,7 @@ int main(int argc, char* argv[])
         NSString* muplarLogsDir = [[home stringByAppendingPathComponent:@".muplar"] stringByAppendingPathComponent:@"logs"];
         [[NSFileManager defaultManager] createDirectoryAtPath:muplarLogsDir withIntermediateDirectories:YES attributes:nil error:nil];
         NSString* logPath = [muplarLogsDir stringByAppendingPathComponent:@"muplar.log"];
+        RotateLogFileIfNeeded(logPath);
 
         const char* logPathStr = [logPath UTF8String];
         std::freopen(logPathStr, "a", stdout);

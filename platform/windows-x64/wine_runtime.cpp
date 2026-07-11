@@ -61,8 +61,10 @@ static char **GetProcessEnvironment()
 #endif
 
 
-namespace muplar::runtime::wine {
-namespace {
+namespace muplar::runtime::wine
+{
+namespace
+{
 
 static std::filesystem::path executable_dir()
 {
@@ -72,7 +74,8 @@ static std::filesystem::path executable_dir()
     if (_NSGetExecutablePath(pathbuf, &size) == 0) {
         std::error_code ec;
         auto exe = std::filesystem::weakly_canonical(pathbuf, ec);
-        if (!ec) return exe.parent_path();
+        if (!ec)
+            return exe.parent_path();
     }
 #endif
     return {};
@@ -83,9 +86,9 @@ static std::filesystem::path executable_dir()
 // ---------------------------------------------------------------------------
 
 /// Search for an executable on PATH.  Returns empty path on failure.
-std::filesystem::path find_on_path(const std::string& name)
+std::filesystem::path find_on_path(const std::string &name)
 {
-    const char* path_env = std::getenv("PATH");
+    const char *path_env = std::getenv("PATH");
     if (!path_env)
         return {};
     std::istringstream ss(path_env);
@@ -95,8 +98,9 @@ std::filesystem::path find_on_path(const std::string& name)
         if (std::filesystem::is_regular_file(candidate)) {
             std::error_code ec;
             auto status = std::filesystem::status(candidate, ec);
-            if (!ec && (status.permissions() & std::filesystem::perms::owner_exec) !=
-                           std::filesystem::perms::none)
+            if (!ec &&
+                (status.permissions() & std::filesystem::perms::owner_exec) !=
+                    std::filesystem::perms::none)
                 return candidate;
         }
     }
@@ -105,9 +109,9 @@ std::filesystem::path find_on_path(const std::string& name)
 
 /// Return the first existing candidate from a directory's bin/, trying
 /// "wine64" (old split layout) then "wine" (Wine 8+ unified binary).
-static std::filesystem::path find_wine_in_dir(const std::filesystem::path& dir)
+static std::filesystem::path find_wine_in_dir(const std::filesystem::path &dir)
 {
-    for (const char* name : {"wine64", "wine"}) {
+    for (const char *name : {"wine64", "wine"}) {
         auto candidate = dir / "bin" / name;
         if (std::filesystem::is_regular_file(candidate))
             return candidate;
@@ -118,15 +122,16 @@ static std::filesystem::path find_wine_in_dir(const std::filesystem::path& dir)
 /// Return the path to the Wine binary, trying several locations in order.
 /// Modern Wine (8+) ships a single "wine" binary; older builds had "wine64".
 /// We try both names at every location so either layout works.
-std::filesystem::path resolve_wine_bin(
-    const std::filesystem::path& hint,
-    const prefix::PrefixLayout& layout)
+std::filesystem::path resolve_wine_bin(const std::filesystem::path &hint,
+                                       const prefix::PrefixLayout &layout)
 {
     // 1. Explicit override from the caller.
     if (!hint.empty()) {
         if (!std::filesystem::is_regular_file(hint))
-            throw std::runtime_error("Windows compatibility runtime binary not found at requested path: " +
-                                     hint.string());
+            throw std::runtime_error(
+                "Windows compatibility runtime binary not found at requested "
+                "path: " +
+                hint.string());
         return hint;
     }
 
@@ -163,7 +168,7 @@ std::filesystem::path resolve_wine_bin(
     }
 
     // 5. System PATH — try wine64 first, then wine.
-    for (const char* name : {"wine64", "wine"}) {
+    for (const char *name : {"wine64", "wine"}) {
         auto found = find_on_path(name);
         if (!found.empty())
             return found;
@@ -176,13 +181,14 @@ std::filesystem::path resolve_wine_bin(
 }
 
 /// Write a PID to <prefix>/run/wine.pid, creating the directory as needed.
-void write_pid_file(const prefix::PrefixLayout& layout, pid_t pid)
+void write_pid_file(const prefix::PrefixLayout &layout, pid_t pid)
 {
     std::filesystem::path run_dir = layout.root / "run";
     std::error_code ec;
     std::filesystem::create_directories(run_dir, ec);
     if (ec)
-        throw std::runtime_error("cannot create run directory: " + ec.message());
+        throw std::runtime_error("cannot create run directory: " +
+                                 ec.message());
 
     std::ofstream out(prefix::pid_file_path(layout), std::ios::trunc);
     if (!out)
@@ -192,15 +198,14 @@ void write_pid_file(const prefix::PrefixLayout& layout, pid_t pid)
 }
 
 /// Build the argv array for execve.
-std::vector<std::string> build_argv(
-    const std::filesystem::path& wine_bin,
-    const std::string& exe_path,
-    const std::vector<std::string>& extra_args)
+std::vector<std::string> build_argv(const std::filesystem::path &wine_bin,
+                                    const std::string &exe_path,
+                                    const std::vector<std::string> &extra_args)
 {
     std::vector<std::string> argv;
     argv.push_back(wine_bin.string());
     argv.push_back(exe_path);
-    for (const auto& a : extra_args)
+    for (const auto &a : extra_args)
         argv.push_back(a);
     return argv;
 }
@@ -209,18 +214,18 @@ std::vector<std::string> build_argv(
 std::vector<std::string> collect_env()
 {
     std::vector<std::string> env;
-    for (char** e = GetProcessEnvironment(); *e; ++e)
+    for (char **e = GetProcessEnvironment(); *e; ++e)
         env.push_back(*e);
     return env;
 }
 
 /// Update (or insert) a NAME=VALUE entry in an environment vector.
-void set_env_var(std::vector<std::string>& env,
-                 const std::string& name,
-                 const std::string& value)
+void set_env_var(std::vector<std::string> &env,
+                 const std::string &name,
+                 const std::string &value)
 {
     const std::string prefix = name + "=";
-    for (auto& entry : env) {
+    for (auto &entry : env) {
         if (entry.rfind(prefix, 0) == 0) {
             entry = name + "=" + value;
             return;
@@ -230,16 +235,16 @@ void set_env_var(std::vector<std::string>& env,
 }
 
 /// Prepend `value` to a colon-separated env var (like PATH prepending).
-void prepend_env_var(std::vector<std::string>& env,
-                     const std::string& name,
-                     const std::string& value)
+void prepend_env_var(std::vector<std::string> &env,
+                     const std::string &name,
+                     const std::string &value)
 {
     const std::string prefix_str = name + "=";
-    for (auto& entry : env) {
+    for (auto &entry : env) {
         if (entry.rfind(prefix_str, 0) == 0) {
             std::string existing = entry.substr(prefix_str.size());
-            entry = name + "=" + value +
-                    (existing.empty() ? "" : (":" + existing));
+            entry =
+                name + "=" + value + (existing.empty() ? "" : (":" + existing));
             return;
         }
     }
@@ -254,18 +259,18 @@ void ensure_wine_tmp_dir_private()
     std::error_code ec;
     std::filesystem::create_directories(sock_dir, ec);
     if (ec)
-        throw std::runtime_error("failed to create Windows compatibility socket directory " +
-                                 sock_dir.string() + ": " + ec.message());
+        throw std::runtime_error(
+            "failed to create Windows compatibility socket directory " +
+            sock_dir.string() + ": " + ec.message());
     if (chmod(sock_dir.c_str(), 0700) != 0)
-        throw std::runtime_error("chmod 0700 failed for Windows compatibility socket directory " +
-                                 sock_dir.string() + ": " +
-                                 std::strerror(errno));
+        throw std::runtime_error(
+            "chmod 0700 failed for Windows compatibility socket directory " +
+            sock_dir.string() + ": " + std::strerror(errno));
 }
 
 /// Build the child environment for wine.
-std::vector<std::string> build_env(
-    const prefix::PrefixLayout& layout,
-    const std::filesystem::path& wine_bin)
+std::vector<std::string> build_env(const prefix::PrefixLayout &layout,
+                                   const std::filesystem::path &wine_bin)
 {
     std::vector<std::string> env = collect_env();
 
@@ -275,16 +280,18 @@ std::vector<std::string> build_env(
     // WINEDLLPATH: extra DLL search path so DXMT overrides are found.
     // We point at the Wine install's x86_64-windows directory which
     // contains the DXMT-injected d3d11.dll / dxgi.dll / winemetal.dll.
-    std::filesystem::path wine_lib_dir = wine_bin.parent_path().parent_path()
-                                         / "lib" / "wine";
+    std::filesystem::path wine_lib_dir =
+        wine_bin.parent_path().parent_path() / "lib" / "wine";
     if (std::filesystem::is_directory(wine_lib_dir))
         prepend_env_var(env, "WINEDLLPATH", wine_lib_dir.string());
 
     // Library path so libwine.dylib (if any) and dependencies are found.
-    std::filesystem::path wine_lib = wine_bin.parent_path().parent_path() / "lib";
+    std::filesystem::path wine_lib =
+        wine_bin.parent_path().parent_path() / "lib";
     if (std::filesystem::is_directory(wine_lib)) {
 #ifdef __APPLE__
-        // Use DYLD_FALLBACK_LIBRARY_PATH so we don't break system/freetype dynamic loading.
+        // Use DYLD_FALLBACK_LIBRARY_PATH so we don't break system/freetype
+        // dynamic loading.
         prepend_env_var(env, "DYLD_FALLBACK_LIBRARY_PATH", wine_lib.string());
         prepend_env_var(env, "DYLD_FALLBACK_LIBRARY_PATH", "/usr/local/lib");
         prepend_env_var(env, "DYLD_FALLBACK_LIBRARY_PATH", "/opt/homebrew/lib");
@@ -296,7 +303,7 @@ std::vector<std::string> build_env(
     // Disable Wine's debug spam by default; callers can override via env.
     // Don't overwrite WINEDEBUG if the user already set it.
     bool has_winedebug = false;
-    for (const auto& e : env) {
+    for (const auto &e : env) {
         if (e.rfind("WINEDEBUG=", 0) == 0) {
             has_winedebug = true;
             break;
@@ -308,18 +315,15 @@ std::vector<std::string> build_env(
     return env;
 }
 
-} // namespace
+}  // namespace
 
 // ---------------------------------------------------------------------------
 // WineRuntime
 // ---------------------------------------------------------------------------
 
-WineRuntime::WineRuntime(WineLaunchOptions opts)
-    : opts_(std::move(opts))
-{
-}
+WineRuntime::WineRuntime(WineLaunchOptions opts) : opts_(std::move(opts)) {}
 
-int WineRuntime::run(const PlatformLaunchConfig& config)
+int WineRuntime::run(const PlatformLaunchConfig &config)
 {
     // ------------------------------------------------------------------
     // 1. Validate the active prefix
@@ -328,11 +332,12 @@ int WineRuntime::run(const PlatformLaunchConfig& config)
         throw std::runtime_error(
             "Muplar Windows Compatibility requires a prefix (--prefix NAME)");
 
-    const prefix::PrefixLayout& layout = *config.active_prefix;
+    const prefix::PrefixLayout &layout = *config.active_prefix;
 
     if (layout.kind != prefix::PrefixKind::Wine)
         throw std::runtime_error(
-            "Muplar Windows Compatibility requires a Windows instance; got kind=" +
+            "Muplar Windows Compatibility requires a Windows instance; got "
+            "kind=" +
             prefix::to_string(layout.kind));
 
     if (layout.arch != prefix::GuestArch::X86_64)
@@ -363,20 +368,21 @@ int WineRuntime::run(const PlatformLaunchConfig& config)
     std::vector<std::string> env = build_env(layout, wine_bin);
 
     if (config.verbose) {
-        std::cerr << "[Muplar Windows Compatibility] instance root: " << layout.rootfs.string() << "\n";
+        std::cerr << "[Muplar Windows Compatibility] instance root: "
+                  << layout.rootfs.string() << "\n";
         std::cerr << "[Muplar Windows Compatibility] exec:";
-        for (const auto& a : argv)
+        for (const auto &a : argv)
             std::cerr << " " << a;
         std::cerr << "\n";
     }
 
     // Build C-style argv/envp arrays.
-    std::vector<char*> c_argv, c_envp;
-    for (auto& s : argv)
-        c_argv.push_back(const_cast<char*>(s.c_str()));
+    std::vector<char *> c_argv, c_envp;
+    for (auto &s : argv)
+        c_argv.push_back(const_cast<char *>(s.c_str()));
     c_argv.push_back(nullptr);
-    for (auto& s : env)
-        c_envp.push_back(const_cast<char*>(s.c_str()));
+    for (auto &s : env)
+        c_envp.push_back(const_cast<char *>(s.c_str()));
     c_envp.push_back(nullptr);
 
     // ------------------------------------------------------------------
@@ -391,15 +397,17 @@ int WineRuntime::run(const PlatformLaunchConfig& config)
         // Child: exec wine.
         execve(wine_bin.c_str(), c_argv.data(), c_envp.data());
         // execve only returns on error.
-        std::cerr << "[Muplar Windows Compatibility] execve failed: " << std::strerror(errno) << "\n";
+        std::cerr << "[Muplar Windows Compatibility] execve failed: "
+                  << std::strerror(errno) << "\n";
         _exit(127);
     }
 
     // Parent: write PID file then decide whether to wait.
     try {
         write_pid_file(layout, pid);
-    } catch (const std::exception& e) {
-        std::cerr << "[Muplar Windows Compatibility] warning: " << e.what() << "\n";
+    } catch (const std::exception &e) {
+        std::cerr << "[Muplar Windows Compatibility] warning: " << e.what()
+                  << "\n";
     }
 
     std::cerr << "[Muplar Windows Compatibility] started: pid=" << pid
@@ -407,7 +415,8 @@ int WineRuntime::run(const PlatformLaunchConfig& config)
 
     if (opts_.daemon) {
         // Daemon mode: return immediately, Wine runs in background.
-        std::cerr << "[Muplar Windows Compatibility] running in background (daemon mode)\n";
+        std::cerr << "[Muplar Windows Compatibility] running in background "
+                     "(daemon mode)\n";
         return 0;
     }
 
@@ -418,7 +427,8 @@ int WineRuntime::run(const PlatformLaunchConfig& config)
         if (ret == pid)
             break;
         if (ret < 0 && errno != EINTR) {
-            std::cerr << "[Muplar Windows Compatibility] waitpid error: " << std::strerror(errno) << "\n";
+            std::cerr << "[Muplar Windows Compatibility] waitpid error: "
+                      << std::strerror(errno) << "\n";
             break;
         }
     }
@@ -430,10 +440,11 @@ int WineRuntime::run(const PlatformLaunchConfig& config)
     if (WIFEXITED(status))
         return WEXITSTATUS(status);
     if (WIFSIGNALED(status)) {
-        std::cerr << "[Muplar Windows Compatibility] killed by signal " << WTERMSIG(status) << "\n";
+        std::cerr << "[Muplar Windows Compatibility] killed by signal "
+                  << WTERMSIG(status) << "\n";
         return 128 + WTERMSIG(status);
     }
     return 1;
 }
 
-} // namespace muplar::runtime::wine
+}  // namespace muplar::runtime::wine

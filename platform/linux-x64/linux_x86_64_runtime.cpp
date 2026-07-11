@@ -7,15 +7,17 @@
 #include <iostream>
 #include <stdexcept>
 
-namespace muplar::runtime::linux_x86_64 {
-namespace {
+namespace muplar::runtime::linux_x86_64
+{
+namespace
+{
 
-constexpr const char* kRosettadPath =
+constexpr const char *kRosettadPath =
     "/Library/Apple/usr/libexec/oah/RosettaLinux/rosettad";
 
-} // namespace
+}  // namespace
 
-int LinuxX86_64Runtime::run(const PlatformLaunchConfig& config)
+int LinuxX86_64Runtime::run(const PlatformLaunchConfig &config)
 {
     if (!std::filesystem::exists(kRosettadPath)) {
         std::cerr << "Linux x64 runtime requires Apple Rosetta support, but "
@@ -25,7 +27,7 @@ int LinuxX86_64Runtime::run(const PlatformLaunchConfig& config)
     }
 
     if (config.active_prefix) {
-        const auto& layout = *config.active_prefix;
+        const auto &layout = *config.active_prefix;
         if (layout.kind != prefix::PrefixKind::Linux) {
             throw std::runtime_error(
                 "Linux x64 runtime requires a linux prefix; got kind=" +
@@ -41,11 +43,12 @@ int LinuxX86_64Runtime::run(const PlatformLaunchConfig& config)
     PlatformLaunchConfig linux_config = config;
     linux_config.linux_guest = true;
     if (config.active_prefix && config.guest_env.empty()) {
-        linux_config.guest_env = prefix::default_linux_guest_environment(*config.active_prefix);
+        linux_config.guest_env =
+            prefix::default_linux_guest_environment(*config.active_prefix);
     }
 
     android::AndroidAarch64Runtime runtime;
     return runtime.run(linux_config);
 }
 
-} // namespace muplar::runtime::linux_x86_64
+}  // namespace muplar::runtime::linux_x86_64

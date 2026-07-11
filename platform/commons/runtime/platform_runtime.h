@@ -8,7 +8,8 @@
 
 #include "prefix.h"
 
-namespace muplar::runtime {
+namespace muplar::runtime
+{
 
 struct RuntimeJniCallConfig {
     bool enabled = false;
@@ -44,10 +45,11 @@ struct PlatformLaunchConfig {
     int host_window_linger_ms = -1;
 };
 
-class PlatformRuntime {
+class PlatformRuntime
+{
 public:
     virtual ~PlatformRuntime() = default;
-    virtual int run(const PlatformLaunchConfig& config) = 0;
+    virtual int run(const PlatformLaunchConfig &config) = 0;
 };
 
-} // namespace muplar::runtime
+}  // namespace muplar::runtime

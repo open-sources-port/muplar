@@ -26,16 +26,43 @@
 #include "elf_loader.h"
 #include "guest_runner.h"
 
-namespace muplar::runtime::android {
-namespace {
+namespace muplar::runtime::android
+{
+namespace
+{
+constexpr uintmax_t kMaxLogFileBytes = 5ULL * 1024ULL * 1024ULL;
+constexpr int kMaxLogHistoryFiles = 5;
 
-class PrefixPidRegistration {
+void rotate_log_file_if_needed(const std::filesystem::path &log_file)
+{
+    std::error_code ec;
+    if (std::filesystem::file_size(log_file, ec) < kMaxLogFileBytes || ec)
+        return;
+
+    std::filesystem::remove(
+        log_file.string() + "." + std::to_string(kMaxLogHistoryFiles), ec);
+    for (int index = kMaxLogHistoryFiles - 1; index >= 1; --index) {
+        std::filesystem::path from =
+            log_file.string() + "." + std::to_string(index);
+        std::filesystem::path to =
+            log_file.string() + "." + std::to_string(index + 1);
+        ec.clear();
+        if (std::filesystem::exists(from, ec))
+            std::filesystem::rename(from, to, ec);
+    }
+
+    ec.clear();
+    if (std::filesystem::exists(log_file, ec))
+        std::filesystem::rename(log_file, log_file.string() + ".1", ec);
+}
+
+class PrefixPidRegistration
+{
 public:
     explicit PrefixPidRegistration(
-        const std::optional<prefix::PrefixLayout>& active_prefix)
+        const std::optional<prefix::PrefixLayout> &active_prefix)
     {
-        if (std::getenv("MUPLAR_DISPATCHED_APP") != nullptr ||
-            !active_prefix ||
+        if (std::getenv("MUPLAR_DISPATCHED_APP") != nullptr || !active_prefix ||
             active_prefix->kind == prefix::PrefixKind::Wine) {
             return;
         }
@@ -74,18 +101,18 @@ public:
         std::filesystem::remove(prefix::pid_file_path(*layout_), ec);
     }
 
-    PrefixPidRegistration(const PrefixPidRegistration&) = delete;
-    PrefixPidRegistration& operator=(const PrefixPidRegistration&) = delete;
+    PrefixPidRegistration(const PrefixPidRegistration &) = delete;
+    PrefixPidRegistration &operator=(const PrefixPidRegistration &) = delete;
 
 private:
     std::optional<prefix::PrefixLayout> layout_;
     pid_t pid_ = 0;
 };
 
-std::string lower_ext(const std::string& path)
+std::string lower_ext(const std::string &path)
 {
     std::string ext = std::filesystem::path(path).extension().string();
-    for (char& c : ext)
+    for (char &c : ext)
         c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
     return ext;
 }
@@ -106,33 +133,35 @@ std::filesystem::path current_executable_path()
     return {};
 }
 
-bool unix_socket_is_live(const std::filesystem::path& path)
+bool unix_socket_is_live(const std::filesystem::path &path)
 {
     if (path.string().size() >=
-        sizeof(static_cast<sockaddr_un*>(nullptr)->sun_path)) return false;
+        sizeof(static_cast<sockaddr_un *>(nullptr)->sun_path))
+        return false;
     int fd = socket(AF_UNIX, SOCK_STREAM, 0);
-    if (fd < 0) return false;
+    if (fd < 0)
+        return false;
     sockaddr_un address{};
     address.sun_family = AF_UNIX;
     std::strncpy(address.sun_path, path.c_str(), sizeof(address.sun_path) - 1);
-    bool live = connect(fd, reinterpret_cast<sockaddr*>(&address),
+    bool live = connect(fd, reinterpret_cast<sockaddr *>(&address),
                         sizeof(address)) == 0;
     close(fd);
     return live;
 }
 
-std::filesystem::path ensure_muplard(
-    const prefix::PrefixLayout& active_prefix)
+std::filesystem::path ensure_muplard(const prefix::PrefixLayout &active_prefix)
 {
     std::filesystem::path run_dir = active_prefix.root / "run";
     std::filesystem::path socket_path = run_dir / "muplard.sock";
-    if (unix_socket_is_live(socket_path)) return socket_path;
+    if (unix_socket_is_live(socket_path))
+        return socket_path;
 
-    std::filesystem::path daemon = current_executable_path().parent_path() /
-        "muplard";
+    std::filesystem::path daemon =
+        current_executable_path().parent_path() / "muplard";
     if (!std::filesystem::is_regular_file(daemon)) {
-        std::cerr << "[muplard] warning: daemon binary not found at "
-                  << daemon << "\n";
+        std::cerr << "[muplard] warning: daemon binary not found at " << daemon
+                  << "\n";
         return {};
     }
     std::error_code ec;
@@ -144,22 +173,23 @@ std::filesystem::path ensure_muplard(
     std::filesystem::path settings_file =
         active_prefix.registry_dir / "android-state" / "framework-settings.db";
     std::filesystem::path log_file = active_prefix.logs_dir / "muplard.log";
+    rotate_log_file_if_needed(log_file);
 
     pid_t child = fork();
     if (child == 0) {
         setsid();
-        int log_fd = open(log_file.c_str(), O_WRONLY | O_CREAT | O_APPEND, 0600);
+        int log_fd =
+            open(log_file.c_str(), O_WRONLY | O_CREAT | O_APPEND, 0600);
         if (log_fd >= 0) {
             dup2(log_fd, STDOUT_FILENO);
             dup2(log_fd, STDERR_FILENO);
-            if (log_fd > STDERR_FILENO) close(log_fd);
+            if (log_fd > STDERR_FILENO)
+                close(log_fd);
         }
-        execl(daemon.c_str(), daemon.c_str(),
-              "--socket", socket_path.c_str(),
-              "--registry", registry.c_str(),
-              "--pid-file", pid_file.c_str(),
+        execl(daemon.c_str(), daemon.c_str(), "--socket", socket_path.c_str(),
+              "--registry", registry.c_str(), "--pid-file", pid_file.c_str(),
               "--settings", settings_file.c_str(),
-              static_cast<char*>(nullptr));
+              static_cast<char *>(nullptr));
         _exit(127);
     }
     if (child < 0) {
@@ -177,8 +207,8 @@ std::filesystem::path ensure_muplard(
     return {};
 }
 
-void copy_jni_call_config(const RuntimeJniCallConfig& from,
-                          elf::JniCallConfig& to)
+void copy_jni_call_config(const RuntimeJniCallConfig &from,
+                          elf::JniCallConfig &to)
 {
     to.enabled = from.enabled;
     to.class_name = from.class_name;
@@ -189,7 +219,8 @@ void copy_jni_call_config(const RuntimeJniCallConfig& from,
     to.receiver_static = from.receiver_static;
 }
 
-void ensure_linux_guest_x11_socket_dir(const prefix::PrefixLayout& active_prefix)
+void ensure_linux_guest_x11_socket_dir(
+    const prefix::PrefixLayout &active_prefix)
 {
     if (active_prefix.kind != prefix::PrefixKind::Linux)
         return;
@@ -203,7 +234,7 @@ void ensure_linux_guest_x11_socket_dir(const prefix::PrefixLayout& active_prefix
 }
 
 std::vector<std::string> default_guest_environment(
-    const prefix::PrefixLayout& active_prefix)
+    const prefix::PrefixLayout &active_prefix)
 {
     switch (active_prefix.kind) {
     case prefix::PrefixKind::Android:
@@ -220,18 +251,14 @@ std::vector<std::string> default_guest_environment(
         };
     default:
         return {
-            "PATH=/bin:/usr/bin",
-            "HOME=/home/muplar",
-            "LOGNAME=muplar",
-            "TMPDIR=/tmp",
-            "USER=muplar",
-            "TERM=xterm-256color",
+            "PATH=/bin:/usr/bin", "HOME=/home/muplar", "LOGNAME=muplar",
+            "TMPDIR=/tmp",        "USER=muplar",       "TERM=xterm-256color",
         };
     }
 }
 
 std::filesystem::path default_host_cwd(
-    const prefix::PrefixLayout& active_prefix)
+    const prefix::PrefixLayout &active_prefix)
 {
     switch (active_prefix.kind) {
     case prefix::PrefixKind::Android:
@@ -241,34 +268,32 @@ std::filesystem::path default_host_cwd(
     }
 }
 
-void inspect_elf(const std::string& elf_path)
+void inspect_elf(const std::string &elf_path)
 {
     try {
         elf::ElfLoader loader;
         auto image = loader.load(elf_path);
 
         std::cout << "ELF entry   : 0x" << std::hex << image.entry << "\n"
-                  << "Load range  : 0x" << image.load_min
-                  << " – 0x" << image.load_max << "\n"
+                  << "Load range  : 0x" << image.load_min << " – 0x"
+                  << image.load_max << "\n"
                   << "Segments    : " << std::dec << image.segments.size()
                   << "\n";
-    } catch (const std::exception& e) {
+    } catch (const std::exception &e) {
         std::cerr << "ELF inspect error: " << e.what() << "\n";
     }
 }
 
-void apply_apk_launch(const PlatformLaunchConfig& launch_cfg,
-                      elf::GuestRunnerConfig& guest_cfg)
+void apply_apk_launch(const PlatformLaunchConfig &launch_cfg,
+                      elf::GuestRunnerConfig &guest_cfg)
 {
-    const auto& active_prefix = launch_cfg.active_prefix;
-    if (active_prefix &&
-        active_prefix->kind != prefix::PrefixKind::Android) {
+    const auto &active_prefix = launch_cfg.active_prefix;
+    if (active_prefix && active_prefix->kind != prefix::PrefixKind::Android) {
         throw std::runtime_error(
             "APK launch requires an android prefix; got kind=" +
             prefix::to_string(active_prefix->kind));
     }
-    if (active_prefix &&
-        active_prefix->arch != prefix::GuestArch::Aarch64) {
+    if (active_prefix && active_prefix->arch != prefix::GuestArch::Aarch64) {
         throw std::runtime_error(
             "Android launch requires an ARM64 prefix; got arch=" +
             prefix::to_string(active_prefix->arch));
@@ -306,8 +331,8 @@ void apply_apk_launch(const PlatformLaunchConfig& launch_cfg,
               << guest_cfg.elf_path << "\n";
 }
 
-int handle_guest_art_apk_launch(const PlatformLaunchConfig& launch_cfg,
-                                const apk::ApkClassification& classification)
+int handle_guest_art_apk_launch(const PlatformLaunchConfig &launch_cfg,
+                                const apk::ApkClassification &classification)
 {
     if (launch_cfg.sysroot.empty()) {
         std::cerr << "APK error: Java/ART bootstrap incomplete: "
@@ -319,8 +344,8 @@ int handle_guest_art_apk_launch(const PlatformLaunchConfig& launch_cfg,
         return 1;
     }
 
-    std::filesystem::path staged_apk = stage_art_apk_for_sysroot(
-        launch_cfg.input_path, launch_cfg.sysroot);
+    std::filesystem::path staged_apk =
+        stage_art_apk_for_sysroot(launch_cfg.input_path, launch_cfg.sysroot);
 
     ArtBootstrapConfig art_cfg;
     art_cfg.apk_path = staged_apk;
@@ -352,12 +377,14 @@ int handle_guest_art_apk_launch(const PlatformLaunchConfig& launch_cfg,
     guest_cfg.timeout_sec = launch_cfg.timeout_sec;
     guest_cfg.host_window = launch_cfg.host_window;
     guest_cfg.host_window_linger_ms = launch_cfg.host_window_linger_ms;
+    guest_cfg.real_art_vm = true;
     guest_cfg.package_code_path = plan.guest_apk_path;
     if (plan.package_name)
         guest_cfg.package_name = *plan.package_name;
     if (launch_cfg.active_prefix) {
         guest_cfg.service_socket = ensure_muplard(*launch_cfg.active_prefix);
-        guest_cfg.host_cwd = default_host_cwd(*launch_cfg.active_prefix).string();
+        guest_cfg.host_cwd =
+            default_host_cwd(*launch_cfg.active_prefix).string();
     }
 
     inspect_elf(guest_cfg.elf_path);
@@ -366,17 +393,17 @@ int handle_guest_art_apk_launch(const PlatformLaunchConfig& launch_cfg,
     return runner.run(guest_cfg);
 }
 
-int handle_java_apk_launch(const PlatformLaunchConfig& launch_cfg,
-                           const apk::ApkClassification& classification)
+int handle_java_apk_launch(const PlatformLaunchConfig &launch_cfg,
+                           const apk::ApkClassification &classification)
 {
-    (void)classification;
+    (void) classification;
     std::cerr << "[ART] using guest ART/app_process64\n";
     return handle_guest_art_apk_launch(launch_cfg, classification);
 }
 
-} // namespace
+}  // namespace
 
-int AndroidAarch64Runtime::run(const PlatformLaunchConfig& config)
+int AndroidAarch64Runtime::run(const PlatformLaunchConfig &config)
 {
     PrefixPidRegistration pid_registration(config.active_prefix);
 
@@ -401,8 +428,10 @@ int AndroidAarch64Runtime::run(const PlatformLaunchConfig& config)
             guest_cfg.service_socket =
                 ensure_muplard(*config.active_prefix).string();
     }
-    
-    auto resolve_path = [&](const std::string& input_path, std::string& resolved_elf_path, std::string& resolved_guest_elf_path) {
+
+    auto resolve_path = [&](const std::string &input_path,
+                            std::string &resolved_elf_path,
+                            std::string &resolved_guest_elf_path) {
         resolved_elf_path = input_path;
         resolved_guest_elf_path = "";
 
@@ -410,7 +439,9 @@ int AndroidAarch64Runtime::run(const PlatformLaunchConfig& config)
             if (input_path[0] == '/') {
                 // Absolute path
                 if (!guest_cfg.sysroot.empty()) {
-                    std::filesystem::path host_candidate = std::filesystem::path(guest_cfg.sysroot) / input_path.substr(1);
+                    std::filesystem::path host_candidate =
+                        std::filesystem::path(guest_cfg.sysroot) /
+                        input_path.substr(1);
                     std::error_code ec;
                     if (std::filesystem::exists(host_candidate, ec)) {
                         resolved_elf_path = host_candidate.string();
@@ -421,31 +452,41 @@ int AndroidAarch64Runtime::run(const PlatformLaunchConfig& config)
                 // Relative command name, look up in guest PATH
                 std::vector<std::string> search_dirs;
                 if (config.active_prefix) {
-                    if (config.active_prefix->kind == prefix::PrefixKind::Android) {
-                        search_dirs = { "/system/bin", "/system/xbin", "/bin" };
-                    } else if (config.active_prefix->kind == prefix::PrefixKind::Linux) {
-                        search_dirs = { "/bin", "/usr/bin", "/sbin", "/usr/sbin" };
-                    } else if (config.active_prefix->kind == prefix::PrefixKind::Wine) {
-                        search_dirs = { "/bin", "/usr/bin" };
+                    if (config.active_prefix->kind ==
+                        prefix::PrefixKind::Android) {
+                        search_dirs = {"/system/bin", "/system/xbin", "/bin"};
+                    } else if (config.active_prefix->kind ==
+                               prefix::PrefixKind::Linux) {
+                        search_dirs = {"/bin", "/usr/bin", "/sbin",
+                                       "/usr/sbin"};
+                    } else if (config.active_prefix->kind ==
+                               prefix::PrefixKind::Wine) {
+                        search_dirs = {"/bin", "/usr/bin"};
                     }
                 } else {
-                    search_dirs = { "/bin", "/usr/bin", "/system/bin" };
+                    search_dirs = {"/bin", "/usr/bin", "/system/bin"};
                 }
 
-                for (const auto& dir : search_dirs) {
-                    if (guest_cfg.sysroot.empty()) continue;
+                for (const auto &dir : search_dirs) {
+                    if (guest_cfg.sysroot.empty())
+                        continue;
                     std::string rel_dir = (dir[0] == '/') ? dir.substr(1) : dir;
-                    std::filesystem::path host_candidate = std::filesystem::path(guest_cfg.sysroot) / rel_dir / input_path;
+                    std::filesystem::path host_candidate =
+                        std::filesystem::path(guest_cfg.sysroot) / rel_dir /
+                        input_path;
                     std::error_code ec;
                     if (std::filesystem::exists(host_candidate, ec)) {
                         resolved_elf_path = host_candidate.string();
-                        resolved_guest_elf_path = (dir[0] == '/') ? (dir + "/" + input_path) : ("/" + dir + "/" + input_path);
+                        resolved_guest_elf_path =
+                            (dir[0] == '/') ? (dir + "/" + input_path)
+                                            : ("/" + dir + "/" + input_path);
                         break;
                     }
                 }
             } else {
                 // Relative path with directories (e.g., ./foo or bin/foo)
-                std::filesystem::path base_dir = std::filesystem::current_path();
+                std::filesystem::path base_dir =
+                    std::filesystem::current_path();
                 if (config.active_prefix) {
                     base_dir = default_host_cwd(*config.active_prefix);
                 }
@@ -453,10 +494,14 @@ int AndroidAarch64Runtime::run(const PlatformLaunchConfig& config)
                 std::error_code ec;
                 if (std::filesystem::exists(host_candidate, ec)) {
                     resolved_elf_path = host_candidate.string();
-                    if (!guest_cfg.sysroot.empty() && resolved_elf_path.rfind(guest_cfg.sysroot, 0) == 0) {
-                        resolved_guest_elf_path = resolved_elf_path.substr(guest_cfg.sysroot.length());
-                        if (resolved_guest_elf_path.empty() || resolved_guest_elf_path[0] != '/') {
-                            resolved_guest_elf_path = "/" + resolved_guest_elf_path;
+                    if (!guest_cfg.sysroot.empty() &&
+                        resolved_elf_path.rfind(guest_cfg.sysroot, 0) == 0) {
+                        resolved_guest_elf_path = resolved_elf_path.substr(
+                            guest_cfg.sysroot.length());
+                        if (resolved_guest_elf_path.empty() ||
+                            resolved_guest_elf_path[0] != '/') {
+                            resolved_guest_elf_path =
+                                "/" + resolved_guest_elf_path;
                         }
                     }
                 }
@@ -473,9 +518,12 @@ int AndroidAarch64Runtime::run(const PlatformLaunchConfig& config)
         guest_cfg.guest_elf_path = resolved_guest_elf_path;
     } else {
         guest_cfg.elf_path = resolved_elf_path;
-        if (guest_cfg.guest_elf_path.empty() && !guest_cfg.sysroot.empty() && guest_cfg.elf_path.rfind(guest_cfg.sysroot, 0) == 0) {
-            guest_cfg.guest_elf_path = guest_cfg.elf_path.substr(guest_cfg.sysroot.length());
-            if (guest_cfg.guest_elf_path.empty() || guest_cfg.guest_elf_path[0] != '/') {
+        if (guest_cfg.guest_elf_path.empty() && !guest_cfg.sysroot.empty() &&
+            guest_cfg.elf_path.rfind(guest_cfg.sysroot, 0) == 0) {
+            guest_cfg.guest_elf_path =
+                guest_cfg.elf_path.substr(guest_cfg.sysroot.length());
+            if (guest_cfg.guest_elf_path.empty() ||
+                guest_cfg.guest_elf_path[0] != '/') {
                 guest_cfg.guest_elf_path = "/" + guest_cfg.guest_elf_path;
             }
         }
@@ -489,8 +537,9 @@ int AndroidAarch64Runtime::run(const PlatformLaunchConfig& config)
             break;
         }
         char magic[4];
-        if (f.read(magic, 4) && magic[0] == 0x7f && magic[1] == 'E' && magic[2] == 'L' && magic[3] == 'F') {
-            break; // ELF file
+        if (f.read(magic, 4) && magic[0] == 0x7f && magic[1] == 'E' &&
+            magic[2] == 'L' && magic[3] == 'F') {
+            break;  // ELF file
         }
         f.seekg(0);
         char shebang_buf[256];
@@ -500,7 +549,7 @@ int AndroidAarch64Runtime::run(const PlatformLaunchConfig& config)
         f.close();
 
         if (bytes_read < 2 || shebang_buf[0] != '#' || shebang_buf[1] != '!') {
-            break; // Not a shebang script
+            break;  // Not a shebang script
         }
 
         std::string line(shebang_buf + 2);
@@ -538,9 +587,12 @@ int AndroidAarch64Runtime::run(const PlatformLaunchConfig& config)
             interp = line;
         }
 
-        std::string script_guest_path = guest_cfg.guest_elf_path.empty() ? guest_cfg.elf_path : guest_cfg.guest_elf_path;
+        std::string script_guest_path = guest_cfg.guest_elf_path.empty()
+                                            ? guest_cfg.elf_path
+                                            : guest_cfg.guest_elf_path;
 
-        current_guest_args.insert(current_guest_args.begin(), script_guest_path);
+        current_guest_args.insert(current_guest_args.begin(),
+                                  script_guest_path);
         if (!interp_arg.empty()) {
             current_guest_args.insert(current_guest_args.begin(), interp_arg);
         }
@@ -554,9 +606,12 @@ int AndroidAarch64Runtime::run(const PlatformLaunchConfig& config)
             guest_cfg.guest_elf_path = resolved_guest_interp_path;
         } else {
             guest_cfg.elf_path = resolved_interp_path;
-            if (!guest_cfg.sysroot.empty() && guest_cfg.elf_path.rfind(guest_cfg.sysroot, 0) == 0) {
-                guest_cfg.guest_elf_path = guest_cfg.elf_path.substr(guest_cfg.sysroot.length());
-                if (guest_cfg.guest_elf_path.empty() || guest_cfg.guest_elf_path[0] != '/') {
+            if (!guest_cfg.sysroot.empty() &&
+                guest_cfg.elf_path.rfind(guest_cfg.sysroot, 0) == 0) {
+                guest_cfg.guest_elf_path =
+                    guest_cfg.elf_path.substr(guest_cfg.sysroot.length());
+                if (guest_cfg.guest_elf_path.empty() ||
+                    guest_cfg.guest_elf_path[0] != '/') {
                     guest_cfg.guest_elf_path = "/" + guest_cfg.guest_elf_path;
                 }
             } else {
@@ -566,7 +621,7 @@ int AndroidAarch64Runtime::run(const PlatformLaunchConfig& config)
 
         loop_count++;
     }
-    
+
     guest_cfg.verbose = config.verbose;
     guest_cfg.quiet = config.quiet;
     guest_cfg.timeout_sec = config.timeout_sec;
@@ -590,16 +645,16 @@ int AndroidAarch64Runtime::run(const PlatformLaunchConfig& config)
                 return handle_java_apk_launch(config, classification);
 
             apply_apk_launch(config, guest_cfg);
-        } catch (const std::exception& e) {
+        } catch (const std::exception &e) {
             std::cerr << "APK error: " << e.what() << "\n";
             return 1;
         }
     }
 
-    guest_cfg.argv.push_back(
-        guest_cfg.guest_elf_path.empty() ? guest_cfg.elf_path
-                                         : guest_cfg.guest_elf_path);
-    for (const auto& arg : current_guest_args)
+    guest_cfg.argv.push_back(guest_cfg.guest_elf_path.empty()
+                                 ? guest_cfg.elf_path
+                                 : guest_cfg.guest_elf_path);
+    for (const auto &arg : current_guest_args)
         guest_cfg.argv.push_back(arg);
 
     if (!config.quiet)
@@ -609,4 +664,4 @@ int AndroidAarch64Runtime::run(const PlatformLaunchConfig& config)
     return runner.run(guest_cfg);
 }
 
-} // namespace muplar::runtime::android
+}  // namespace muplar::runtime::android

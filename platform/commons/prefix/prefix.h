@@ -6,7 +6,8 @@
 #include <vector>
 #include <cstdint>
 
-namespace muplar::runtime::prefix {
+namespace muplar::runtime::prefix
+{
 
 enum class PrefixKind {
     Android,
@@ -44,51 +45,53 @@ struct PrefixLayout {
 
 std::filesystem::path muplar_home();
 std::filesystem::path instance_registry_path();
-std::filesystem::path resolve_prefix_root(const std::string& spec);
+std::filesystem::path resolve_prefix_root(const std::string &spec);
 
 /// Path to the PID file stored inside the prefix run directory.
-std::filesystem::path pid_file_path(const PrefixLayout& layout);
+std::filesystem::path pid_file_path(const PrefixLayout &layout);
 
 /// Read the PID file and check whether the process is still alive.
 /// Removes a stale PID file if the process has exited.
-PrefixState query_prefix_state(const PrefixLayout& layout);
+PrefixState query_prefix_state(const PrefixLayout &layout);
 
 /// Read the raw PID from the prefix PID file (0 if not running).
-pid_t read_prefix_pid(const PrefixLayout& layout);
+pid_t read_prefix_pid(const PrefixLayout &layout);
 
 std::string to_string(PrefixKind kind);
 std::string to_string(GuestArch arch);
-PrefixKind parse_prefix_kind(const std::string& value);
-GuestArch parse_guest_arch(const std::string& value);
+PrefixKind parse_prefix_kind(const std::string &value);
+GuestArch parse_guest_arch(const std::string &value);
 bool is_supported_runtime_tuple(PrefixKind kind, GuestArch arch);
 
-PrefixLayout open_prefix(const std::string& spec,
-                         const std::filesystem::path& runtime_sysroot = {},
+PrefixLayout open_prefix(const std::string &spec,
+                         const std::filesystem::path &runtime_sysroot = {},
                          bool create_if_missing = false,
                          PrefixKind kind = PrefixKind::Android,
                          GuestArch arch = GuestArch::Aarch64,
                          std::string runner = "elfuse",
                          std::string distro = "");
-PrefixLayout open_prefix_at_root(const std::string& name,
-                                 const std::filesystem::path& root,
-                                 const std::filesystem::path& runtime_sysroot = {},
-                                 bool create_if_missing = false,
-                                 PrefixKind kind = PrefixKind::Android,
-                                 GuestArch arch = GuestArch::Aarch64,
-                                 std::string runner = "elfuse",
-                                 std::string distro = "");
+PrefixLayout open_prefix_at_root(
+    const std::string &name,
+    const std::filesystem::path &root,
+    const std::filesystem::path &runtime_sysroot = {},
+    bool create_if_missing = false,
+    PrefixKind kind = PrefixKind::Android,
+    GuestArch arch = GuestArch::Aarch64,
+    std::string runner = "elfuse",
+    std::string distro = "");
 
 std::vector<PrefixLayout> list_prefixes();
-bool is_prefix_root(const std::filesystem::path& root);
-PrefixLayout clone_prefix(const std::string& source_spec,
-                          const std::string& dest_spec,
+bool is_prefix_root(const std::filesystem::path &root);
+PrefixLayout clone_prefix(const std::string &source_spec,
+                          const std::string &dest_spec,
                           bool replace_existing = false);
-PrefixLayout clone_prefix_to_root(const std::string& source_spec,
-                                  const std::string& dest_name,
-                                  const std::filesystem::path& dest_root,
+PrefixLayout clone_prefix_to_root(const std::string &source_spec,
+                                  const std::string &dest_name,
+                                  const std::filesystem::path &dest_root,
                                   bool replace_existing = false);
-void delete_prefix(const std::string& spec);
-std::vector<std::string> default_linux_guest_environment(const PrefixLayout& layout);
-std::filesystem::path default_linux_host_cwd(const PrefixLayout& layout);
+void delete_prefix(const std::string &spec);
+std::vector<std::string> default_linux_guest_environment(
+    const PrefixLayout &layout);
+std::filesystem::path default_linux_host_cwd(const PrefixLayout &layout);
 
-} // namespace muplar::runtime::prefix
+}  // namespace muplar::runtime::prefix

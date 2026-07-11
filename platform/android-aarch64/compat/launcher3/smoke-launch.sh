@@ -26,7 +26,8 @@ trap cleanup EXIT
 for _ in {1..300}; do
     if grep -q '\[Muplar/ART\] ArtApkMain started' "$LOG" &&
        grep -q 'onStart/onResume completed successfully' "$LOG" &&
-       grep -q 'loadAllApps' "$LOG"; then
+       grep -q 'makeVisible completed successfully' "$LOG" &&
+       grep -q 'entering main looper' "$LOG"; then
         echo "Launcher3 guest ART lifecycle smoke passed"
         exit 0
     fi
