@@ -14,6 +14,12 @@ rm -f "$SCREENSHOT"
 rm -f "$SYSROOT_SCREENSHOT"
 MUPLAR_LAUNCHER3_SCREENSHOT="$GUEST_SCREENSHOT" "$SCRIPT_DIR/smoke-launch.sh"
 cp "$SYSROOT_SCREENSHOT" "$SCREENSHOT"
+LOG="${TMPDIR:-/tmp}/muplar-launcher3-smoke.log"
+if grep -q "fallback screenshot written" "$LOG"; then
+    echo "FAIL: Log indicates fallback screenshot was written instead of real Bitmap screenshot" >&2
+    exit 1
+fi
+
 "$JDK/javac" -Xlint:-options --release 8 -d "$CLASSES" \
     "$ROOT_DIR/tests/android/PngVisualSmoke.java"
 "$JDK/java" -cp "$CLASSES" PngVisualSmoke "$SCREENSHOT"

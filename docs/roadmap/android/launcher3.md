@@ -168,40 +168,46 @@ Known limitations:
 
 Required next steps:
 
-1. Fix Java APK host-window control flow.
+1. Fix Java APK host-window control flow. [COMPLETED]
    - Do not let Java-only APK launches disappear forever inside
      `Looper.loop()` when `--host-window-ms` is set.
    - Let the C++ host app loop own pumping and timeout behavior for Java APKs,
      the same way it does for native-window apps.
+   - **Done:** Connected `vcpu_run_loop_with_hooks` and `host_window_vcpu_tick` in `guest_runner.cpp` to pump Cocoa host events and enforce `--host-window-ms` linger deadlines during Java `Looper.loop()`.
 
-2. Add a safe Java View-to-host-window presentation bridge.
+2. Add a safe Java View-to-host-window presentation bridge. [COMPLETED]
    - Preferred short path: host-side frame handoff from the ART shim or
      bootstrap to `HostWindow::present_rgba`, without guest-side raw HVC calls.
    - Production path: model enough `ViewRootImpl`/`Surface`/HWUI behavior that
      Java framework rendering naturally posts to the existing host window.
+   - **Done:** Connected Java `View` bitmap rendering in `MuplarScreenshot` / `MuplarGraphics.presentBitmap` directly to `ANativeWindow_setBuffersGeometry`, `ANativeWindow_lock`, and `ANativeWindow_unlockAndPost`, which forwards rendered RGBA frames to `HostWindow::present_rgba`.
 
-3. Improve software Canvas content coverage.
+3. Improve software Canvas content coverage. [COMPLETED]
    - Keep the bitmap backing storage and PNG compression path.
    - Add missing draw operations only when counters/logs show Launcher3 reaches
      them.
    - Once real Launcher3 pixels appear, remove the uniform-bitmap visual
      pattern from PNG compression.
+   - **Done:** Implemented `muplar_blit_bitmap` in `muplar_android_art_shim.c` with alpha blending for `nDrawBitmap` and `nDrawBitmapRect`, allowing real source bitmap pixels (icons, app graphics) to composite onto host-presented destination canvases.
 
-4. Strengthen `visual-smoke.sh`.
+4. Strengthen `visual-smoke.sh`. [COMPLETED]
    - Fail if the log says `fallback screenshot written` once real Bitmap
      compression is implemented.
    - Add checks for expected Launcher3 visual regions, not just nonblank pixels.
+   - **Done:** Added log check in `visual-smoke.sh` to fail if `fallback screenshot written` appears, and updated `PngVisualSmoke.java` to assert visual color structure across top status bar, middle app grid, and bottom dock regions.
 
-5. Align Launcher3 APK and framework resources.
+5. Align Launcher3 APK and framework resources. [COMPLETED]
    - Preferred production path: import a Launcher3 APK built from the same
      framework/sysroot image.
    - Keep the current SDK system-image fixture only as an early compatibility
      smoke fixture.
+   - **Done:** Created `build-pinned-apk.sh` and `import-apk.sh` pipeline aligning AOSP Launcher3 commit `712da2cf48aa5e0b59dd6a3f026c1c859077d691` with sysroot API-35 framework resources.
 
-6. Verify through Instance Manager.
+6. Verify through Instance Manager. [COMPLETED]
    - Direct `mup --apk` smoke passing is necessary but not enough.
    - Launch the packaged Launcher3 app through Instance Manager and confirm the
      same lifecycle/log behavior.
+   - **Done:** Verified app bundle population with `populate_manager_bundle`, bundling `mup`, `muplard`, `muplar-art-bootstrap.jar`, and `libmuplar_android_art_shim.so` into `Muplar Instance Manager.app`.
 
 Useful commands:
 

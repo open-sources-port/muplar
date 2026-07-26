@@ -2343,10 +2343,81 @@ int GuestRunner::run(const GuestRunnerConfig &cfg)
         }
     } else {
         // For executables: run the normal elfuse main loop.
-        if (!cfg.quiet)
-            std::printf("[Muplar] entering vcpu_run_loop...\n");
-        exit_code = vcpu_run_loop(vcpu, vexit, &g, cfg.verbose, cfg.timeout_sec,
-                                  nullptr);
+        if (cfg.host_window && gpu_bridge) {
+            struct HostWindowTickState {
+                muplar::runtime::GpuBridge *gpu_bridge = nullptr;
+                android::AndroidRuntime *art = nullptr;
+                bool bounded = false;
+                std::chrono::steady_clock::time_point deadline;
+                size_t ticks = 0;
+                bool stop_requested = false;
+            };
+
+            HostWindowTickState tick_state;
+            tick_state.gpu_bridge = gpu_bridge.get();
+            tick_state.art =
+                dynamic_cast<android::AndroidRuntime *>(gpu_bridge.get());
+            tick_state.bounded = (cfg.host_window_linger_ms >= 0);
+            if (tick_state.bounded) {
+                tick_state.deadline =
+                    std::chrono::steady_clock::now() +
+                    std::chrono::milliseconds(cfg.host_window_linger_ms);
+            }
+
+            vcpu_run_hooks_t hooks{};
+            hooks.tick = +[](guest_t *g, void *opaque) -> int {
+                (void) g;
+                auto *state = static_cast<HostWindowTickState *>(opaque);
+                if (!state || !state->gpu_bridge)
+                    return 0;
+
+                (void) state->gpu_bridge->pump_host_app_events();
+                if (!state->gpu_bridge->host_window_active()) {
+                    state->stop_requested = true;
+                    return 1;
+                }
+
+                if (state->art) {
+                    auto looper_callbacks =
+                        state->art->take_pending_looper_callbacks();
+                    (void) looper_callbacks;
+                    auto frame_callbacks =
+                        state->art->take_pending_frame_callbacks();
+                    (void) frame_callbacks;
+                }
+
+                state->ticks++;
+                if (state->bounded &&
+                    std::chrono::steady_clock::now() >= state->deadline) {
+                    std::printf(
+                        "[Muplar] host window linger deadline reached (%zu "
+                        "ticks)\n",
+                        state->ticks);
+                    state->stop_requested = true;
+                    return 1;
+                }
+
+                return 0;
+            };
+            hooks.opaque = &tick_state;
+
+            if (!cfg.quiet) {
+                std::printf(
+                    "[Muplar] entering vcpu_run_loop_with_hooks "
+                    "(host_window%s)...\n",
+                    tick_state.bounded ? " bounded" : "");
+            }
+            exit_code = vcpu_run_loop_with_hooks(
+                vcpu, vexit, &g, cfg.verbose, cfg.timeout_sec, nullptr, &hooks);
+            if (tick_state.stop_requested)
+                exit_code = 0;
+            host_app_loop_ran = true;
+        } else {
+            if (!cfg.quiet)
+                std::printf("[Muplar] entering vcpu_run_loop...\n");
+            exit_code = vcpu_run_loop(vcpu, vexit, &g, cfg.verbose,
+                                      cfg.timeout_sec, nullptr);
+        }
     }
 
     if (is_android_run && cfg.host_window && !host_app_loop_ran)

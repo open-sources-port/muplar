@@ -265,10 +265,13 @@ void GpuBridge::encode_stub(uint8_t *out, uint32_t hvc_nr)
 {
     uint32_t movz = 0xD2800008u | ((hvc_nr & 0xFFFF) << 5);
     uint32_t hvc = 0xD4000002u | (6u << 5);  // hvc #6
+    uint32_t fmov =
+        0x1E270000u;  // fmov s0, w0 (copy x0 float bits into s0 register)
     uint32_t ret = 0xD65F03C0u;
     std::memcpy(out + 0, &movz, 4);
     std::memcpy(out + 4, &hvc, 4);
-    std::memcpy(out + 8, &ret, 4);
+    std::memcpy(out + 8, &fmov, 4);
+    std::memcpy(out + 12, &ret, 4);
 }
 
 std::string GpuBridge::guest_read_string(guest_t *g, uint64_t gpa)

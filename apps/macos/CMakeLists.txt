@@ -262,7 +262,8 @@ add_custom_target(populate_manager_bundle ALL
 
     # ── ANGLE (libEGL / libGLESv2) → Frameworks/ ──────────────────────────────
     COMMAND bash -c
-        "for lib in libEGL.dylib libGLESv2.dylib; do \
+        "mkdir -p '${APP_CONTENTS}/Frameworks/angle' '${APP_CONTENTS}/Frameworks/aarch64' '${APP_CONTENTS}/Frameworks/x86_64'; \
+         for lib in libEGL.dylib libGLESv2.dylib; do \
              src='${CMAKE_SOURCE_DIR}/third_party/angle-bin/'\"$lib\"; \
              if [ -f \"$src\" ]; then \
                  cp -f \"$src\" '${APP_CONTENTS}/Frameworks/angle/'; \

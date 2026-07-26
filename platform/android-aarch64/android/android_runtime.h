@@ -7,6 +7,7 @@
 #include <functional>
 #include <memory>
 #include <optional>
+#include <deque>
 #include <vector>
 
 #include "gpu_bridge.h"
@@ -191,8 +192,9 @@ private:
         bool finished = false;
     };
     InputQueueState input_queue_;
-    std::vector<InputEventState> input_events_;
+    std::deque<InputEventState> input_events_;
     size_t next_input_event_ = 0;
+    uint64_t next_input_event_handle_ = 0;
     uint64_t current_input_event_ = 0;
     static constexpr uint64_t GUEST_INPUT_QUEUE = 0xA11E0001ULL;
     static constexpr uint64_t GUEST_INPUT_EVENT_BASE = 0xA11E1000ULL;

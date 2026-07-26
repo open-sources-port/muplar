@@ -43,6 +43,11 @@ struct PrefixLayout {
     bool logging = true;
 };
 
+inline constexpr const char *kMainLogFilename = "muplar.log";
+
+/// Path to the primary prefix log file (e.g. <prefix>/logs/muplar.log).
+std::filesystem::path main_log_path(const PrefixLayout &layout);
+
 std::filesystem::path muplar_home();
 std::filesystem::path instance_registry_path();
 std::filesystem::path resolve_prefix_root(const std::string &spec);

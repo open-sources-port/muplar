@@ -349,6 +349,27 @@ static constexpr uint32_t HVC_INPUT_EVENT_GET_SOURCE = 0x2262;
 static constexpr uint32_t HVC_MOTION_EVENT_GET_ACTION = 0x2263;
 static constexpr uint32_t HVC_KEY_EVENT_GET_ACTION = 0x2264;
 static constexpr uint32_t HVC_KEY_EVENT_GET_KEYCODE = 0x2265;
+static constexpr uint32_t HVC_MOTION_EVENT_GET_X = 0x2266;
+static constexpr uint32_t HVC_MOTION_EVENT_GET_Y = 0x2267;
+static constexpr uint32_t HVC_MOTION_EVENT_GET_RAW_X = 0x2268;
+static constexpr uint32_t HVC_MOTION_EVENT_GET_RAW_Y = 0x2269;
+static constexpr uint32_t HVC_MOTION_EVENT_GET_POINTER_COUNT = 0x226A;
+static constexpr uint32_t HVC_MOTION_EVENT_GET_POINTER_ID = 0x226B;
+static constexpr uint32_t HVC_MOTION_EVENT_GET_EVENT_TIME = 0x226C;
+static constexpr uint32_t HVC_MOTION_EVENT_GET_DOWN_TIME = 0x226D;
+static constexpr uint32_t HVC_MOTION_EVENT_GET_PRESSURE = 0x226E;
+static constexpr uint32_t HVC_MOTION_EVENT_GET_HISTORY_SIZE = 0x2280;
+static constexpr uint32_t HVC_MOTION_EVENT_GET_HISTORICAL_EVENT_TIME = 0x2281;
+static constexpr uint32_t HVC_MOTION_EVENT_GET_HISTORICAL_X = 0x2282;
+static constexpr uint32_t HVC_MOTION_EVENT_GET_HISTORICAL_Y = 0x2283;
+static constexpr uint32_t HVC_MOTION_EVENT_GET_HISTORICAL_RAW_X = 0x2284;
+static constexpr uint32_t HVC_MOTION_EVENT_GET_HISTORICAL_RAW_Y = 0x2285;
+static constexpr uint32_t HVC_MOTION_EVENT_GET_HISTORICAL_PRESSURE = 0x2286;
+static constexpr uint32_t HVC_MOTION_EVENT_GET_AXIS_VALUE = 0x2287;
+static constexpr uint32_t HVC_MOTION_EVENT_GET_FLAGS = 0x2288;
+static constexpr uint32_t HVC_MOTION_EVENT_GET_META_STATE = 0x2289;
+static constexpr uint32_t HVC_MOTION_EVENT_GET_BUTTON_STATE = 0x228A;
+static constexpr uint32_t HVC_MOTION_EVENT_GET_EDGE_FLAGS = 0x228B;
 static constexpr uint32_t HVC_CHOREOGRAPHER_CB_DELAYED = 0x2270;
 static constexpr uint32_t HVC_CHOREOGRAPHER_CB64 = 0x2271;
 static constexpr uint32_t HVC_CHOREOGRAPHER_CB64_DELAYED = 0x2272;
@@ -815,8 +836,7 @@ bool AndroidRuntime::collect_host_input_events()
 
     for (const auto &host_event : events) {
         uint64_t handle =
-            GUEST_INPUT_EVENT_BASE +
-            static_cast<uint64_t>(input_events_.size()) * 0x100ULL;
+            GUEST_INPUT_EVENT_BASE + (next_input_event_handle_++) * 0x100ULL;
         input_events_.push_back({handle, host_event.type, host_event.action,
                                  host_event.source, host_event.device_id,
                                  host_event.key_code, host_event.x,
@@ -2649,7 +2669,7 @@ void AndroidRuntime::register_libandroid_stubs()
             if (a[0] != GUEST_INPUT_QUEUE || !a[1] || !input_event_pending())
                 return INPUT_QUEUE_EMPTY;
 
-            InputEventState &event = input_events_[next_input_event_];
+            InputEventState &event = input_events_[next_input_event_++];
             event.offered = true;
             current_input_event_ = event.handle;
             guest_write_u64(g, a[1], event.handle);
@@ -2674,10 +2694,6 @@ void AndroidRuntime::register_libandroid_stubs()
             InputEventState *event = find_input_event(a[1]);
             if (event && !event->finished) {
                 event->finished = true;
-                if (next_input_event_ < input_events_.size() &&
-                    input_events_[next_input_event_].handle == a[1]) {
-                    next_input_event_++;
-                }
                 current_input_event_ = 0;
                 std::fprintf(stderr,
                              "[InputQueue] finishEvent handle=0x%llx "
@@ -2685,6 +2701,12 @@ void AndroidRuntime::register_libandroid_stubs()
                              (unsigned long long) a[1],
                              (long long) static_cast<int64_t>(a[2]),
                              input_events_.size() - next_input_event_);
+            }
+
+            if (next_input_event_ >= input_events_.size() &&
+                input_events_.size() > 100) {
+                input_events_.clear();
+                next_input_event_ = 0;
             }
 
             if (input_queue_.attached && input_event_pending())
@@ -2714,13 +2736,138 @@ void AndroidRuntime::register_libandroid_stubs()
                                static_cast<int64_t>(event->source))
                          : 0;
         });
+    auto float_to_u64 = [](float f) -> uint64_t {
+        uint32_t bits = 0;
+        std::memcpy(&bits, &f, sizeof(f));
+        return static_cast<uint64_t>(bits);
+    };
+
     add("libandroid.so", "AMotionEvent_getAction", HVC_MOTION_EVENT_GET_ACTION,
         [find_input_event](guest_t *, const uint64_t a[8]) -> uint64_t {
             auto *event = find_input_event(a[0]);
             return event ? static_cast<uint64_t>(
                                static_cast<int64_t>(event->action))
-                         : 0;
+                         : static_cast<uint64_t>(static_cast<int64_t>(-1));
         });
+    add("libandroid.so", "AMotionEvent_getX", HVC_MOTION_EVENT_GET_X,
+        [find_input_event, float_to_u64](guest_t *,
+                                         const uint64_t a[8]) -> uint64_t {
+            auto *event = find_input_event(a[0]);
+            return event ? float_to_u64(event->x) : float_to_u64(0.0f);
+        });
+    add("libandroid.so", "AMotionEvent_getY", HVC_MOTION_EVENT_GET_Y,
+        [find_input_event, float_to_u64](guest_t *,
+                                         const uint64_t a[8]) -> uint64_t {
+            auto *event = find_input_event(a[0]);
+            return event ? float_to_u64(event->y) : float_to_u64(0.0f);
+        });
+    add("libandroid.so", "AMotionEvent_getRawX", HVC_MOTION_EVENT_GET_RAW_X,
+        [find_input_event, float_to_u64](guest_t *,
+                                         const uint64_t a[8]) -> uint64_t {
+            auto *event = find_input_event(a[0]);
+            return event ? float_to_u64(event->x) : float_to_u64(0.0f);
+        });
+    add("libandroid.so", "AMotionEvent_getRawY", HVC_MOTION_EVENT_GET_RAW_Y,
+        [find_input_event, float_to_u64](guest_t *,
+                                         const uint64_t a[8]) -> uint64_t {
+            auto *event = find_input_event(a[0]);
+            return event ? float_to_u64(event->y) : float_to_u64(0.0f);
+        });
+    add("libandroid.so", "AMotionEvent_getPointerCount",
+        HVC_MOTION_EVENT_GET_POINTER_COUNT,
+        [find_input_event](guest_t *, const uint64_t a[8]) -> uint64_t {
+            auto *event = find_input_event(a[0]);
+            return event ? 1 : 0;
+        });
+    add("libandroid.so", "AMotionEvent_getPointerId",
+        HVC_MOTION_EVENT_GET_POINTER_ID,
+        [](guest_t *, const uint64_t[8]) -> uint64_t { return 0; });
+    add("libandroid.so", "AMotionEvent_getEventTime",
+        HVC_MOTION_EVENT_GET_EVENT_TIME,
+        [this](guest_t *, const uint64_t[8]) -> uint64_t {
+            return next_frame_time_nanos_;
+        });
+    add("libandroid.so", "AMotionEvent_getDownTime",
+        HVC_MOTION_EVENT_GET_DOWN_TIME,
+        [this](guest_t *, const uint64_t[8]) -> uint64_t {
+            return next_frame_time_nanos_;
+        });
+    add("libandroid.so", "AMotionEvent_getPressure",
+        HVC_MOTION_EVENT_GET_PRESSURE,
+        [float_to_u64](guest_t *, const uint64_t[8]) -> uint64_t {
+            return float_to_u64(1.0f);
+        });
+    add("libandroid.so", "AMotionEvent_getHistorySize",
+        HVC_MOTION_EVENT_GET_HISTORY_SIZE,
+        [](guest_t *, const uint64_t[8]) -> uint64_t { return 0; });
+    add("libandroid.so", "AMotionEvent_getHistoricalEventTime",
+        HVC_MOTION_EVENT_GET_HISTORICAL_EVENT_TIME,
+        [this](guest_t *, const uint64_t[8]) -> uint64_t {
+            return next_frame_time_nanos_;
+        });
+    add("libandroid.so", "AMotionEvent_getHistoricalX",
+        HVC_MOTION_EVENT_GET_HISTORICAL_X,
+        [find_input_event, float_to_u64](guest_t *,
+                                         const uint64_t a[8]) -> uint64_t {
+            auto *event = find_input_event(a[0]);
+            return event ? float_to_u64(event->x) : float_to_u64(0.0f);
+        });
+    add("libandroid.so", "AMotionEvent_getHistoricalY",
+        HVC_MOTION_EVENT_GET_HISTORICAL_Y,
+        [find_input_event, float_to_u64](guest_t *,
+                                         const uint64_t a[8]) -> uint64_t {
+            auto *event = find_input_event(a[0]);
+            return event ? float_to_u64(event->y) : float_to_u64(0.0f);
+        });
+    add("libandroid.so", "AMotionEvent_getHistoricalRawX",
+        HVC_MOTION_EVENT_GET_HISTORICAL_RAW_X,
+        [find_input_event, float_to_u64](guest_t *,
+                                         const uint64_t a[8]) -> uint64_t {
+            auto *event = find_input_event(a[0]);
+            return event ? float_to_u64(event->x) : float_to_u64(0.0f);
+        });
+    add("libandroid.so", "AMotionEvent_getHistoricalRawY",
+        HVC_MOTION_EVENT_GET_HISTORICAL_RAW_Y,
+        [find_input_event, float_to_u64](guest_t *,
+                                         const uint64_t a[8]) -> uint64_t {
+            auto *event = find_input_event(a[0]);
+            return event ? float_to_u64(event->y) : float_to_u64(0.0f);
+        });
+    add("libandroid.so", "AMotionEvent_getHistoricalPressure",
+        HVC_MOTION_EVENT_GET_HISTORICAL_PRESSURE,
+        [float_to_u64](guest_t *, const uint64_t[8]) -> uint64_t {
+            return float_to_u64(1.0f);
+        });
+    add("libandroid.so", "AMotionEvent_getAxisValue",
+        HVC_MOTION_EVENT_GET_AXIS_VALUE,
+        [find_input_event, float_to_u64](guest_t *,
+                                         const uint64_t a[8]) -> uint64_t {
+            auto *event = find_input_event(a[0]);
+            if (!event)
+                return float_to_u64(0.0f);
+            int32_t axis = static_cast<int32_t>(a[1]);
+            if (axis == 0 /* AMOTION_EVENT_AXIS_X */) {
+                return float_to_u64(event->x);
+            } else if (axis == 1 /* AMOTION_EVENT_AXIS_Y */) {
+                return float_to_u64(event->y);
+            } else if (axis == 2 /* PRESSURE */ || axis == 3 /* SIZE */ ||
+                       axis == 4 /* TOUCH_MAJOR */ ||
+                       axis == 5 /* TOUCH_MINOR */) {
+                return float_to_u64(1.0f);
+            }
+            return float_to_u64(0.0f);
+        });
+    add("libandroid.so", "AMotionEvent_getFlags", HVC_MOTION_EVENT_GET_FLAGS,
+        [](guest_t *, const uint64_t[8]) -> uint64_t { return 0; });
+    add("libandroid.so", "AMotionEvent_getMetaState",
+        HVC_MOTION_EVENT_GET_META_STATE,
+        [](guest_t *, const uint64_t[8]) -> uint64_t { return 0; });
+    add("libandroid.so", "AMotionEvent_getButtonState",
+        HVC_MOTION_EVENT_GET_BUTTON_STATE,
+        [](guest_t *, const uint64_t[8]) -> uint64_t { return 0; });
+    add("libandroid.so", "AMotionEvent_getEdgeFlags",
+        HVC_MOTION_EVENT_GET_EDGE_FLAGS,
+        [](guest_t *, const uint64_t[8]) -> uint64_t { return 0; });
     add("libandroid.so", "AKeyEvent_getAction", HVC_KEY_EVENT_GET_ACTION,
         [find_input_event](guest_t *, const uint64_t a[8]) -> uint64_t {
             auto *event = find_input_event(a[0]);

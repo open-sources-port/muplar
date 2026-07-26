@@ -592,6 +592,9 @@ static int muplar_present_bitmap_to_host_window(
 
     libandroid = dlopen("libandroid.so", RTLD_NOW | RTLD_LOCAL);
     if (!libandroid)
+        libandroid =
+            dlopen("/system/lib64/libandroid.so", RTLD_NOW | RTLD_LOCAL);
+    if (!libandroid)
         return 0;
     set_buffers_geometry = (set_buffers_geometry_fn) dlsym(
         libandroid, "ANativeWindow_setBuffersGeometry");
@@ -3859,6 +3862,70 @@ void Java_android_graphics_BaseCanvas_nDrawTextRunChars(JNIEnv *env,
         env, clazz, canvas, text, index, count, x, y, 0, paint);
 }
 
+static void muplar_blit_bitmap(struct muplar_bitmap_state *dst,
+                               struct muplar_bitmap_state *src,
+                               int dst_x,
+                               int dst_y,
+                               int dst_w,
+                               int dst_h,
+                               int src_x,
+                               int src_y,
+                               int src_w,
+                               int src_h)
+{
+    int x;
+    int y;
+    if (!dst || !dst->pixels || !src || !src->pixels)
+        return;
+    if (dst_w <= 0 || dst_h <= 0 || src_w <= 0 || src_h <= 0)
+        return;
+
+    for (y = 0; y < dst_h; y++) {
+        int py = dst_y + y;
+        int sy;
+        if (py < 0 || py >= dst->height)
+            continue;
+        sy = src_y + (int) (((int64_t) y * src_h) / dst_h);
+        if (sy < 0 || sy >= src->height)
+            continue;
+        for (x = 0; x < dst_w; x++) {
+            int px = dst_x + x;
+            int sx;
+            uint32_t src_color;
+            uint8_t alpha;
+            if (px < 0 || px >= dst->width)
+                continue;
+            sx = src_x + (int) (((int64_t) x * src_w) / dst_w);
+            if (sx < 0 || sx >= src->width)
+                continue;
+            src_color =
+                src->pixels[(size_t) sy * (size_t) src->width + (size_t) sx];
+            alpha = (uint8_t) (src_color >> 24);
+            if (alpha == 0)
+                continue;
+            if (alpha == 255) {
+                dst->pixels[(size_t) py * (size_t) dst->width + (size_t) px] =
+                    src_color;
+            } else {
+                uint32_t dst_color =
+                    dst->pixels[(size_t) py * (size_t) dst->width +
+                                (size_t) px];
+                uint32_t r = (((src_color >> 16) & 0xff) * alpha +
+                              ((dst_color >> 16) & 0xff) * (255 - alpha)) /
+                             255;
+                uint32_t g = (((src_color >> 8) & 0xff) * alpha +
+                              ((dst_color >> 8) & 0xff) * (255 - alpha)) /
+                             255;
+                uint32_t b = ((src_color & 0xff) * alpha +
+                              (dst_color & 0xff) * (255 - alpha)) /
+                             255;
+                dst->pixels[(size_t) py * (size_t) dst->width + (size_t) px] =
+                    0xff000000u | (r << 16) | (g << 8) | b;
+            }
+        }
+    }
+}
+
 void Java_android_graphics_BaseCanvas_nDrawBitmap(JNIEnv *env,
                                                   jclass clazz,
                                                   jlong canvas,
@@ -3870,16 +3937,20 @@ void Java_android_graphics_BaseCanvas_nDrawBitmap(JNIEnv *env,
                                                   jint screen_density,
                                                   jint bitmap_density)
 {
+    struct muplar_bitmap_state *dst = muplar_canvas_bitmap(canvas);
     struct muplar_bitmap_state *src = muplar_find_bitmap(bitmap_handle);
+    (void) env;
+    (void) clazz;
+    (void) paint;
     (void) canvas_density;
     (void) screen_density;
     (void) bitmap_density;
-    if (!src)
+    if (!src || !dst)
         return;
     muplar_draw_bitmap_count++;
-    Java_android_graphics_BaseCanvas_nDrawRect(
-        env, clazz, canvas, left, top, left + (jfloat) src->width,
-        top + (jfloat) src->height, paint);
+    muplar_blit_bitmap(dst, src, muplar_floor_to_int(left),
+                       muplar_floor_to_int(top), src->width, src->height, 0, 0,
+                       src->width, src->height);
 }
 
 void Java_android_graphics_BaseCanvas_nDrawBitmapRect(JNIEnv *env,
@@ -3898,16 +3969,27 @@ void Java_android_graphics_BaseCanvas_nDrawBitmapRect(JNIEnv *env,
                                                       jint screen_density,
                                                       jint bitmap_density)
 {
-    (void) bitmap_handle;
-    (void) src_left;
-    (void) src_top;
-    (void) src_right;
-    (void) src_bottom;
+    struct muplar_bitmap_state *dst = muplar_canvas_bitmap(canvas);
+    struct muplar_bitmap_state *src = muplar_find_bitmap(bitmap_handle);
+    (void) env;
+    (void) clazz;
+    (void) paint;
     (void) screen_density;
     (void) bitmap_density;
+    if (!src || !dst)
+        return;
     muplar_draw_bitmap_count++;
-    Java_android_graphics_BaseCanvas_nDrawRect(
-        env, clazz, canvas, dst_left, dst_top, dst_right, dst_bottom, paint);
+    {
+        int sx = muplar_floor_to_int(src_left);
+        int sy = muplar_floor_to_int(src_top);
+        int sw = muplar_ceil_to_int(src_right) - sx;
+        int sh = muplar_ceil_to_int(src_bottom) - sy;
+        int dx = muplar_floor_to_int(dst_left);
+        int dy = muplar_floor_to_int(dst_top);
+        int dw = muplar_ceil_to_int(dst_right) - dx;
+        int dh = muplar_ceil_to_int(dst_bottom) - dy;
+        muplar_blit_bitmap(dst, src, dx, dy, dw, dh, sx, sy, sw, sh);
+    }
 }
 
 jlong Java_android_graphics_text_LineBreaker_nInit(JNIEnv *env,
@@ -5591,9 +5673,194 @@ jboolean Java_android_view_VelocityTracker_nativeIsAxisSupported(JNIEnv *env,
                                                                  jint axis)
 {
     (void) env;
-    (void) clazz;
-    (void) axis;
     return JNI_TRUE;
+}
+
+typedef int32_t (*fn_AMotionEvent_getAction)(const void *);
+typedef float (*fn_AMotionEvent_getX)(const void *, size_t);
+typedef float (*fn_AMotionEvent_getY)(const void *, size_t);
+typedef float (*fn_AMotionEvent_getRawX)(const void *, size_t);
+typedef float (*fn_AMotionEvent_getRawY)(const void *, size_t);
+typedef size_t (*fn_AMotionEvent_getPointerCount)(const void *);
+typedef int32_t (*fn_AMotionEvent_getPointerId)(const void *, size_t);
+typedef int64_t (*fn_AMotionEvent_getEventTime)(const void *);
+typedef int64_t (*fn_AMotionEvent_getDownTime)(const void *);
+typedef float (*fn_AMotionEvent_getPressure)(const void *, size_t);
+typedef size_t (*fn_AMotionEvent_getHistorySize)(const void *);
+typedef float (*fn_AMotionEvent_getAxisValue)(const void *, int32_t, size_t);
+
+static fn_AMotionEvent_getAction p_AMotionEvent_getAction = NULL;
+static fn_AMotionEvent_getRawX p_AMotionEvent_getRawX = NULL;
+static fn_AMotionEvent_getRawY p_AMotionEvent_getRawY = NULL;
+static fn_AMotionEvent_getPointerCount p_AMotionEvent_getPointerCount = NULL;
+static fn_AMotionEvent_getPointerId p_AMotionEvent_getPointerId = NULL;
+static fn_AMotionEvent_getEventTime p_AMotionEvent_getEventTime = NULL;
+static fn_AMotionEvent_getDownTime p_AMotionEvent_getDownTime = NULL;
+static fn_AMotionEvent_getHistorySize p_AMotionEvent_getHistorySize = NULL;
+static fn_AMotionEvent_getAxisValue p_AMotionEvent_getAxisValue = NULL;
+
+static void ensure_amotion_event_symbols(void)
+{
+    if (p_AMotionEvent_getAction)
+        return;
+    void *lib = RTLD_DEFAULT;
+    p_AMotionEvent_getAction =
+        (fn_AMotionEvent_getAction) dlsym(lib, "AMotionEvent_getAction");
+    p_AMotionEvent_getRawX =
+        (fn_AMotionEvent_getRawX) dlsym(lib, "AMotionEvent_getRawX");
+    p_AMotionEvent_getRawY =
+        (fn_AMotionEvent_getRawY) dlsym(lib, "AMotionEvent_getRawY");
+    p_AMotionEvent_getPointerCount = (fn_AMotionEvent_getPointerCount) dlsym(
+        lib, "AMotionEvent_getPointerCount");
+    p_AMotionEvent_getPointerId =
+        (fn_AMotionEvent_getPointerId) dlsym(lib, "AMotionEvent_getPointerId");
+    p_AMotionEvent_getEventTime =
+        (fn_AMotionEvent_getEventTime) dlsym(lib, "AMotionEvent_getEventTime");
+    p_AMotionEvent_getDownTime =
+        (fn_AMotionEvent_getDownTime) dlsym(lib, "AMotionEvent_getDownTime");
+    p_AMotionEvent_getHistorySize = (fn_AMotionEvent_getHistorySize) dlsym(
+        lib, "AMotionEvent_getHistorySize");
+    p_AMotionEvent_getAxisValue =
+        (fn_AMotionEvent_getAxisValue) dlsym(lib, "AMotionEvent_getAxisValue");
+}
+
+void Java_android_view_MotionEvent_nativeDispose(JNIEnv *env,
+                                                 jclass clazz,
+                                                 jlong ptr)
+{
+    (void) env;
+    (void) clazz;
+    (void) ptr;
+}
+
+jint Java_android_view_MotionEvent_nativeGetAction(JNIEnv *env,
+                                                   jclass clazz,
+                                                   jlong ptr)
+{
+    (void) env;
+    (void) clazz;
+    ensure_amotion_event_symbols();
+    return (ptr && p_AMotionEvent_getAction)
+               ? (jint) p_AMotionEvent_getAction((const void *) (uintptr_t) ptr)
+               : 0;
+}
+
+jint Java_android_view_MotionEvent_nativeGetPointerCount(JNIEnv *env,
+                                                         jclass clazz,
+                                                         jlong ptr)
+{
+    (void) env;
+    (void) clazz;
+    ensure_amotion_event_symbols();
+    return (ptr && p_AMotionEvent_getPointerCount)
+               ? (jint) p_AMotionEvent_getPointerCount(
+                     (const void *) (uintptr_t) ptr)
+               : 1;
+}
+
+jint Java_android_view_MotionEvent_nativeGetPointerId(JNIEnv *env,
+                                                      jclass clazz,
+                                                      jlong ptr,
+                                                      jint index)
+{
+    (void) env;
+    (void) clazz;
+    ensure_amotion_event_symbols();
+    return (ptr && p_AMotionEvent_getPointerId)
+               ? (jint) p_AMotionEvent_getPointerId(
+                     (const void *) (uintptr_t) ptr, (size_t) index)
+               : 0;
+}
+
+jfloat Java_android_view_MotionEvent_nativeGetRawX(JNIEnv *env,
+                                                   jclass clazz,
+                                                   jlong ptr,
+                                                   jint index,
+                                                   jint historicalIndex)
+{
+    (void) env;
+    (void) clazz;
+    (void) historicalIndex;
+    ensure_amotion_event_symbols();
+    return (ptr && p_AMotionEvent_getRawX)
+               ? p_AMotionEvent_getRawX((const void *) (uintptr_t) ptr,
+                                        (size_t) index)
+               : 0.0f;
+}
+
+jfloat Java_android_view_MotionEvent_nativeGetRawY(JNIEnv *env,
+                                                   jclass clazz,
+                                                   jlong ptr,
+                                                   jint index,
+                                                   jint historicalIndex)
+{
+    (void) env;
+    (void) clazz;
+    (void) historicalIndex;
+    ensure_amotion_event_symbols();
+    return (ptr && p_AMotionEvent_getRawY)
+               ? p_AMotionEvent_getRawY((const void *) (uintptr_t) ptr,
+                                        (size_t) index)
+               : 0.0f;
+}
+
+jfloat Java_android_view_MotionEvent_nativeGetAxisValue(JNIEnv *env,
+                                                        jclass clazz,
+                                                        jlong ptr,
+                                                        jint axis,
+                                                        jint index,
+                                                        jint historicalIndex)
+{
+    (void) env;
+    (void) clazz;
+    (void) historicalIndex;
+    ensure_amotion_event_symbols();
+    return (ptr && p_AMotionEvent_getAxisValue)
+               ? p_AMotionEvent_getAxisValue((const void *) (uintptr_t) ptr,
+                                             axis, (size_t) index)
+               : 0.0f;
+}
+
+jint Java_android_view_MotionEvent_nativeGetHistorySize(JNIEnv *env,
+                                                        jclass clazz,
+                                                        jlong ptr)
+{
+    (void) env;
+    (void) clazz;
+    ensure_amotion_event_symbols();
+    return (ptr && p_AMotionEvent_getHistorySize)
+               ? (jint) p_AMotionEvent_getHistorySize(
+                     (const void *) (uintptr_t) ptr)
+               : 0;
+}
+
+jlong Java_android_view_MotionEvent_nativeGetEventTimeNanos(
+    JNIEnv *env,
+    jclass clazz,
+    jlong ptr,
+    jint historicalIndex)
+{
+    (void) env;
+    (void) clazz;
+    (void) historicalIndex;
+    ensure_amotion_event_symbols();
+    return (ptr && p_AMotionEvent_getEventTime)
+               ? (jlong) p_AMotionEvent_getEventTime(
+                     (const void *) (uintptr_t) ptr)
+               : 0;
+}
+
+jlong Java_android_view_MotionEvent_nativeGetDownTimeNanos(JNIEnv *env,
+                                                           jclass clazz,
+                                                           jlong ptr)
+{
+    (void) env;
+    (void) clazz;
+    ensure_amotion_event_symbols();
+    return (ptr && p_AMotionEvent_getDownTime)
+               ? (jlong) p_AMotionEvent_getDownTime(
+                     (const void *) (uintptr_t) ptr)
+               : 0;
 }
 
 jlong Java_android_view_DisplayEventReceiver_nativeGetDisplayEventReceiverFinalizer(
@@ -8652,6 +8919,42 @@ JNIEXPORT jint JNICALL JNI_OnLoad(JavaVM *vm, void *reserved)
         muplar_register_one(
             env, cls, "nativeIsAxisSupported", "(I)Z",
             (void *) Java_android_view_VelocityTracker_nativeIsAxisSupported);
+    }
+
+    cls = (*env)->FindClass(env, "android/view/MotionEvent");
+    if ((*env)->ExceptionCheck(env)) {
+        (*env)->ExceptionClear(env);
+    } else if (cls) {
+        muplar_register_one(
+            env, cls, "nativeDispose", "(J)V",
+            (void *) Java_android_view_MotionEvent_nativeDispose);
+        muplar_register_one(
+            env, cls, "nativeGetAction", "(J)I",
+            (void *) Java_android_view_MotionEvent_nativeGetAction);
+        muplar_register_one(
+            env, cls, "nativeGetPointerCount", "(J)I",
+            (void *) Java_android_view_MotionEvent_nativeGetPointerCount);
+        muplar_register_one(
+            env, cls, "nativeGetPointerId", "(JI)I",
+            (void *) Java_android_view_MotionEvent_nativeGetPointerId);
+        muplar_register_one(
+            env, cls, "nativeGetRawX", "(JII)F",
+            (void *) Java_android_view_MotionEvent_nativeGetRawX);
+        muplar_register_one(
+            env, cls, "nativeGetRawY", "(JII)F",
+            (void *) Java_android_view_MotionEvent_nativeGetRawY);
+        muplar_register_one(
+            env, cls, "nativeGetAxisValue", "(JIII)F",
+            (void *) Java_android_view_MotionEvent_nativeGetAxisValue);
+        muplar_register_one(
+            env, cls, "nativeGetHistorySize", "(J)I",
+            (void *) Java_android_view_MotionEvent_nativeGetHistorySize);
+        muplar_register_one(
+            env, cls, "nativeGetEventTimeNanos", "(JI)J",
+            (void *) Java_android_view_MotionEvent_nativeGetEventTimeNanos);
+        muplar_register_one(
+            env, cls, "nativeGetDownTimeNanos", "(J)J",
+            (void *) Java_android_view_MotionEvent_nativeGetDownTimeNanos);
     }
 
     cls = (*env)->FindClass(env, "android/view/DisplayEventReceiver");
