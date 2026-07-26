@@ -3,11 +3,13 @@
 #include <string>
 #include "elf_image.h"
 
-namespace muplar::runtime::elf {
+namespace muplar::runtime::elf
+{
 
-    class ElfLoader {
-        public:
-            ElfImage load(const std::string& path);
-    };
+class ElfLoader
+{
+public:
+    ElfImage load(const std::string &path);
+};
 
-}
+}  // namespace muplar::runtime::elf

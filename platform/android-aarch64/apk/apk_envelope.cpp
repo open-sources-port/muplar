@@ -12,8 +12,10 @@
 
 #include <zlib.h>
 
-namespace muplar::runtime::apk {
-namespace {
+namespace muplar::runtime::apk
+{
+namespace
+{
 
 struct ZipEntry {
     std::string name;
@@ -24,14 +26,14 @@ struct ZipEntry {
     uint32_t local_header_offset = 0;
 };
 
-uint16_t read_u16(const std::vector<uint8_t>& data, size_t off)
+uint16_t read_u16(const std::vector<uint8_t> &data, size_t off)
 {
     if (off + 2 > data.size())
         throw std::runtime_error("APK zip header truncated");
     return static_cast<uint16_t>(data[off] | (data[off + 1] << 8));
 }
 
-uint32_t read_u32(const std::vector<uint8_t>& data, size_t off)
+uint32_t read_u32(const std::vector<uint8_t> &data, size_t off)
 {
     if (off + 4 > data.size())
         throw std::runtime_error("APK zip header truncated");
@@ -41,7 +43,7 @@ uint32_t read_u32(const std::vector<uint8_t>& data, size_t off)
            (static_cast<uint32_t>(data[off + 3]) << 24);
 }
 
-std::vector<uint8_t> read_file(const std::filesystem::path& path)
+std::vector<uint8_t> read_file(const std::filesystem::path &path)
 {
     std::ifstream in(path, std::ios::binary);
     if (!in)
@@ -55,13 +57,13 @@ std::vector<uint8_t> read_file(const std::filesystem::path& path)
 
     std::vector<uint8_t> data(static_cast<size_t>(size));
     if (!data.empty())
-        in.read(reinterpret_cast<char*>(data.data()), size);
+        in.read(reinterpret_cast<char *>(data.data()), size);
     if (!in && size > 0)
         throw std::runtime_error("unable to read APK: " + path.string());
     return data;
 }
 
-std::vector<ZipEntry> read_zip_entries(const std::vector<uint8_t>& apk)
+std::vector<ZipEntry> read_zip_entries(const std::vector<uint8_t> &apk)
 {
     constexpr uint32_t EOCD_SIG = 0x06054b50;
     constexpr uint32_t CEN_SIG = 0x02014b50;
@@ -72,8 +74,8 @@ std::vector<ZipEntry> read_zip_entries(const std::vector<uint8_t>& apk)
         throw std::runtime_error("APK is too small to be a zip file");
 
     size_t search_start = apk.size() > EOCD_MIN_SIZE + EOCD_MAX_COMMENT
-        ? apk.size() - (EOCD_MIN_SIZE + EOCD_MAX_COMMENT)
-        : 0;
+                              ? apk.size() - (EOCD_MIN_SIZE + EOCD_MAX_COMMENT)
+                              : 0;
     size_t eocd = std::string::npos;
     for (size_t off = apk.size() - EOCD_MIN_SIZE + 1; off-- > search_start;) {
         if (read_u32(apk, off) == EOCD_SIG) {
@@ -102,7 +104,8 @@ std::vector<ZipEntry> read_zip_entries(const std::vector<uint8_t>& apk)
         uint16_t extra_len = read_u16(apk, off + 30);
         uint16_t comment_len = read_u16(apk, off + 32);
         if (off + 46u + name_len + extra_len + comment_len > apk.size())
-            throw std::runtime_error("APK central directory entry is truncated");
+            throw std::runtime_error(
+                "APK central directory entry is truncated");
 
         ZipEntry entry;
         entry.flags = read_u16(apk, off + 8);
@@ -110,7 +113,7 @@ std::vector<ZipEntry> read_zip_entries(const std::vector<uint8_t>& apk)
         entry.compressed_size = read_u32(apk, off + 20);
         entry.uncompressed_size = read_u32(apk, off + 24);
         entry.local_header_offset = read_u32(apk, off + 42);
-        entry.name.assign(reinterpret_cast<const char*>(apk.data() + off + 46),
+        entry.name.assign(reinterpret_cast<const char *>(apk.data() + off + 46),
                           name_len);
         entries.push_back(entry);
 
@@ -119,21 +122,23 @@ std::vector<ZipEntry> read_zip_entries(const std::vector<uint8_t>& apk)
     return entries;
 }
 
-std::vector<uint8_t> extract_entry_data(const std::vector<uint8_t>& apk,
-                                        const ZipEntry& entry)
+std::vector<uint8_t> extract_entry_data(const std::vector<uint8_t> &apk,
+                                        const ZipEntry &entry)
 {
     constexpr uint32_t LOC_SIG = 0x04034b50;
     size_t off = entry.local_header_offset;
     if (off + 30 > apk.size() || read_u32(apk, off) != LOC_SIG)
-        throw std::runtime_error("APK local zip header is invalid for " + entry.name);
+        throw std::runtime_error("APK local zip header is invalid for " +
+                                 entry.name);
 
     uint16_t name_len = read_u16(apk, off + 26);
     uint16_t extra_len = read_u16(apk, off + 28);
     size_t data_off = off + 30u + name_len + extra_len;
     if (data_off + entry.compressed_size > apk.size())
-        throw std::runtime_error("APK entry data is truncated for " + entry.name);
+        throw std::runtime_error("APK entry data is truncated for " +
+                                 entry.name);
 
-    const uint8_t* src = apk.data() + data_off;
+    const uint8_t *src = apk.data() + data_off;
     if (entry.method == 0) {
         return std::vector<uint8_t>(src, src + entry.compressed_size);
     }
@@ -145,9 +150,9 @@ std::vector<uint8_t> extract_entry_data(const std::vector<uint8_t>& apk,
 
     std::vector<uint8_t> out(entry.uncompressed_size);
     z_stream zs{};
-    zs.next_in = const_cast<Bytef*>(reinterpret_cast<const Bytef*>(src));
+    zs.next_in = const_cast<Bytef *>(reinterpret_cast<const Bytef *>(src));
     zs.avail_in = entry.compressed_size;
-    zs.next_out = reinterpret_cast<Bytef*>(out.data());
+    zs.next_out = reinterpret_cast<Bytef *>(out.data());
     zs.avail_out = entry.uncompressed_size;
 
     int rc = inflateInit2(&zs, -MAX_WBITS);
@@ -160,18 +165,19 @@ std::vector<uint8_t> extract_entry_data(const std::vector<uint8_t>& apk,
     return out;
 }
 
-bool starts_with(const std::string& value, const std::string& prefix)
+bool starts_with(const std::string &value, const std::string &prefix)
 {
     return value.rfind(prefix, 0) == 0;
 }
 
-bool ends_with(const std::string& value, const std::string& suffix)
+bool ends_with(const std::string &value, const std::string &suffix)
 {
     return value.size() >= suffix.size() &&
-           value.compare(value.size() - suffix.size(), suffix.size(), suffix) == 0;
+           value.compare(value.size() - suffix.size(), suffix.size(), suffix) ==
+               0;
 }
 
-bool is_root_dex(const std::string& path)
+bool is_root_dex(const std::string &path)
 {
     if (path.find('/') != std::string::npos)
         return false;
@@ -179,7 +185,7 @@ bool is_root_dex(const std::string& path)
            (starts_with(path, "classes") && ends_with(path, ".dex"));
 }
 
-bool safe_zip_path(const std::string& path)
+bool safe_zip_path(const std::string &path)
 {
     if (path.empty() || path.front() == '/' ||
         path.find('\\') != std::string::npos ||
@@ -201,13 +207,13 @@ bool safe_zip_path(const std::string& path)
     return true;
 }
 
-std::string filename_from_zip_path(const std::string& path)
+std::string filename_from_zip_path(const std::string &path)
 {
     size_t slash = path.find_last_of('/');
     return slash == std::string::npos ? path : path.substr(slash + 1);
 }
 
-std::string lib_base_name(const std::string& filename)
+std::string lib_base_name(const std::string &filename)
 {
     std::string base = filename_from_zip_path(filename);
     if (starts_with(base, "lib") && ends_with(base, ".so"))
@@ -217,7 +223,8 @@ std::string lib_base_name(const std::string& filename)
     return base;
 }
 
-bool lib_name_matches(const std::string& entry_name, const std::string& requested)
+bool lib_name_matches(const std::string &entry_name,
+                      const std::string &requested)
 {
     std::string filename = filename_from_zip_path(entry_name);
     return requested == filename || requested == lib_base_name(filename);
@@ -225,7 +232,7 @@ bool lib_name_matches(const std::string& entry_name, const std::string& requeste
 
 std::string sanitize_path_component(std::string value)
 {
-    for (char& c : value) {
+    for (char &c : value) {
         unsigned char uc = static_cast<unsigned char>(c);
         if (!std::isalnum(uc) && c != '-' && c != '_' && c != '.')
             c = '_';
@@ -235,34 +242,34 @@ std::string sanitize_path_component(std::string value)
     return value;
 }
 
-std::filesystem::path default_extract_dir(const std::filesystem::path& apk_path,
-                                          const std::filesystem::path& base_dir)
+std::filesystem::path default_extract_dir(const std::filesystem::path &apk_path,
+                                          const std::filesystem::path &base_dir)
 {
     std::string seed = std::filesystem::absolute(apk_path).string();
     try {
         seed += ":" + std::to_string(std::filesystem::file_size(apk_path));
-        seed += ":" + std::to_string(
-            static_cast<long long>(
-                std::filesystem::last_write_time(apk_path)
-                    .time_since_epoch()
-                    .count()));
-    } catch (const std::exception&) {
-        // Best-effort stable-ish path; the actual APK read will fail later if needed.
+        seed += ":" + std::to_string(static_cast<long long>(
+                          std::filesystem::last_write_time(apk_path)
+                              .time_since_epoch()
+                              .count()));
+    } catch (const std::exception &) {
+        // Best-effort stable-ish path; the actual APK read will fail later if
+        // needed.
     }
 
     std::ostringstream hash;
     hash << std::hex << std::hash<std::string>{}(seed);
-    std::string dir = sanitize_path_component(apk_path.stem().string()) +
-                      "-" + hash.str();
-    std::filesystem::path base = base_dir.empty()
-        ? std::filesystem::current_path() / "build" / "apk"
-        : base_dir;
+    std::string dir =
+        sanitize_path_component(apk_path.stem().string()) + "-" + hash.str();
+    std::filesystem::path base =
+        base_dir.empty() ? std::filesystem::current_path() / "build" / "apk"
+                         : base_dir;
     return base / dir;
 }
 
-std::string utf8_length_string(const std::vector<uint8_t>& data, size_t off)
+std::string utf8_length_string(const std::vector<uint8_t> &data, size_t off)
 {
-    auto read_len = [&](size_t& pos) -> uint32_t {
+    auto read_len = [&](size_t &pos) -> uint32_t {
         if (pos >= data.size())
             throw std::runtime_error("AXML string length is truncated");
         uint8_t first = data[pos++];
@@ -274,17 +281,17 @@ std::string utf8_length_string(const std::vector<uint8_t>& data, size_t off)
     };
 
     size_t pos = off;
-    (void)read_len(pos);
+    (void) read_len(pos);
     uint32_t byte_len = read_len(pos);
     if (pos + byte_len > data.size())
         throw std::runtime_error("AXML UTF-8 string is truncated");
-    return std::string(reinterpret_cast<const char*>(data.data() + pos),
+    return std::string(reinterpret_cast<const char *>(data.data() + pos),
                        byte_len);
 }
 
-std::string utf16_length_string(const std::vector<uint8_t>& data, size_t off)
+std::string utf16_length_string(const std::vector<uint8_t> &data, size_t off)
 {
-    auto read_len = [&](size_t& pos) -> uint32_t {
+    auto read_len = [&](size_t &pos) -> uint32_t {
         uint16_t first = read_u16(data, pos);
         pos += 2;
         if ((first & 0x8000u) == 0)
@@ -310,7 +317,7 @@ std::string utf16_length_string(const std::vector<uint8_t>& data, size_t off)
     return out;
 }
 
-std::vector<std::string> axml_string_pool(const std::vector<uint8_t>& manifest)
+std::vector<std::string> axml_string_pool(const std::vector<uint8_t> &manifest)
 {
     constexpr uint16_t RES_STRING_POOL_TYPE = 0x0001;
     constexpr uint32_t UTF8_FLAG = 0x00000100;
@@ -341,15 +348,16 @@ std::vector<std::string> axml_string_pool(const std::vector<uint8_t>& manifest)
         }
 
         for (uint32_t i = 0; i < string_count; ++i) {
-            uint32_t string_off = read_u32(manifest, off + header_size + i * 4u);
+            uint32_t string_off =
+                read_u32(manifest, off + header_size + i * 4u);
             size_t string_pos = off + strings_start + string_off;
             if (string_pos >= off + chunk_size)
                 continue;
             try {
-                strings.push_back(utf8
-                    ? utf8_length_string(manifest, string_pos)
-                    : utf16_length_string(manifest, string_pos));
-            } catch (const std::exception&) {
+                strings.push_back(
+                    utf8 ? utf8_length_string(manifest, string_pos)
+                         : utf16_length_string(manifest, string_pos));
+            } catch (const std::exception &) {
                 strings.push_back({});
             }
         }
@@ -358,7 +366,7 @@ std::vector<std::string> axml_string_pool(const std::vector<uint8_t>& manifest)
     return strings;
 }
 
-std::vector<std::string> string_pool_at(const std::vector<uint8_t>& data,
+std::vector<std::string> string_pool_at(const std::vector<uint8_t> &data,
                                         size_t off)
 {
     constexpr uint16_t RES_STRING_POOL_TYPE = 0x0001;
@@ -388,18 +396,18 @@ std::vector<std::string> string_pool_at(const std::vector<uint8_t>& data,
         }
         try {
             strings.push_back((flags & UTF8_FLAG) != 0
-                ? utf8_length_string(data, string_pos)
-                : utf16_length_string(data, string_pos));
-        } catch (const std::exception&) {
+                                  ? utf8_length_string(data, string_pos)
+                                  : utf16_length_string(data, string_pos));
+        } catch (const std::exception &) {
             strings.emplace_back();
         }
     }
     return strings;
 }
 
-std::optional<std::string>
-resolve_resource_string(const std::vector<uint8_t>& resources,
-                        uint32_t resource_id)
+std::optional<std::string> resolve_resource_string(
+    const std::vector<uint8_t> &resources,
+    uint32_t resource_id)
 {
     constexpr uint16_t RES_TABLE_TYPE = 0x0002;
     constexpr uint16_t RES_TABLE_PACKAGE_TYPE = 0x0200;
@@ -452,9 +460,9 @@ resolve_resource_string(const std::vector<uint8_t>& resources,
                             if (sparse + 4 > child + child_size)
                                 break;
                             if (read_u16(resources, sparse) == wanted) {
-                                entry_offset =
-                                    static_cast<uint32_t>(read_u16(resources,
-                                                                  sparse + 2)) * 4u;
+                                entry_offset = static_cast<uint32_t>(read_u16(
+                                                   resources, sparse + 2)) *
+                                               4u;
                                 break;
                             }
                         }
@@ -469,7 +477,8 @@ resolve_resource_string(const std::vector<uint8_t>& resources,
                         size_t entry = child + entries_start + entry_offset;
                         if (entry + 8 <= child + child_size) {
                             uint16_t entry_size = read_u16(resources, entry);
-                            uint16_t entry_flags = read_u16(resources, entry + 2);
+                            uint16_t entry_flags =
+                                read_u16(resources, entry + 2);
                             size_t value = entry + entry_size;
                             if ((entry_flags & FLAG_COMPLEX) == 0 &&
                                 value + 8 <= child + child_size &&
@@ -490,14 +499,14 @@ resolve_resource_string(const std::vector<uint8_t>& resources,
     return std::nullopt;
 }
 
-std::optional<std::string>
-infer_plain_manifest_lib(const std::string& manifest,
-                         const std::vector<std::string>& available_bases)
+std::optional<std::string> infer_plain_manifest_lib(
+    const std::string &manifest,
+    const std::vector<std::string> &available_bases)
 {
     if (manifest.find("android.app.lib_name") == std::string::npos)
         return std::nullopt;
 
-    for (const std::string& base : available_bases) {
+    for (const std::string &base : available_bases) {
         if (manifest.find("\"" + base + "\"") != std::string::npos ||
             manifest.find("'" + base + "'") != std::string::npos)
             return base;
@@ -507,10 +516,9 @@ infer_plain_manifest_lib(const std::string& manifest,
     return std::nullopt;
 }
 
-std::optional<std::string>
-plain_manifest_attribute(const std::string& manifest,
-                         const std::string& element,
-                         const std::string& attr)
+std::optional<std::string> plain_manifest_attribute(const std::string &manifest,
+                                                    const std::string &element,
+                                                    const std::string &attr)
 {
     size_t tag = manifest.find("<" + element);
     if (tag == std::string::npos)
@@ -535,8 +543,8 @@ plain_manifest_attribute(const std::string& manifest,
     return manifest.substr(quote + 1, close - quote - 1);
 }
 
-std::optional<std::string>
-tag_attribute(const std::string& tag, const std::string& attr)
+std::optional<std::string> tag_attribute(const std::string &tag,
+                                         const std::string &attr)
 {
     size_t attr_pos = tag.find(attr);
     if (attr_pos == std::string::npos)
@@ -554,29 +562,28 @@ tag_attribute(const std::string& tag, const std::string& attr)
     return tag.substr(quote + 1, close - quote - 1);
 }
 
-std::string normalize_activity_name(const std::string& package_name,
+std::string normalize_activity_name(const std::string &package_name,
                                     std::string activity_name)
 {
     if (activity_name.empty())
         return activity_name;
     if (!package_name.empty() && activity_name.front() == '.')
         return package_name + activity_name;
-    if (!package_name.empty() &&
-        activity_name.find('.') == std::string::npos) {
+    if (!package_name.empty() && activity_name.find('.') == std::string::npos) {
         return package_name + "." + activity_name;
     }
     return activity_name;
 }
 
-std::optional<std::string>
-infer_plain_manifest_package(const std::string& manifest)
+std::optional<std::string> infer_plain_manifest_package(
+    const std::string &manifest)
 {
     return plain_manifest_attribute(manifest, "manifest", "package");
 }
 
-std::optional<std::string>
-infer_plain_manifest_launch_activity(const std::string& manifest,
-                                     const std::optional<std::string>& package_name)
+std::optional<std::string> infer_plain_manifest_launch_activity(
+    const std::string &manifest,
+    const std::optional<std::string> &package_name)
 {
     struct ActivityCandidate {
         std::string name;
@@ -593,18 +600,19 @@ infer_plain_manifest_launch_activity(const std::string& manifest,
         if (open_end == std::string::npos)
             break;
 
-        std::string tag = manifest.substr(activity_start, open_end - activity_start + 1);
-        std::optional<std::string> name =
-            tag_attribute(tag, "android:name");
+        std::string tag =
+            manifest.substr(activity_start, open_end - activity_start + 1);
+        std::optional<std::string> name = tag_attribute(tag, "android:name");
         if (!name)
             name = tag_attribute(tag, "name");
 
         size_t activity_end = manifest.find("</activity>", open_end);
-        size_t block_end = activity_end == std::string::npos
-            ? open_end
-            : activity_end + std::string("</activity>").size();
-        std::string block = manifest.substr(
-            activity_start, block_end - activity_start);
+        size_t block_end =
+            activity_end == std::string::npos
+                ? open_end
+                : activity_end + std::string("</activity>").size();
+        std::string block =
+            manifest.substr(activity_start, block_end - activity_start);
 
         if (name) {
             ActivityCandidate candidate;
@@ -612,8 +620,10 @@ infer_plain_manifest_launch_activity(const std::string& manifest,
                 package_name.value_or(std::string()), *name);
             candidate.is_launcher =
                 block.find("android.intent.action.MAIN") != std::string::npos &&
-                (block.find("android.intent.category.LAUNCHER") != std::string::npos ||
-                 block.find("android.intent.category.HOME") != std::string::npos ||
+                (block.find("android.intent.category.LAUNCHER") !=
+                     std::string::npos ||
+                 block.find("android.intent.category.HOME") !=
+                     std::string::npos ||
                  block.find("android.intent.category.SECONDARY_HOME") !=
                      std::string::npos);
             candidates.push_back(std::move(candidate));
@@ -622,7 +632,7 @@ infer_plain_manifest_launch_activity(const std::string& manifest,
         pos = block_end;
     }
 
-    for (const auto& candidate : candidates) {
+    for (const auto &candidate : candidates) {
         if (candidate.is_launcher)
             return candidate.name;
     }
@@ -631,38 +641,43 @@ infer_plain_manifest_launch_activity(const std::string& manifest,
     return std::nullopt;
 }
 
-std::optional<std::string>
-infer_plain_manifest_widget_provider(const std::string& manifest,
-                                     const std::optional<std::string>& package_name)
+std::optional<std::string> infer_plain_manifest_widget_provider(
+    const std::string &manifest,
+    const std::optional<std::string> &package_name)
 {
     size_t pos = 0;
     while (true) {
         size_t start = manifest.find("<receiver", pos);
-        if (start == std::string::npos) return std::nullopt;
+        if (start == std::string::npos)
+            return std::nullopt;
         size_t open_end = manifest.find('>', start);
-        if (open_end == std::string::npos) return std::nullopt;
+        if (open_end == std::string::npos)
+            return std::nullopt;
         size_t end = manifest.find("</receiver>", open_end);
-        if (end == std::string::npos) end = open_end;
+        if (end == std::string::npos)
+            end = open_end;
         std::string tag = manifest.substr(start, open_end - start + 1);
         std::string block = manifest.substr(start, end - start);
         if (block.find("android.appwidget.action.APPWIDGET_UPDATE") !=
-                std::string::npos) {
+            std::string::npos) {
             auto name = tag_attribute(tag, "android:name");
-            if (!name) name = tag_attribute(tag, "name");
-            if (name) return normalize_activity_name(
-                package_name.value_or(std::string()), *name);
+            if (!name)
+                name = tag_attribute(tag, "name");
+            if (name)
+                return normalize_activity_name(
+                    package_name.value_or(std::string()), *name);
         }
         pos = end + 1;
     }
 }
 
-std::optional<std::string>
-infer_binary_manifest_lib(const std::vector<uint8_t>& manifest,
-                          const std::vector<std::string>& available_bases)
+std::optional<std::string> infer_binary_manifest_lib(
+    const std::vector<uint8_t> &manifest,
+    const std::vector<std::string> &available_bases)
 {
     std::vector<std::string> strings = axml_string_pool(manifest);
     bool has_lib_marker = false;
-    for (const std::string& value : strings) {
+    for (const std::string &value : strings) {
         if (value == "android.app.lib_name") {
             has_lib_marker = true;
             break;
@@ -671,7 +686,7 @@ infer_binary_manifest_lib(const std::vector<uint8_t>& manifest,
     if (!has_lib_marker)
         return std::nullopt;
 
-    for (const std::string& base : available_bases) {
+    for (const std::string &base : available_bases) {
         if (std::find(strings.begin(), strings.end(), base) != strings.end())
             return base;
     }
@@ -680,8 +695,8 @@ infer_binary_manifest_lib(const std::vector<uint8_t>& manifest,
     return std::nullopt;
 }
 
-std::optional<std::string>
-infer_binary_manifest_package(const std::vector<uint8_t>& manifest)
+std::optional<std::string> infer_binary_manifest_package(
+    const std::vector<uint8_t> &manifest)
 {
     constexpr uint16_t RES_XML_START_ELEMENT_TYPE = 0x0102;
     constexpr uint32_t NO_INDEX = 0xffffffffu;
@@ -704,7 +719,8 @@ infer_binary_manifest_package(const std::vector<uint8_t>& manifest)
 
         if (type == RES_XML_START_ELEMENT_TYPE && off + 36 <= manifest.size()) {
             uint32_t elem_name_idx = read_u32(manifest, off + 20);
-            if (elem_name_idx < strings.size() && strings[elem_name_idx] == "manifest") {
+            if (elem_name_idx < strings.size() &&
+                strings[elem_name_idx] == "manifest") {
                 uint16_t attr_start = read_u16(manifest, off + 24);
                 uint16_t attr_size = read_u16(manifest, off + 26);
                 uint16_t attr_count = read_u16(manifest, off + 28);
@@ -714,7 +730,8 @@ infer_binary_manifest_package(const std::vector<uint8_t>& manifest)
                     if (a + 20 > off + chunk_size)
                         break;
                     uint32_t name_idx = read_u32(manifest, a + 4);
-                    if (name_idx >= strings.size() || strings[name_idx] != "package")
+                    if (name_idx >= strings.size() ||
+                        strings[name_idx] != "package")
                         continue;
 
                     uint32_t raw_idx = read_u32(manifest, a + 8);
@@ -735,9 +752,9 @@ infer_binary_manifest_package(const std::vector<uint8_t>& manifest)
 }
 
 std::optional<std::string> infer_binary_manifest_string_attribute(
-    const std::vector<uint8_t>& manifest,
-    const std::string& element,
-    const std::string& attribute)
+    const std::vector<uint8_t> &manifest,
+    const std::string &element,
+    const std::string &attribute)
 {
     constexpr uint16_t RES_XML_START_ELEMENT_TYPE = 0x0102;
     constexpr uint32_t NO_INDEX = 0xffffffffu;
@@ -747,8 +764,8 @@ std::optional<std::string> infer_binary_manifest_string_attribute(
     if (strings.empty())
         return std::nullopt;
 
-    size_t off = manifest.size() >= 8 && read_u16(manifest, 0) == 0x0003
-        ? 8 : 0;
+    size_t off =
+        manifest.size() >= 8 && read_u16(manifest, 0) == 0x0003 ? 8 : 0;
     while (off + 8 <= manifest.size()) {
         uint16_t type = read_u16(manifest, off);
         uint16_t header_size = read_u16(manifest, off + 2);
@@ -758,7 +775,8 @@ std::optional<std::string> infer_binary_manifest_string_attribute(
 
         if (type == RES_XML_START_ELEMENT_TYPE && off + 36 <= manifest.size()) {
             uint32_t element_idx = read_u32(manifest, off + 20);
-            if (element_idx < strings.size() && strings[element_idx] == element) {
+            if (element_idx < strings.size() &&
+                strings[element_idx] == element) {
                 uint16_t attr_start = read_u16(manifest, off + 24);
                 uint16_t attr_size = read_u16(manifest, off + 26);
                 uint16_t attr_count = read_u16(manifest, off + 28);
@@ -787,17 +805,17 @@ std::optional<std::string> infer_binary_manifest_string_attribute(
 }
 
 std::optional<uint32_t> infer_binary_manifest_resource_attribute(
-    const std::vector<uint8_t>& manifest,
-    const std::string& element,
-    const std::string& attribute)
+    const std::vector<uint8_t> &manifest,
+    const std::string &element,
+    const std::string &attribute)
 {
     constexpr uint16_t RES_XML_START_ELEMENT_TYPE = 0x0102;
     constexpr uint8_t TYPE_REFERENCE = 0x01;
     constexpr uint8_t TYPE_DYNAMIC_REFERENCE = 0x07;
 
     std::vector<std::string> strings = axml_string_pool(manifest);
-    size_t off = manifest.size() >= 8 && read_u16(manifest, 0) == 0x0003
-        ? 8 : 0;
+    size_t off =
+        manifest.size() >= 8 && read_u16(manifest, 0) == 0x0003 ? 8 : 0;
     while (!strings.empty() && off + 8 <= manifest.size()) {
         uint16_t type = read_u16(manifest, off);
         uint16_t header_size = read_u16(manifest, off + 2);
@@ -806,7 +824,8 @@ std::optional<uint32_t> infer_binary_manifest_resource_attribute(
             break;
         if (type == RES_XML_START_ELEMENT_TYPE && off + 36 <= manifest.size()) {
             uint32_t element_idx = read_u32(manifest, off + 20);
-            if (element_idx < strings.size() && strings[element_idx] == element) {
+            if (element_idx < strings.size() &&
+                strings[element_idx] == element) {
                 uint16_t attr_start = read_u16(manifest, off + 24);
                 uint16_t attr_size = read_u16(manifest, off + 26);
                 uint16_t attr_count = read_u16(manifest, off + 28);
@@ -833,8 +852,8 @@ std::optional<uint32_t> infer_binary_manifest_resource_attribute(
 }
 
 std::optional<std::string> infer_binary_manifest_launch_activity(
-    const std::vector<uint8_t>& manifest,
-    const std::optional<std::string>& package_name)
+    const std::vector<uint8_t> &manifest,
+    const std::optional<std::string> &package_name)
 {
     constexpr uint16_t RES_XML_START_ELEMENT_TYPE = 0x0102;
     constexpr uint16_t RES_XML_END_ELEMENT_TYPE = 0x0103;
@@ -845,9 +864,9 @@ std::optional<std::string> infer_binary_manifest_launch_activity(
     if (strings.empty())
         return std::nullopt;
 
-    auto attribute_value = [&](size_t element_off,
-                               const std::string& wanted)
-        -> std::optional<std::string> {
+    auto attribute_value =
+        [&](size_t element_off,
+            const std::string &wanted) -> std::optional<std::string> {
         uint32_t chunk_size = read_u32(manifest, element_off + 4);
         uint16_t attr_start = read_u16(manifest, element_off + 24);
         uint16_t attr_size = read_u16(manifest, element_off + 26);
@@ -876,8 +895,8 @@ std::optional<std::string> infer_binary_manifest_launch_activity(
     std::optional<std::string> current_activity;
     bool has_main_action = false;
     bool has_launcher_category = false;
-    size_t off = manifest.size() >= 8 && read_u16(manifest, 0) == 0x0003
-        ? 8 : 0;
+    size_t off =
+        manifest.size() >= 8 && read_u16(manifest, 0) == 0x0003 ? 8 : 0;
     while (off + 8 <= manifest.size()) {
         uint16_t type = read_u16(manifest, off);
         uint16_t header_size = read_u16(manifest, off + 2);
@@ -887,8 +906,8 @@ std::optional<std::string> infer_binary_manifest_launch_activity(
 
         if (type == RES_XML_START_ELEMENT_TYPE && off + 36 <= manifest.size()) {
             uint32_t name_idx = read_u32(manifest, off + 20);
-            std::string element = name_idx < strings.size()
-                ? strings[name_idx] : std::string();
+            std::string element =
+                name_idx < strings.size() ? strings[name_idx] : std::string();
             if (element == "activity") {
                 auto name = attribute_value(off, "name");
                 if (name) {
@@ -900,18 +919,20 @@ std::optional<std::string> infer_binary_manifest_launch_activity(
                     has_launcher_category = false;
                 }
             } else if (current_activity && element == "action") {
-                has_main_action = has_main_action ||
-                    attribute_value(off, "name") ==
-                        std::optional<std::string>("android.intent.action.MAIN");
+                has_main_action =
+                    has_main_action || attribute_value(off, "name") ==
+                                           std::optional<std::string>(
+                                               "android.intent.action.MAIN");
             } else if (current_activity && element == "category") {
                 auto category = attribute_value(off, "name");
-                has_launcher_category = has_launcher_category ||
+                has_launcher_category =
+                    has_launcher_category ||
                     category == std::optional<std::string>(
-                        "android.intent.category.LAUNCHER") ||
+                                    "android.intent.category.LAUNCHER") ||
                     category == std::optional<std::string>(
-                        "android.intent.category.HOME") ||
+                                    "android.intent.category.HOME") ||
                     category == std::optional<std::string>(
-                        "android.intent.category.SECONDARY_HOME");
+                                    "android.intent.category.SECONDARY_HOME");
             }
         } else if (type == RES_XML_END_ELEMENT_TYPE &&
                    off + 24 <= manifest.size()) {
@@ -929,17 +950,19 @@ std::optional<std::string> infer_binary_manifest_launch_activity(
 }
 
 std::optional<std::string> infer_binary_manifest_widget_provider(
-    const std::vector<uint8_t>& manifest,
-    const std::optional<std::string>& package_name)
+    const std::vector<uint8_t> &manifest,
+    const std::optional<std::string> &package_name)
 {
     constexpr uint16_t START = 0x0102;
     constexpr uint16_t END = 0x0103;
     constexpr uint32_t NO_INDEX = 0xffffffffu;
     constexpr uint8_t TYPE_STRING = 0x03;
     std::vector<std::string> strings = axml_string_pool(manifest);
-    if (strings.empty()) return std::nullopt;
-    auto attribute = [&](size_t off, const std::string& wanted)
-        -> std::optional<std::string> {
+    if (strings.empty())
+        return std::nullopt;
+    auto attribute =
+        [&](size_t off,
+            const std::string &wanted) -> std::optional<std::string> {
         uint32_t chunk_size = read_u32(manifest, off + 4);
         uint16_t attr_start = read_u16(manifest, off + 24);
         uint16_t attr_size = read_u16(manifest, off + 26);
@@ -947,40 +970,51 @@ std::optional<std::string> infer_binary_manifest_widget_provider(
         size_t attrs = off + 16u + attr_start;
         for (uint16_t i = 0; i < attr_count; ++i) {
             size_t item = attrs + static_cast<size_t>(i) * attr_size;
-            if (item + 20 > off + chunk_size) break;
+            if (item + 20 > off + chunk_size)
+                break;
             uint32_t name = read_u32(manifest, item + 4);
-            if (name >= strings.size() || strings[name] != wanted) continue;
+            if (name >= strings.size() || strings[name] != wanted)
+                continue;
             uint32_t raw = read_u32(manifest, item + 8);
-            if (raw != NO_INDEX && raw < strings.size()) return strings[raw];
+            if (raw != NO_INDEX && raw < strings.size())
+                return strings[raw];
             if (manifest[item + 15] == TYPE_STRING) {
                 uint32_t value = read_u32(manifest, item + 16);
-                if (value < strings.size()) return strings[value];
+                if (value < strings.size())
+                    return strings[value];
             }
         }
         return std::nullopt;
     };
     std::optional<std::string> receiver;
-    size_t off = manifest.size() >= 8 && read_u16(manifest, 0) == 0x0003 ? 8 : 0;
+    size_t off =
+        manifest.size() >= 8 && read_u16(manifest, 0) == 0x0003 ? 8 : 0;
     while (off + 8 <= manifest.size()) {
         uint16_t type = read_u16(manifest, off);
         uint16_t header_size = read_u16(manifest, off + 2);
         uint32_t chunk_size = read_u32(manifest, off + 4);
-        if (chunk_size < header_size || off + chunk_size > manifest.size()) break;
+        if (chunk_size < header_size || off + chunk_size > manifest.size())
+            break;
         if (type == START && off + 36 <= manifest.size()) {
             uint32_t name = read_u32(manifest, off + 20);
-            std::string element = name < strings.size() ? strings[name] : std::string();
+            std::string element =
+                name < strings.size() ? strings[name] : std::string();
             if (element == "receiver") {
                 auto value = attribute(off, "name");
-                receiver = value ? std::optional<std::string>(normalize_activity_name(
-                    package_name.value_or(std::string()), *value)) : std::nullopt;
+                receiver =
+                    value ? std::optional<std::string>(normalize_activity_name(
+                                package_name.value_or(std::string()), *value))
+                          : std::nullopt;
             } else if (receiver && element == "action" &&
-                    attribute(off, "name") == std::optional<std::string>(
-                        "android.appwidget.action.APPWIDGET_UPDATE")) {
+                       attribute(off, "name") ==
+                           std::optional<std::string>(
+                               "android.appwidget.action.APPWIDGET_UPDATE")) {
                 return receiver;
             }
         } else if (type == END && off + 24 <= manifest.size()) {
             uint32_t name = read_u32(manifest, off + 20);
-            if (receiver && name < strings.size() && strings[name] == "receiver")
+            if (receiver && name < strings.size() &&
+                strings[name] == "receiver")
                 receiver.reset();
         }
         off += chunk_size;
@@ -1000,13 +1034,15 @@ struct ManifestInfo {
     std::optional<std::string> widget_provider;
 };
 
-ManifestInfo infer_manifest_info(const std::vector<uint8_t>& manifest,
-                                 const std::vector<std::string>& available_bases)
+ManifestInfo infer_manifest_info(
+    const std::vector<uint8_t> &manifest,
+    const std::vector<std::string> &available_bases)
 {
-    auto first_nonspace = std::find_if(manifest.begin(), manifest.end(),
+    auto first_nonspace = std::find_if(
+        manifest.begin(), manifest.end(),
         [](uint8_t c) { return !std::isspace(static_cast<unsigned char>(c)); });
     if (first_nonspace != manifest.end() && *first_nonspace == '<') {
-        std::string text(reinterpret_cast<const char*>(manifest.data()),
+        std::string text(reinterpret_cast<const char *>(manifest.data()),
                          manifest.size());
         auto package_name = infer_plain_manifest_package(text);
         auto application_label =
@@ -1027,50 +1063,52 @@ ManifestInfo infer_manifest_info(const std::vector<uint8_t>& manifest,
         if (application_class)
             application_class = normalize_activity_name(
                 package_name.value_or(std::string()), *application_class);
-        return {
-            infer_plain_manifest_lib(text, available_bases),
-            package_name,
-            application_label,
-            std::nullopt,
-            application_icon,
-            std::nullopt,
-            application_class,
-            infer_plain_manifest_launch_activity(text, package_name),
-            infer_plain_manifest_widget_provider(text, package_name)
-        };
+        return {infer_plain_manifest_lib(text, available_bases),
+                package_name,
+                application_label,
+                std::nullopt,
+                application_icon,
+                std::nullopt,
+                application_class,
+                infer_plain_manifest_launch_activity(text, package_name),
+                infer_plain_manifest_widget_provider(text, package_name)};
     }
     auto package_name = infer_binary_manifest_package(manifest);
     return {
         infer_binary_manifest_lib(manifest, available_bases),
         package_name,
-        infer_binary_manifest_string_attribute(manifest, "application", "label"),
-        infer_binary_manifest_resource_attribute(manifest, "application", "label"),
+        infer_binary_manifest_string_attribute(manifest, "application",
+                                               "label"),
+        infer_binary_manifest_resource_attribute(manifest, "application",
+                                                 "label"),
         infer_binary_manifest_string_attribute(manifest, "application", "icon"),
-        infer_binary_manifest_resource_attribute(manifest, "application", "icon"),
+        infer_binary_manifest_resource_attribute(manifest, "application",
+                                                 "icon"),
         [&]() -> std::optional<std::string> {
             auto value = infer_binary_manifest_string_attribute(
                 manifest, "application", "name");
-            if (!value) return std::nullopt;
-            return normalize_activity_name(
-                package_name.value_or(std::string()), *value);
+            if (!value)
+                return std::nullopt;
+            return normalize_activity_name(package_name.value_or(std::string()),
+                                           *value);
         }(),
         infer_binary_manifest_launch_activity(manifest, package_name),
-        infer_binary_manifest_widget_provider(manifest, package_name)
-    };
+        infer_binary_manifest_widget_provider(manifest, package_name)};
 }
 
-std::string join_libs(const std::vector<std::string>& libs)
+std::string join_libs(const std::vector<std::string> &libs)
 {
     std::string out;
     for (size_t i = 0; i < libs.size(); ++i) {
-        if (i) out += ", ";
+        if (i)
+            out += ", ";
         out += filename_from_zip_path(libs[i]);
     }
     return out;
 }
 
-ApkRuntimeKind runtime_kind_for(const std::vector<std::string>& arm64_libs,
-                                const std::vector<std::string>& dex_files)
+ApkRuntimeKind runtime_kind_for(const std::vector<std::string> &arm64_libs,
+                                const std::vector<std::string> &dex_files)
 {
     if (!arm64_libs.empty() && !dex_files.empty())
         return ApkRuntimeKind::Mixed;
@@ -1081,16 +1119,16 @@ ApkRuntimeKind runtime_kind_for(const std::vector<std::string>& arm64_libs,
     return ApkRuntimeKind::Empty;
 }
 
-ApkClassification classify_entries(const std::filesystem::path& apk_path,
-                                   const std::vector<uint8_t>& apk,
-                                   const std::vector<ZipEntry>& entries)
+ApkClassification classify_entries(const std::filesystem::path &apk_path,
+                                   const std::vector<uint8_t> &apk,
+                                   const std::vector<ZipEntry> &entries)
 {
     ApkClassification classification;
     classification.apk_path = apk_path;
 
-    const ZipEntry* manifest_entry = nullptr;
-    const ZipEntry* resources_entry = nullptr;
-    for (const ZipEntry& entry : entries) {
+    const ZipEntry *manifest_entry = nullptr;
+    const ZipEntry *resources_entry = nullptr;
+    for (const ZipEntry &entry : entries) {
         if (entry.name == "AndroidManifest.xml") {
             manifest_entry = &entry;
             classification.has_manifest = true;
@@ -1102,19 +1140,20 @@ ApkClassification classify_entries(const std::filesystem::path& apk_path,
         } else if (is_root_dex(entry.name)) {
             classification.dex_files.push_back(entry.name);
         } else if (starts_with(entry.name, "assets/") &&
-                   !ends_with(entry.name, "/") &&
-                   safe_zip_path(entry.name)) {
+                   !ends_with(entry.name, "/") && safe_zip_path(entry.name)) {
             classification.asset_entries.push_back(entry.name);
         }
     }
 
     std::vector<std::string> available_bases;
-    for (const std::string& lib : classification.arm64_libs)
+    for (const std::string &lib : classification.arm64_libs)
         available_bases.push_back(lib_base_name(lib));
 
     if (manifest_entry) {
-        std::vector<uint8_t> manifest = extract_entry_data(apk, *manifest_entry);
-        ManifestInfo manifest_info = infer_manifest_info(manifest, available_bases);
+        std::vector<uint8_t> manifest =
+            extract_entry_data(apk, *manifest_entry);
+        ManifestInfo manifest_info =
+            infer_manifest_info(manifest, available_bases);
         classification.manifest_lib = manifest_info.lib_name;
         classification.manifest_package = manifest_info.package_name;
         classification.manifest_application_label =
@@ -1125,7 +1164,8 @@ ApkClassification classify_entries(const std::filesystem::path& apk_path,
                 extract_entry_data(apk, *resources_entry),
                 *manifest_info.application_label_resource);
         }
-        classification.manifest_application_icon = manifest_info.application_icon;
+        classification.manifest_application_icon =
+            manifest_info.application_icon;
         if ((!classification.manifest_application_icon ||
              classification.manifest_application_icon->front() == '@') &&
             manifest_info.application_icon_resource && resources_entry) {
@@ -1135,10 +1175,8 @@ ApkClassification classify_entries(const std::filesystem::path& apk_path,
         }
         classification.manifest_application_class =
             manifest_info.application_class;
-        classification.manifest_launch_activity =
-            manifest_info.launch_activity;
-        classification.manifest_widget_provider =
-            manifest_info.widget_provider;
+        classification.manifest_launch_activity = manifest_info.launch_activity;
+        classification.manifest_widget_provider = manifest_info.widget_provider;
     }
 
     std::sort(classification.arm64_libs.begin(),
@@ -1151,7 +1189,7 @@ ApkClassification classify_entries(const std::filesystem::path& apk_path,
     return classification;
 }
 
-} // namespace
+}  // namespace
 
 std::string to_string(ApkRuntimeKind kind)
 {
@@ -1168,7 +1206,7 @@ std::string to_string(ApkRuntimeKind kind)
     return "empty";
 }
 
-ApkClassification classify_apk(const std::filesystem::path& apk_path)
+ApkClassification classify_apk(const std::filesystem::path &apk_path)
 {
     if (apk_path.empty())
         throw std::runtime_error("APK path is empty");
@@ -1178,16 +1216,17 @@ ApkClassification classify_apk(const std::filesystem::path& apk_path)
     return classify_entries(apk_path, apk, entries);
 }
 
-bool extract_apk_entry(const std::filesystem::path& apk_path,
-                       const std::string& entry_path,
-                       const std::filesystem::path& output_path)
+bool extract_apk_entry(const std::filesystem::path &apk_path,
+                       const std::string &entry_path,
+                       const std::filesystem::path &output_path)
 {
     if (!safe_zip_path(entry_path))
         return false;
     std::vector<uint8_t> apk = read_file(apk_path);
     std::vector<ZipEntry> entries = read_zip_entries(apk);
-    auto found = std::find_if(entries.begin(), entries.end(),
-        [&](const ZipEntry& entry) { return entry.name == entry_path; });
+    auto found = std::find_if(
+        entries.begin(), entries.end(),
+        [&](const ZipEntry &entry) { return entry.name == entry_path; });
     if (found == entries.end())
         return false;
     std::vector<uint8_t> data = extract_entry_data(apk, *found);
@@ -1199,11 +1238,11 @@ bool extract_apk_entry(const std::filesystem::path& apk_path,
     if (!out)
         return false;
     if (!data.empty())
-        out.write(reinterpret_cast<const char*>(data.data()), data.size());
+        out.write(reinterpret_cast<const char *>(data.data()), data.size());
     return static_cast<bool>(out);
 }
 
-ApkLaunchResult prepare_apk_launch(const ApkLaunchConfig& config)
+ApkLaunchResult prepare_apk_launch(const ApkLaunchConfig &config)
 {
     if (config.apk_path.empty())
         throw std::runtime_error("APK path is empty");
@@ -1216,13 +1255,12 @@ ApkLaunchResult prepare_apk_launch(const ApkLaunchConfig& config)
 
     std::vector<ZipEntry> arm64_libs;
     std::vector<ZipEntry> asset_entries;
-    for (const ZipEntry& entry : entries) {
+    for (const ZipEntry &entry : entries) {
         if (starts_with(entry.name, "lib/arm64-v8a/") &&
-                   ends_with(entry.name, ".so")) {
+            ends_with(entry.name, ".so")) {
             arm64_libs.push_back(entry);
         } else if (starts_with(entry.name, "assets/") &&
-                   !ends_with(entry.name, "/") &&
-                   safe_zip_path(entry.name)) {
+                   !ends_with(entry.name, "/") && safe_zip_path(entry.name)) {
             asset_entries.push_back(entry);
         }
     }
@@ -1238,7 +1276,7 @@ ApkLaunchResult prepare_apk_launch(const ApkLaunchConfig& config)
         throw std::runtime_error("APK has no lib/arm64-v8a/*.so entries");
 
     std::vector<std::string> available_bases;
-    for (const ZipEntry& lib : arm64_libs)
+    for (const ZipEntry &lib : arm64_libs)
         available_bases.push_back(lib_base_name(lib.name));
 
     std::optional<std::string> manifest_lib = classification.manifest_lib;
@@ -1255,21 +1293,22 @@ ApkLaunchResult prepare_apk_launch(const ApkLaunchConfig& config)
     std::optional<std::string> manifest_widget_provider =
         classification.manifest_widget_provider;
 
-    const ZipEntry* selected = nullptr;
+    const ZipEntry *selected = nullptr;
     if (config.lib_name) {
-        for (const ZipEntry& lib : arm64_libs) {
+        for (const ZipEntry &lib : arm64_libs) {
             if (lib_name_matches(lib.name, *config.lib_name)) {
                 selected = &lib;
                 break;
             }
         }
         if (!selected) {
-            throw std::runtime_error("APK does not contain requested arm64 lib '" +
-                                     *config.lib_name + "'; available: " +
-                                     join_libs(available_bases));
+            throw std::runtime_error(
+                "APK does not contain requested arm64 lib '" +
+                *config.lib_name +
+                "'; available: " + join_libs(available_bases));
         }
     } else if (manifest_lib) {
-        for (const ZipEntry& lib : arm64_libs) {
+        for (const ZipEntry &lib : arm64_libs) {
             if (lib_name_matches(lib.name, *manifest_lib)) {
                 selected = &lib;
                 break;
@@ -1278,7 +1317,7 @@ ApkLaunchResult prepare_apk_launch(const ApkLaunchConfig& config)
     } else if (arm64_libs.size() == 1) {
         selected = &arm64_libs.front();
     } else {
-        for (const ZipEntry& lib : arm64_libs) {
+        for (const ZipEntry &lib : arm64_libs) {
             if (lib_name_matches(lib.name, "main")) {
                 selected = &lib;
                 break;
@@ -1288,13 +1327,16 @@ ApkLaunchResult prepare_apk_launch(const ApkLaunchConfig& config)
 
     if (!selected) {
         throw std::runtime_error(
-            "APK has multiple arm64 native libraries and no clear NativeActivity "
-            "lib_name; use --apk-lib. Available: " + join_libs(available_bases));
+            "APK has multiple arm64 native libraries and no clear "
+            "NativeActivity "
+            "lib_name; use --apk-lib. Available: " +
+            join_libs(available_bases));
     }
 
-    std::filesystem::path extract_dir = config.output_dir.empty()
-        ? default_extract_dir(config.apk_path, config.output_base_dir)
-        : config.output_dir;
+    std::filesystem::path extract_dir =
+        config.output_dir.empty()
+            ? default_extract_dir(config.apk_path, config.output_base_dir)
+            : config.output_dir;
     std::filesystem::path lib_dir = extract_dir / "lib" / "arm64-v8a";
     std::filesystem::path assets_dir = extract_dir / "assets";
     std::filesystem::create_directories(lib_dir);
@@ -1314,7 +1356,7 @@ ApkLaunchResult prepare_apk_launch(const ApkLaunchConfig& config)
     result.manifest_launch_activity = manifest_launch_activity;
     result.manifest_widget_provider = manifest_widget_provider;
 
-    for (const ZipEntry& lib : arm64_libs) {
+    for (const ZipEntry &lib : arm64_libs) {
         std::vector<uint8_t> bytes = extract_entry_data(apk, lib);
         std::string filename = filename_from_zip_path(lib.name);
         std::filesystem::path out_path = lib_dir / filename;
@@ -1323,13 +1365,14 @@ ApkLaunchResult prepare_apk_launch(const ApkLaunchConfig& config)
             throw std::runtime_error("unable to write extracted lib: " +
                                      out_path.string());
         if (!bytes.empty())
-            out.write(reinterpret_cast<const char*>(bytes.data()), bytes.size());
+            out.write(reinterpret_cast<const char *>(bytes.data()),
+                      bytes.size());
         result.extracted_libs.push_back(out_path.string());
         if (lib.name == selected->name)
             result.so_path = out_path;
     }
 
-    for (const ZipEntry& asset : asset_entries) {
+    for (const ZipEntry &asset : asset_entries) {
         std::vector<uint8_t> bytes = extract_entry_data(apk, asset);
         std::filesystem::path out_path = extract_dir / asset.name;
         std::filesystem::create_directories(out_path.parent_path());
@@ -1339,13 +1382,15 @@ ApkLaunchResult prepare_apk_launch(const ApkLaunchConfig& config)
             throw std::runtime_error("unable to write extracted asset: " +
                                      out_path.string());
         if (!bytes.empty())
-            out.write(reinterpret_cast<const char*>(bytes.data()), bytes.size());
+            out.write(reinterpret_cast<const char *>(bytes.data()),
+                      bytes.size());
         result.extracted_assets.push_back(out_path.string());
     }
 
     if (result.so_path.empty())
-        throw std::runtime_error("internal APK extraction error: selected lib missing");
+        throw std::runtime_error(
+            "internal APK extraction error: selected lib missing");
     return result;
 }
 
-} // namespace muplar::runtime::apk
+}  // namespace muplar::runtime::apk

@@ -4,11 +4,13 @@
 
 #include "mapped_elf_image.h"
 
-namespace muplar::runtime::elf {
+namespace muplar::runtime::elf
+{
 
-    class ExecutionContext {
-        public:
-            int execute(const MappedElfImage& image);
-    };
+class ExecutionContext
+{
+public:
+    int execute(const MappedElfImage &image);
+};
 
-}
+}  // namespace muplar::runtime::elf

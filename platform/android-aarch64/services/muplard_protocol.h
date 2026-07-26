@@ -2,9 +2,10 @@
 
 #include <cstdint>
 
-namespace muplar::services {
+namespace muplar::services
+{
 
-constexpr uint32_t kProtocolMagic = 0x4d555044; // MUPD
+constexpr uint32_t kProtocolMagic = 0x4d555044;  // MUPD
 constexpr uint16_t kProtocolVersion = 1;
 constexpr uint16_t kReplyFlag = 0x8000;
 constexpr uint32_t kMaxPayloadSize = 1024 * 1024;
@@ -44,4 +45,4 @@ struct MessageHeader {
 
 static_assert(sizeof(MessageHeader) == 24, "muplard protocol header changed");
 
-} // namespace muplar::services
+}  // namespace muplar::services

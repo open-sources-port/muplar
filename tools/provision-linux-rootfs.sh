@@ -12,7 +12,7 @@ else
     CACHE_DIR="$BUILD_DIR/linux-rootfs-cache"
 fi
 if [[ -n "${MUP:-}" ]]; then
-    MUP="$MUP"
+    :
 elif [[ -x "$BUILD_DIR/bin/mup" ]]; then
     MUP="$BUILD_DIR/bin/mup"
 elif [[ -x "$SCRIPT_DIR/../../MacOS/mup" ]]; then
@@ -252,7 +252,8 @@ EOF
         local applet
         for applet in "$real_dir"/*; do
             [[ -f "$applet" ]] || continue
-            local name=$(basename "$applet")
+            local name
+            name=$(basename "$applet")
             [[ "$name" != "wrapper.sh" ]] || continue
             ln -sf "wrapper.sh" "$cargo_dir/$name"
         done
@@ -396,6 +397,7 @@ ensure_arch_profile_config() {
     # Muplar command launches do not currently expose a Linux ttyname. Arch's
     # gpm profile hook probes tty on every login shell, so silence only that
     # probe while preserving its behavior on real /dev/ttyN consoles.
+    # shellcheck disable=SC2016
     sed -i.bak \
         -e 's|case $( /usr/bin/tty ) in|case $( /usr/bin/tty 2>/dev/null ) in|' \
         "$gpm"
@@ -1130,7 +1132,7 @@ if [[ "$FROM_TAR" == *.oci.tar.xz ]]; then
     OCI_TMP_DIR="$(mktemp -d)"
     "$TAR_BIN" -xf "$FROM_TAR" -C "$OCI_TMP_DIR"
     # Find the largest file in blobs/sha256/
-    rootfs_layer="$(find "$OCI_TMP_DIR" -type f | xargs ls -S | head -n 1)"
+    rootfs_layer="$(find "$OCI_TMP_DIR" -type f -print0 | xargs -0 ls -S | head -n 1)"
     TARBALL_TO_EXTRACT="$rootfs_layer"
 fi
 

@@ -21,8 +21,8 @@
 
 /**
  * @file binder_interface_utils.h
- * @brief This provides common C++ classes for common operations and as base classes for C++
- * interfaces.
+ * @brief This provides common C++ classes for common operations and as base
+ * classes for C++ interfaces.
  */
 
 #pragma once
@@ -31,7 +31,8 @@
 #include <android/binder_ibinder.h>
 
 #if defined(__BIONIC__)
-#define API_LEVEL_AT_LEAST(sdk_api_level) __builtin_available(android sdk_api_level, *)
+#define API_LEVEL_AT_LEAST(sdk_api_level) \
+    __builtin_available(android sdk_api_level, *)
 #elif defined(TRUSTY_USERSPACE)
 // TODO(b/349936395): set to true for Trusty
 #define API_LEVEL_AT_LEAST(sdk_api_level) (false)
@@ -52,15 +53,18 @@
 #endif
 #include <utility>
 
-namespace ndk {
-namespace internal {
+namespace ndk
+{
+namespace internal
+{
 
 #if !defined(_LIBCPP_HAS_THREADS) || _LIBCPP_HAS_THREADS
 using OnceFlag = std::once_flag;
 using Mutex = std::mutex;
 
 template <typename Func>
-inline void call_once(OnceFlag& flag, Func&& func) {
+inline void call_once(OnceFlag &flag, Func &&func)
+{
     std::call_once(flag, std::forward<Func>(func));
 }
 
@@ -77,7 +81,8 @@ struct Mutex {
 };
 
 template <typename Func>
-inline void call_once(OnceFlag& flag, Func&& func) {
+inline void call_once(OnceFlag &flag, Func &&func)
+{
     if (!flag.called) {
         flag.called = true;
         std::forward<Func>(func)();
@@ -85,16 +90,17 @@ inline void call_once(OnceFlag& flag, Func&& func) {
 }
 
 template <typename MutexType>
-class LockGuard {
-   public:
-    explicit LockGuard(MutexType& mutex) : mMutex(mutex) { mMutex.lock(); }
+class LockGuard
+{
+public:
+    explicit LockGuard(MutexType &mutex) : mMutex(mutex) { mMutex.lock(); }
     ~LockGuard() { mMutex.unlock(); }
 
-    LockGuard(const LockGuard&) = delete;
-    LockGuard& operator=(const LockGuard&) = delete;
+    LockGuard(const LockGuard &) = delete;
+    LockGuard &operator=(const LockGuard &) = delete;
 
-   private:
-    MutexType& mMutex;
+private:
+    MutexType &mMutex;
 };
 #endif
 
@@ -103,44 +109,53 @@ class LockGuard {
 /**
  * Binder analog to using std::shared_ptr for an internally held refcount.
  *
- * ref must be called at least one time during the lifetime of this object. The recommended way to
- * construct this object is with SharedRefBase::make.
+ * ref must be called at least one time during the lifetime of this object. The
+ * recommended way to construct this object is with SharedRefBase::make.
  *
- * If you need a "this" shared reference analogous to shared_from_this, use this->ref().
+ * If you need a "this" shared reference analogous to shared_from_this, use
+ * this->ref().
  */
-class SharedRefBase {
-   public:
+class SharedRefBase
+{
+public:
     SharedRefBase() {}
-    virtual ~SharedRefBase() {
+    virtual ~SharedRefBase()
+    {
         internal::call_once(mFlagThis, [&]() {
-            __assert(__FILE__, __LINE__, "SharedRefBase: no ref created during lifetime");
+            __assert(__FILE__, __LINE__,
+                     "SharedRefBase: no ref created during lifetime");
         });
 
         if (ref() != nullptr) {
             __assert(__FILE__, __LINE__,
-                     "SharedRefBase: destructed but still able to lock weak_ptr. Is this object "
+                     "SharedRefBase: destructed but still able to lock "
+                     "weak_ptr. Is this object "
                      "double-owned?");
         }
     }
 
     /**
-     * A shared_ptr must be held to this object when this is called. This must be called once during
-     * the lifetime of this object.
+     * A shared_ptr must be held to this object when this is called. This must
+     * be called once during the lifetime of this object.
      */
-    std::shared_ptr<SharedRefBase> ref() {
+    std::shared_ptr<SharedRefBase> ref()
+    {
         std::shared_ptr<SharedRefBase> thiz = mThis.lock();
 
-        internal::call_once(mFlagThis,
-                            [&]() { mThis = thiz = std::shared_ptr<SharedRefBase>(this); });
+        internal::call_once(mFlagThis, [&]() {
+            mThis = thiz = std::shared_ptr<SharedRefBase>(this);
+        });
 
         return thiz;
     }
 
     /**
-     * Convenience method for a ref (see above) which automatically casts to the desired child type.
+     * Convenience method for a ref (see above) which automatically casts to the
+     * desired child type.
      */
     template <typename CHILD>
-    std::shared_ptr<CHILD> ref() {
+    std::shared_ptr<CHILD> ref()
+    {
         return std::static_pointer_cast<CHILD>(ref());
     }
 
@@ -148,30 +163,33 @@ class SharedRefBase {
      * Convenience method for making an object directly with a reference.
      */
     template <class T, class... Args>
-    static std::shared_ptr<T> make(Args&&... args) {
+    static std::shared_ptr<T> make(Args &&...args)
+    {
 #pragma clang diagnostic push
 #pragma clang diagnostic ignored "-Wdeprecated-declarations"
-        T* t = new T(std::forward<Args>(args)...);
+        T *t = new T(std::forward<Args>(args)...);
 #pragma clang diagnostic pop
-        // warning: Potential leak of memory pointed to by 't' [clang-analyzer-unix.Malloc]
+        // warning: Potential leak of memory pointed to by 't'
+        // [clang-analyzer-unix.Malloc]
         return t->template ref<T>();  // NOLINT(clang-analyzer-unix.Malloc)
     }
 
-    static void operator delete(void* p) { std::free(p); }
+    static void operator delete(void *p) { std::free(p); }
 
     // Once minSdkVersion is 30, we are guaranteed to be building with the
     // Android 11 AIDL compiler which supports the SharedRefBase::make API.
     //
     // Use 'SharedRefBase::make<T>(...)' to make. SharedRefBase has implicit
     // ownership. Making this operator private to avoid double-ownership.
-#if !defined(__ANDROID_API__) || __ANDROID_API__ >= 30 || defined(__ANDROID_APEX__)
-   private:
+#if !defined(__ANDROID_API__) || __ANDROID_API__ >= 30 || \
+    defined(__ANDROID_APEX__)
+private:
 #else
     [[deprecated("Prefer SharedRefBase::make<T>(...) if possible.")]]
 #endif
-    static void* operator new(size_t s) { return std::malloc(s); }
+    static void *operator new(size_t s) { return std::malloc(s); }
 
-   private:
+private:
     internal::OnceFlag mFlagThis;
     std::weak_ptr<SharedRefBase> mThis;
 };
@@ -179,19 +197,21 @@ class SharedRefBase {
 /**
  * wrapper analog to IInterface
  */
-class ICInterface : public SharedRefBase {
-   public:
+class ICInterface : public SharedRefBase
+{
+public:
     ICInterface() {}
     virtual ~ICInterface() {}
 
     /**
-     * This either returns the single existing implementation or creates a new implementation.
+     * This either returns the single existing implementation or creates a new
+     * implementation.
      */
     virtual SpAIBinder asBinder() = 0;
 
     /**
-     * Returns whether this interface is in a remote process. If it cannot be determined locally,
-     * this will be checked using AIBinder_isRemote.
+     * Returns whether this interface is in a remote process. If it cannot be
+     * determined locally, this will be checked using AIBinder_isRemote.
      */
     virtual bool isRemote() = 0;
 
@@ -200,50 +220,67 @@ class ICInterface : public SharedRefBase {
      *
      * This method is not given ownership of the FD.
      */
-    virtual inline binder_status_t dump(int fd, const char** args, uint32_t numArgs);
+    virtual inline binder_status_t dump(int fd,
+                                        const char **args,
+                                        uint32_t numArgs);
 
 #ifdef HAS_BINDER_SHELL_COMMAND
     /**
      * Process shell commands. By default, does nothing.
      */
-    virtual inline binder_status_t handleShellCommand(int in, int out, int err, const char** argv,
+    virtual inline binder_status_t handleShellCommand(int in,
+                                                      int out,
+                                                      int err,
+                                                      const char **argv,
                                                       uint32_t argc);
 #endif
 
     /**
-     * Interprets this binder as this underlying interface if this has stored an ICInterface in the
-     * binder's user data.
+     * Interprets this binder as this underlying interface if this has stored an
+     * ICInterface in the binder's user data.
      *
-     * This does not do type checking and should only be used when the binder is known to originate
-     * from ICInterface. Most likely, you want to use I*::fromBinder.
+     * This does not do type checking and should only be used when the binder is
+     * known to originate from ICInterface. Most likely, you want to use
+     * I*::fromBinder.
      */
-    static inline std::shared_ptr<ICInterface> asInterface(AIBinder* binder);
+    static inline std::shared_ptr<ICInterface> asInterface(AIBinder *binder);
 
     /**
      * Helper method to create a class
      */
-    static inline AIBinder_Class* defineClass(const char* interfaceDescriptor,
-                                              AIBinder_Class_onTransact onTransact,
-                                              const char** codeToFunction, size_t functionCount);
+    static inline AIBinder_Class *defineClass(
+        const char *interfaceDescriptor,
+        AIBinder_Class_onTransact onTransact,
+        const char **codeToFunction,
+        size_t functionCount);
 
-    static inline AIBinder_Class* defineClass(const char* interfaceDescriptor,
-                                              AIBinder_Class_onTransact onTransact);
+    static inline AIBinder_Class *defineClass(
+        const char *interfaceDescriptor,
+        AIBinder_Class_onTransact onTransact);
 
-   private:
-    class ICInterfaceData {
-       public:
+private:
+    class ICInterfaceData
+    {
+    public:
         std::shared_ptr<ICInterface> interface;
 
-        static inline std::shared_ptr<ICInterface> getInterface(AIBinder* binder);
+        static inline std::shared_ptr<ICInterface> getInterface(
+            AIBinder *binder);
 
-        static inline void* onCreate(void* args);
-        static inline void onDestroy(void* userData);
-        static inline binder_status_t onDump(AIBinder* binder, int fd, const char** args,
+        static inline void *onCreate(void *args);
+        static inline void onDestroy(void *userData);
+        static inline binder_status_t onDump(AIBinder *binder,
+                                             int fd,
+                                             const char **args,
                                              uint32_t numArgs);
 
 #ifdef HAS_BINDER_SHELL_COMMAND
-        static inline binder_status_t handleShellCommand(AIBinder* binder, int in, int out, int err,
-                                                         const char** argv, uint32_t argc);
+        static inline binder_status_t handleShellCommand(AIBinder *binder,
+                                                         int in,
+                                                         int out,
+                                                         int err,
+                                                         const char **argv,
+                                                         uint32_t argc);
 #endif
     };
 };
@@ -252,8 +289,9 @@ class ICInterface : public SharedRefBase {
  * implementation of IInterface for server (n = native)
  */
 template <typename INTERFACE>
-class BnCInterface : public INTERFACE {
-   public:
+class BnCInterface : public INTERFACE
+{
+public:
     BnCInterface() {}
     virtual ~BnCInterface() {}
 
@@ -261,18 +299,20 @@ class BnCInterface : public INTERFACE {
 
     bool isRemote() override final { return false; }
 
-    static std::string makeServiceName(std::string_view instance) {
+    static std::string makeServiceName(std::string_view instance)
+    {
         return INTERFACE::descriptor + ("/" + std::string(instance));
     }
 
-   protected:
+protected:
     /**
-     * This function should only be called by asBinder. Otherwise, there is a possibility of
-     * multiple AIBinder* objects being created for the same instance of an object.
+     * This function should only be called by asBinder. Otherwise, there is a
+     * possibility of multiple AIBinder* objects being created for the same
+     * instance of an object.
      */
     virtual SpAIBinder createBinder() = 0;
 
-   private:
+private:
     internal::Mutex mMutex;  // for asBinder
     ScopedAIBinder_Weak mWeakBinder;
 };
@@ -281,59 +321,72 @@ class BnCInterface : public INTERFACE {
  * implementation of IInterface for client (p = proxy)
  */
 template <typename INTERFACE>
-class BpCInterface : public INTERFACE {
-   public:
-    explicit BpCInterface(const SpAIBinder& binder) : mBinder(binder) {}
+class BpCInterface : public INTERFACE
+{
+public:
+    explicit BpCInterface(const SpAIBinder &binder) : mBinder(binder) {}
     virtual ~BpCInterface() {}
 
     SpAIBinder asBinder() override final;
 
-    const SpAIBinder& asBinderReference() { return mBinder; }
+    const SpAIBinder &asBinderReference() { return mBinder; }
 
     bool isRemote() override final { return AIBinder_isRemote(mBinder.get()); }
 
-    binder_status_t dump(int fd, const char** args, uint32_t numArgs) override {
+    binder_status_t dump(int fd, const char **args, uint32_t numArgs) override
+    {
         return AIBinder_dump(asBinder().get(), fd, args, numArgs);
     }
 
-   private:
+private:
     SpAIBinder mBinder;
 };
 
 // END OF CLASS DECLARATIONS
 
-binder_status_t ICInterface::dump(int /*fd*/, const char** /*args*/, uint32_t /*numArgs*/) {
+binder_status_t ICInterface::dump(int /*fd*/,
+                                  const char ** /*args*/,
+                                  uint32_t /*numArgs*/)
+{
     return STATUS_OK;
 }
 
 #ifdef HAS_BINDER_SHELL_COMMAND
-binder_status_t ICInterface::handleShellCommand(int /*in*/, int /*out*/, int /*err*/,
-                                                const char** /*argv*/, uint32_t /*argc*/) {
+binder_status_t ICInterface::handleShellCommand(int /*in*/,
+                                                int /*out*/,
+                                                int /*err*/,
+                                                const char ** /*argv*/,
+                                                uint32_t /*argc*/)
+{
     return STATUS_OK;
 }
 #endif
 
-std::shared_ptr<ICInterface> ICInterface::asInterface(AIBinder* binder) {
+std::shared_ptr<ICInterface> ICInterface::asInterface(AIBinder *binder)
+{
     return ICInterfaceData::getInterface(binder);
 }
 
-AIBinder_Class* ICInterface::defineClass(const char* interfaceDescriptor,
-                                         AIBinder_Class_onTransact onTransact) {
-
+AIBinder_Class *ICInterface::defineClass(const char *interfaceDescriptor,
+                                         AIBinder_Class_onTransact onTransact)
+{
     return defineClass(interfaceDescriptor, onTransact, nullptr, 0);
 }
 
-AIBinder_Class* ICInterface::defineClass(const char* interfaceDescriptor,
+AIBinder_Class *ICInterface::defineClass(const char *interfaceDescriptor,
                                          AIBinder_Class_onTransact onTransact,
-                                         const char** codeToFunction, size_t functionCount) {
-    AIBinder_Class* clazz = AIBinder_Class_define(interfaceDescriptor, ICInterfaceData::onCreate,
-                                                  ICInterfaceData::onDestroy, onTransact);
+                                         const char **codeToFunction,
+                                         size_t functionCount)
+{
+    AIBinder_Class *clazz =
+        AIBinder_Class_define(interfaceDescriptor, ICInterfaceData::onCreate,
+                              ICInterfaceData::onDestroy, onTransact);
     if (clazz == nullptr) {
         return nullptr;
     }
 
-    // We can't know if these methods are overridden by a subclass interface, so we must register
-    // ourselves. The defaults are harmless.
+    // We can't know if these methods are overridden by a subclass interface, so
+    // we must register ourselves. The defaults are harmless.
     AIBinder_Class_setOnDump(clazz, ICInterfaceData::onDump);
 #ifdef HAS_BINDER_SHELL_COMMAND
 #ifdef __ANDROID_UNAVAILABLE_SYMBOLS_ARE_WEAK__
@@ -341,45 +394,57 @@ AIBinder_Class* ICInterface::defineClass(const char* interfaceDescriptor,
 #else
     if (__ANDROID_API__ >= 30) {
 #endif
-        AIBinder_Class_setHandleShellCommand(clazz, ICInterfaceData::handleShellCommand);
+        AIBinder_Class_setHandleShellCommand(
+            clazz, ICInterfaceData::handleShellCommand);
     }
 #endif
 
 #if defined(__ANDROID_UNAVAILABLE_SYMBOLS_ARE_WEAK__) || __ANDROID_API__ >= 36
     if (API_LEVEL_AT_LEAST(36)) {
         if (codeToFunction != nullptr) {
-            AIBinder_Class_setTransactionCodeToFunctionNameMap(clazz, codeToFunction,
-                                                               functionCount);
+            AIBinder_Class_setTransactionCodeToFunctionNameMap(
+                clazz, codeToFunction, functionCount);
         }
     }
 #else
-    (void)codeToFunction;
-    (void)functionCount;
-#endif  // defined(__ANDROID_UNAVAILABLE_SYMBOLS_ARE_WEAK__) || __ANDROID_API__ >= 36
+    (void) codeToFunction;
+    (void) functionCount;
+#endif  // defined(__ANDROID_UNAVAILABLE_SYMBOLS_ARE_WEAK__) || __ANDROID_API__
+        // >= 36
     return clazz;
 }
 
-std::shared_ptr<ICInterface> ICInterface::ICInterfaceData::getInterface(AIBinder* binder) {
-    if (binder == nullptr) return nullptr;
+std::shared_ptr<ICInterface> ICInterface::ICInterfaceData::getInterface(
+    AIBinder *binder)
+{
+    if (binder == nullptr)
+        return nullptr;
 
-    void* userData = AIBinder_getUserData(binder);
-    if (userData == nullptr) return nullptr;
+    void *userData = AIBinder_getUserData(binder);
+    if (userData == nullptr)
+        return nullptr;
 
-    return static_cast<ICInterfaceData*>(userData)->interface;
+    return static_cast<ICInterfaceData *>(userData)->interface;
 }
 
-void* ICInterface::ICInterfaceData::onCreate(void* args) {
-    std::shared_ptr<ICInterface> interface = static_cast<ICInterface*>(args)->ref<ICInterface>();
-    ICInterfaceData* data = new ICInterfaceData{interface};
-    return static_cast<void*>(data);
+void *ICInterface::ICInterfaceData::onCreate(void *args)
+{
+    std::shared_ptr<ICInterface> interface =
+        static_cast<ICInterface *>(args)->ref<ICInterface>();
+    ICInterfaceData *data = new ICInterfaceData{interface};
+    return static_cast<void *>(data);
 }
 
-void ICInterface::ICInterfaceData::onDestroy(void* userData) {
-    delete static_cast<ICInterfaceData*>(userData);
+void ICInterface::ICInterfaceData::onDestroy(void *userData)
+{
+    delete static_cast<ICInterfaceData *>(userData);
 }
 
-binder_status_t ICInterface::ICInterfaceData::onDump(AIBinder* binder, int fd, const char** args,
-                                                     uint32_t numArgs) {
+binder_status_t ICInterface::ICInterfaceData::onDump(AIBinder *binder,
+                                                     int fd,
+                                                     const char **args,
+                                                     uint32_t numArgs)
+{
     std::shared_ptr<ICInterface> interface = getInterface(binder);
     if (interface != nullptr) {
         return interface->dump(fd, args, numArgs);
@@ -388,9 +453,14 @@ binder_status_t ICInterface::ICInterfaceData::onDump(AIBinder* binder, int fd, c
 }
 
 #ifdef HAS_BINDER_SHELL_COMMAND
-binder_status_t ICInterface::ICInterfaceData::handleShellCommand(AIBinder* binder, int in, int out,
-                                                                 int err, const char** argv,
-                                                                 uint32_t argc) {
+binder_status_t ICInterface::ICInterfaceData::handleShellCommand(
+    AIBinder *binder,
+    int in,
+    int out,
+    int err,
+    const char **argv,
+    uint32_t argc)
+{
     std::shared_ptr<ICInterface> interface = getInterface(binder);
     if (interface != nullptr) {
         return interface->handleShellCommand(in, out, err, argv, argc);
@@ -400,7 +470,8 @@ binder_status_t ICInterface::ICInterfaceData::handleShellCommand(AIBinder* binde
 #endif
 
 template <typename INTERFACE>
-SpAIBinder BnCInterface<INTERFACE>::asBinder() {
+SpAIBinder BnCInterface<INTERFACE>::asBinder()
+{
     internal::LockGuard<internal::Mutex> l(mMutex);
 
     SpAIBinder binder;
@@ -416,7 +487,8 @@ SpAIBinder BnCInterface<INTERFACE>::asBinder() {
 }
 
 template <typename INTERFACE>
-SpAIBinder BpCInterface<INTERFACE>::asBinder() {
+SpAIBinder BpCInterface<INTERFACE>::asBinder()
+{
     return mBinder;
 }
 
@@ -424,16 +496,21 @@ SpAIBinder BpCInterface<INTERFACE>::asBinder() {
 
 // Once minSdkVersion is 30, we are guaranteed to be building with the
 // Android 11 AIDL compiler which supports the SharedRefBase::make API.
-#if !defined(__ANDROID_API__) || __ANDROID_API__ >= 30 || defined(__ANDROID_APEX__)
-namespace ndk::internal {
+#if !defined(__ANDROID_API__) || __ANDROID_API__ >= 30 || \
+    defined(__ANDROID_APEX__)
+namespace ndk::internal
+{
 template <typename T, typename = void>
-struct is_complete_type : std::false_type {};
+struct is_complete_type : std::false_type {
+};
 
 template <typename T>
-struct is_complete_type<T, decltype(void(sizeof(T)))> : std::true_type {};
+struct is_complete_type<T, decltype(void(sizeof(T)))> : std::true_type {
+};
 }  // namespace ndk::internal
 
-namespace std {
+namespace std
+{
 
 // Define `SharedRefBase` specific versions of `std::make_shared` and
 // `std::make_unique` to block people from using them. Using them to allocate
@@ -443,17 +520,25 @@ namespace std {
 // Note: We exclude incomplete types because `std::is_base_of` is undefined in
 // that case.
 
-template <typename T, typename... Args,
-          std::enable_if_t<ndk::internal::is_complete_type<T>::value, bool> = true,
-          std::enable_if_t<std::is_base_of<ndk::SharedRefBase, T>::value, bool> = true>
-shared_ptr<T> make_shared(Args...) {  // SEE COMMENT ABOVE.
+template <
+    typename T,
+    typename... Args,
+    std::enable_if_t<ndk::internal::is_complete_type<T>::value, bool> = true,
+    std::enable_if_t<std::is_base_of<ndk::SharedRefBase, T>::value, bool> =
+        true>
+shared_ptr<T> make_shared(Args...)
+{  // SEE COMMENT ABOVE.
     static_assert(!std::is_base_of<ndk::SharedRefBase, T>::value);
 }
 
-template <typename T, typename... Args,
-          std::enable_if_t<ndk::internal::is_complete_type<T>::value, bool> = true,
-          std::enable_if_t<std::is_base_of<ndk::SharedRefBase, T>::value, bool> = true>
-unique_ptr<T> make_unique(Args...) {  // SEE COMMENT ABOVE.
+template <
+    typename T,
+    typename... Args,
+    std::enable_if_t<ndk::internal::is_complete_type<T>::value, bool> = true,
+    std::enable_if_t<std::is_base_of<ndk::SharedRefBase, T>::value, bool> =
+        true>
+unique_ptr<T> make_unique(Args...)
+{  // SEE COMMENT ABOVE.
     static_assert(!std::is_base_of<ndk::SharedRefBase, T>::value);
 }
 

@@ -7,7 +7,8 @@
 
 #include "apk_envelope.h"
 
-namespace muplar::runtime::android {
+namespace muplar::runtime::android
+{
 
 struct ArtBootstrapConfig {
     std::filesystem::path apk_path;
@@ -27,6 +28,8 @@ struct ArtBootstrapPlan {
     std::string app_process64_guest_path;
     std::filesystem::path bootstrap_jar;
     std::string bootstrap_jar_guest_path;
+    std::filesystem::path art_shim;
+    std::string art_shim_guest_path;
     std::filesystem::path framework_dir;
     std::vector<std::filesystem::path> classpath;
     std::vector<std::filesystem::path> bootclasspath;
@@ -39,11 +42,11 @@ struct ArtBootstrapPlan {
     bool ready() const { return missing_required_inputs.empty(); }
 };
 
-ArtBootstrapPlan build_art_bootstrap_plan(const ArtBootstrapConfig& config);
+ArtBootstrapPlan build_art_bootstrap_plan(const ArtBootstrapConfig &config);
 std::filesystem::path stage_art_apk_for_sysroot(
-    const std::filesystem::path& apk_path,
-    const std::filesystem::path& sysroot);
-void print_art_bootstrap_plan(const ArtBootstrapPlan& plan);
-std::string art_bootstrap_missing_summary(const ArtBootstrapPlan& plan);
+    const std::filesystem::path &apk_path,
+    const std::filesystem::path &sysroot);
+void print_art_bootstrap_plan(const ArtBootstrapPlan &plan);
+std::string art_bootstrap_missing_summary(const ArtBootstrapPlan &plan);
 
-} // namespace muplar::runtime::android
+}  // namespace muplar::runtime::android

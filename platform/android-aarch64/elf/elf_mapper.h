@@ -3,10 +3,12 @@
 #include "elf_image.h"
 #include "mapped_elf_image.h"
 
-namespace muplar::runtime::elf {
+namespace muplar::runtime::elf
+{
 
-class ElfMapper {
-    public:
-        MappedElfImage map(const ElfImage& image, const char* file_path);
-    };
-}
+class ElfMapper
+{
+public:
+    MappedElfImage map(const ElfImage &image, const char *file_path);
+};
+}  // namespace muplar::runtime::elf

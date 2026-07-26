@@ -1,0 +1,225 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+    paths-ignore:
+      - '**.md'
+      - 'docs/**'
+      - 'LICENSE'
+  pull_request:
+    branches: [main]
+    paths-ignore:
+      - '**.md'
+      - 'docs/**'
+      - 'LICENSE'
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+jobs:
+  # Job 1: Linting and Static Analysis (Ubuntu)
+  lint:
+    name: Lint & Analyze (Linux)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clang-format cppcheck shellcheck
+
+      - name: Trailing Newline Check
+        run: |
+          set -euo pipefail
+          echo "Checking trailing newlines..."
+          find cli platform tools -type f \( -name "*.c" -o -name "*.h" -o -name "*.cpp" -o -name "*.hpp" -o -name "*.sh" -o -name "*.py" \) -exec sh -c '
+            for f; do
+              if [ -s "$f" ] && [ "$(tail -c 1 "$f" | wc -l)" -eq 0 ]; then
+                echo "FAIL: $f does not end with a newline"
+                exit 1
+              fi
+            done
+          ' sh {} +
+          echo "All checked files have trailing newlines."
+
+      - name: clang-format Check
+        run: |
+          set -euo pipefail
+          echo "Checking C/C++ formatting (run tools/format-code.sh locally to fix)..."
+          find cli platform -type f \( -name "*.c" -o -name "*.h" -o -name "*.cpp" -o -name "*.hpp" -o -name "*.m" -o -name "*.mm" \) -exec clang-format --dry-run --Werror {} +
+          echo "Formatting check passed."
+
+      - name: shellcheck Check
+        run: |
+          set -euo pipefail
+          echo "Checking shell scripts..."
+          grep -l -E '^#!.*\b(bash|sh|dash|ksh)$' tools/*.sh | xargs shellcheck
+          echo "Shellcheck check passed."
+
+      - name: cppcheck Check
+        run: |
+          set -euo pipefail
+          echo "Running cppcheck..."
+          cppcheck --error-exitcode=1 --enable=warning,style,performance,portability --inconclusive --library=posix \
+            --suppress=missingIncludeSystem --suppress=unusedFunction --suppress=unmatchedSuppression \
+            --suppress=uninitMemberVarNoCtor --suppress=noCopyConstructor --suppress=noOperatorEq \
+            --suppress=cstyleCast --suppress=shadowFunction --suppress=passedByValue \
+            --suppress=redundantCopyLocalConst --suppress=usleepCalled --suppress=variableScope \
+            --suppress=constVariableReference --suppress=constVariablePointer --suppress=useStlAlgorithm \
+            --suppress=funcArgNamesDifferent --suppress=funcArgNamesDifferentUnnamed --suppress=functionStatic \
+            --suppress=functionConst --suppress=badBitmaskCheck --suppress=uselessCallsSubstr --suppress=unusedStructMember \
+            --suppress=staticFunction --suppress=unusedPrivateFunction --suppress=knownConditionTrueFalse --suppress=unreadVariable \
+            cli platform
+          echo "Cppcheck check passed."
+
+  # Job 2: Build Verification (macOS Apple Silicon)
+  build-macos:
+    name: Build (macOS Apple Silicon)
+    runs-on: macos-15
+    timeout-minutes: 45
+    env:
+      DEVELOPER_DIR: /Applications/Xcode.app/Contents/Developer
+      HOMEBREW_ARM_PREFIX: /opt/homebrew
+      HOMEBREW_X86_PREFIX: /usr/local
+      HOMEBREW_NO_AUTO_UPDATE: "1"
+      HOMEBREW_NO_INSTALL_CLEANUP: "1"
+      CMAKE_BUILD_PARALLEL_LEVEL: "3"
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          fetch-depth: 0
+
+      - name: Make SSH-style submodule URLs work without SSH keys
+        run: |
+          git config --global url."https://github.com/".insteadOf "git@github.com:"
+          git submodule sync --recursive
+          git submodule update --init --recursive --depth 1
+
+      - name: Install build dependencies
+        run: |
+          brew install cmake ninja pkg-config meson rust \
+            bison flex freetype libpng zlib bzip2 sdl2 gnutls \
+            pixman libxkbcommon openssl@3 lz4 zstd llvm sevenzip
+          echo "/opt/homebrew/opt/bison/bin" >> "$GITHUB_PATH"
+          echo "/opt/homebrew/opt/flex/bin" >> "$GITHUB_PATH"
+
+      - name: Install binutils
+        run: |
+          brew install aarch64-elf-binutils binutils
+          echo "$(brew --prefix binutils)/bin" >> "$GITHUB_PATH"
+
+      - name: Verify bundled binary prerequisites
+        run: |
+          test -d third_party/angle-bin || { echo "ERROR: third_party/angle-bin missing."; exit 1; }
+          test -d third_party/angle-include || { echo "ERROR: third_party/angle-include missing."; exit 1; }
+
+      - name: Install Rosetta for x86_64 Windows compatibility build
+        run: |
+          sudo softwareupdate --install-rosetta --agree-to-license || true
+          arch -x86_64 /usr/bin/true
+
+      - name: Prepare x86_64 Homebrew under Rosetta
+        run: |
+          set -euo pipefail
+          if [ ! -x "${HOMEBREW_X86_PREFIX}/bin/brew" ]; then
+            sudo mkdir -p "${HOMEBREW_X86_PREFIX}"
+            sudo chown -R "$(whoami)":admin "${HOMEBREW_X86_PREFIX}"
+            curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh -o /tmp/install-homebrew-x86.sh
+            NONINTERACTIVE=1 arch -x86_64 /bin/bash /tmp/install-homebrew-x86.sh
+          fi
+
+      - name: Install x86_64 Homebrew dependencies for Wine and DXMT
+        env:
+          HOMEBREW_NO_PATH_SHADOW_CHECK: "1"
+          HOMEBREW_NO_ENV_HINTS: "1"
+        run: |
+          set -euo pipefail
+          X86_BREW="${HOMEBREW_X86_PREFIX}/bin/brew"
+          sudo mkdir -p /usr/local/Homebrew /usr/local/bin /usr/local/etc /usr/local/include /usr/local/lib /usr/local/opt /usr/local/sbin /usr/local/share/zsh/site-functions /usr/local/var
+          sudo chown -R "$(whoami)":admin /usr/local/Homebrew /usr/local/bin /usr/local/etc /usr/local/include /usr/local/lib /usr/local/opt /usr/local/sbin /usr/local/share /usr/local/var 2>/dev/null || true
+          chmod -R u+rwX /usr/local/share/zsh || true
+          for f in idle3 idle3.14 pip3 pip3.14 pydoc3 pydoc3.14 python3 python3-config python3.14 python3.14-config; do
+            if [ -L "/usr/local/bin/$f" ]; then
+              target="$(readlink "/usr/local/bin/$f" || true)"
+              if echo "$target" | grep -q "/Library/Frameworks/Python.framework/Versions/3.14"; then
+                rm -f "/usr/local/bin/$f"
+              fi
+            fi
+          done
+          set +e
+          arch -x86_64 "$X86_BREW" install bison flex pkg-config mingw-w64 freetype gettext gnutls zlib bzip2 libpng sdl2 meson llvm llvm@15 vulkan-headers vulkan-loader molten-vk vulkan-tools
+          BREW_STATUS=$?
+          set -e
+          if [ "$BREW_STATUS" -ne 0 ]; then
+            if arch -x86_64 "$X86_BREW" list python@3.14 >/dev/null 2>&1; then
+              arch -x86_64 "$X86_BREW" link --overwrite --force python@3.14 || true
+            fi
+            arch -x86_64 "$X86_BREW" install bison flex pkg-config mingw-w64 freetype gettext gnutls zlib bzip2 libpng sdl2 meson llvm llvm@15 vulkan-headers vulkan-loader molten-vk vulkan-tools
+          fi
+          arch -x86_64 "$X86_BREW" link --overwrite --force python@3.14 || true
+
+      - name: Download prebuilt Wine runtime
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          ROOT_DIR="$(pwd)"
+          mkdir -p .wine-runtime build
+          gh release download wine-runtime-001 \
+            --pattern "muplar-wine-runtime-macos-arm64-x86_64.tar.gz" \
+            --dir .wine-runtime \
+            --clobber
+          tar -xzf .wine-runtime/muplar-wine-runtime-macos-arm64-x86_64.tar.gz -C "${ROOT_DIR}/build"
+          test -x "${ROOT_DIR}/build/wine-prefix/bin/wine"
+
+      - name: Download prebuilt JDK runtime
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          ROOT_DIR="$(pwd)"
+          JDK_OUT_DIR="${ROOT_DIR}/third_party/jdk-bin"
+          mkdir -p .jdk-runtime build
+          gh release download jdk-runtime-21-001 \
+            --pattern "muplar-jdk-runtime-macos-arm64-x86_64.tar.gz" \
+            --dir .jdk-runtime \
+            --clobber
+          tar -xzf .jdk-runtime/muplar-jdk-runtime-macos-arm64-x86_64.tar.gz -C "${ROOT_DIR}"
+          chmod -R +x "${JDK_OUT_DIR}"
+          test -d "${JDK_OUT_DIR}"
+
+      - name: Fetch Launcher3 APK fixture
+        run: |
+          set -euo pipefail
+          zsh platform/android-aarch64/compat/launcher3/fetch-official-apk.sh
+
+      - name: Configure CMake
+        run: |
+          set -euo pipefail
+          chmod +x tools/configure-build.sh
+          sh tools/configure-build.sh
+
+      - name: Build elfuse
+        run: ninja -C build elfuse_external -v
+
+      - name: Build Wawona
+        run: ninja -C build wawona_external -v
+
+      - name: Build Muplar app bundle
+        run: cmake --build build
+
+      - name: Verify build artifact existence
+        run: |
+          test -d "build/bin/Muplar Instance Manager.app"
+          test -x "build/bin/Muplar Instance Manager.app/Contents/MacOS/Muplar Instance Manager"

@@ -32,7 +32,7 @@ unzip -p "$ARCHIVE" arm64-v8a/system.img > "$WORK/disk.img"
 # The emulator disk is GPT; partition 2 is the Android dynamic super partition.
 dd if="$WORK/disk.img" of="$WORK/super.img" bs=512 \
     skip=4096 count=3162112 status=none
-python3 -m pip install --disable-pip-version-check --quiet \
+python3 -m pip install --disable-pip-version-check --quiet --break-system-packages \
     --target "$PYDEPS" unsuper numpy
 PYTHONPATH="$PYDEPS" python3 "$PYDEPS/unsuper.py" \
     "$WORK/super.img" "$WORK/partitions" -p system_ext -j 1 -q

@@ -1,5 +1,6 @@
 #!/bin/zsh
 set -euo pipefail
+setopt typeset_silent
 
 ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 SCRIPT_NAME="$0"
@@ -129,9 +130,22 @@ ensure_linker_aliases() {
     fi
 }
 
+ensure_runtime_data_dirs() {
+    mkdir -p \
+        "$SYSROOT/data/dalvik-cache/arm64" \
+        "$SYSROOT/data/local/tmp" \
+        "$SYSROOT/data/misc/profiles/cur/0" \
+        "$SYSROOT/data/misc/profiles/ref" \
+        "$SYSROOT/data/user/0"
+}
+
 install_bootstrap_jar() {
     local out="$SYSROOT/data/local/tmp/muplar/art/muplar-art-bootstrap.jar"
     local candidates=()
+
+    if "$ROOT_DIR/tools/build-art-bootstrap-jar.sh" --sysroot "$SYSROOT" --output "$out"; then
+        return 0
+    fi
 
     if [ -n "$BOOTSTRAP_JAR" ]; then
         candidates+=("$BOOTSTRAP_JAR")
@@ -152,12 +166,83 @@ install_bootstrap_jar() {
         fi
     done
 
-    "$ROOT_DIR/tools/build-art-bootstrap-jar.sh" --sysroot "$SYSROOT"
+    echo "[android-sysroot] failed to install Muplar bootstrap jar" >&2
+    return 1
+}
+
+install_art_shim() {
+    local out="$SYSROOT/data/local/tmp/muplar/art/libmuplar_android_art_shim.so"
+    local candidates=(
+        "$ROOT_DIR/android/libmuplar_android_art_shim.so"
+        "$ROOT_DIR/build/sysroot/data/local/tmp/muplar/art/libmuplar_android_art_shim.so"
+    )
+
+    if "$ROOT_DIR/tools/build-android-art-shim.sh" --output "$out"; then
+        return 0
+    fi
+
+    local candidate
+    for candidate in "${candidates[@]}"; do
+        if [ -f "$candidate" ]; then
+            mkdir -p "$(dirname "$out")"
+            cp -f "$candidate" "$out"
+            echo "[android-sysroot] installed Muplar ART shim: $out"
+            return 0
+        fi
+    done
+
+    echo "[android-sysroot] failed to install Muplar ART shim" >&2
+    return 1
+}
+
+install_framework_multidex_boot_jars() {
+    local framework_dir="$SYSROOT/system/framework"
+    local out_dir="$SYSROOT/data/local/tmp/muplar/art/bootclasspath"
+    local count=0
+
+    [ -d "$framework_dir" ] || return 0
+    mkdir -p "$out_dir"
+
+    local jar
+    for jar in "$framework_dir"/*.jar; do
+        [ -f "$jar" ] || continue
+        local base="${jar:t:r}"
+        [ "$base" = "muplar-art-bootstrap" ] && continue
+
+        local entries
+        entries="$(unzip -Z1 "$jar" 2>/dev/null | grep -E '^classes[2-9][0-9]*\.dex$' || true)"
+        [ -n "$entries" ] || continue
+
+        local entry
+        while IFS= read -r entry; do
+            [ -n "$entry" ] || continue
+            local stem="${entry:r}"
+            local out="$out_dir/${base}-${stem}.jar"
+            if [ -f "$out" ] && [ "$out" -nt "$jar" ]; then
+                continue
+            fi
+
+            local tmp
+            tmp="$(mktemp -d "$CACHE_DIR/framework-dex.XXXXXX")"
+            if unzip -p "$jar" "$entry" > "$tmp/classes.dex"; then
+                (cd "$tmp" && zip -q -0 "$out" classes.dex)
+                count=$((count + 1))
+            fi
+            rm -rf "$tmp"
+        done <<< "$entries"
+    done
+
+    if [ "$count" -gt 0 ]; then
+        echo "[android-sysroot] prepared $count secondary framework dex boot jars"
+    fi
 }
 
 if [ "$FORCE" = false ] && [ -d "$SYSROOT" ]; then
     ensure_linker_aliases
+    ensure_runtime_data_dirs
     install_bootstrap_jar
+    install_art_shim
+    install_framework_multidex_boot_jars
 fi
 
 if [ "$FORCE" = false ] &&
@@ -205,6 +290,11 @@ fi
 
 if [ "$FORCE" = false ] &&
    "$ROOT_DIR/tools/check-android-art-sysroot.sh" --sysroot "$SYSROOT" --quiet >/dev/null 2>&1; then
+    ensure_linker_aliases
+    ensure_runtime_data_dirs
+    install_bootstrap_jar
+    install_art_shim
+    install_framework_multidex_boot_jars
     echo "[android-sysroot] ready: $SYSROOT"
     echo "[android-sysroot] using cached artifact: $ARCHIVE"
     exit 0
@@ -254,7 +344,10 @@ else
 fi
 
 ensure_linker_aliases
+ensure_runtime_data_dirs
 install_bootstrap_jar
+install_art_shim
+install_framework_multidex_boot_jars
 "$ROOT_DIR/tools/check-android-art-sysroot.sh" --sysroot "$SYSROOT"
 
 rm -rf "$WORK"

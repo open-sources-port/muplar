@@ -120,3 +120,95 @@ now use prefix-backed durable storage with schema versioning and CRUD support;
 a headless two-open smoke verifies persistence. The host can also capture the
 All Apps frame for nonblank visual validation. The next checkpoint is widget
 binding and workspace drag/drop behavior.
+
+## Current Launcher3 Smoke Status
+
+Green checks:
+
+- `cmake --build build --target mup populate_manager_bundle -j$(sysctl -n hw.ncpu)`
+  builds the app bundle, ART bootstrap jar, Android ART shim, and packaged
+  Launcher3 fixture.
+- `platform/android-aarch64/compat/launcher3/smoke-launch.sh` reaches:
+  - `ArtApkMain started`
+  - `onStart/onResume completed successfully`
+  - `makeVisible completed successfully`
+  - `entering main looper`
+- `platform/android-aarch64/compat/launcher3/visual-smoke.sh` produces
+  `build/launcher3/verification/all-apps.png` and passes
+  `tests/android/PngVisualSmoke.java`.
+- Launcher3 `TaskView`, `GroupedTaskView`, and `DesktopTaskView` no longer
+  fail during `ViewPool-init` because incompatible fixture/framework private
+  attrs are bypassed in the bootstrap inflater.
+
+Known limitations:
+
+- The visual smoke PNG now uses the Android `Bitmap.compress()` path backed by
+  ART-shim pixel storage. The deterministic PNG fallback remains only as a
+  safety net.
+- The Launcher3 view hierarchy is alive after `makeVisible`:
+  `FrameLayout -> LauncherRootView -> DragLayer`, with Workspace, Hotseat,
+  ScrimView, and Overview children laid out at real bounds.
+- `View.draw(Canvas)` currently only reaches color/paint fills in the software
+  snapshot (`color=2 paint=2 rect=0 text=0 bitmap=0` in the latest smoke).
+  This means the next rendering gap is not native symbol resolution; it is the
+  Java View/HWUI presentation path and Launcher3's empty home state.
+- Instance Manager launches use `mup --apk --host-window`, but Java APK
+  bootstrap enters `Looper.loop()` directly. That path does not return to the
+  C++ host app loop, so `--host-window-ms` is not honored for Java APKs yet.
+- The existing host window presents native/EGL/`ANativeWindow` buffers. Java
+  Launcher3 View rendering is not safely connected to that host window yet.
+  An experimental guest-side presenter is present but gated behind
+  `MUPLAR_SOFTWARE_HOST_PRESENT=1` because direct guest-to-host native-window
+  posting still crashes.
+- The bundled Launcher3 fixture comes from the Android SDK default ARM64 system
+  image, while the current framework sysroot is Samsung-flavored. Private
+  framework resource IDs are not stable across those builds.
+- The screenshot hook is for test automation only:
+  `MUPLAR_LAUNCHER3_SCREENSHOT=/data/local/tmp/muplar/launcher3-visual-smoke.png`.
+
+Required next steps:
+
+1. Fix Java APK host-window control flow.
+   - Do not let Java-only APK launches disappear forever inside
+     `Looper.loop()` when `--host-window-ms` is set.
+   - Let the C++ host app loop own pumping and timeout behavior for Java APKs,
+     the same way it does for native-window apps.
+
+2. Add a safe Java View-to-host-window presentation bridge.
+   - Preferred short path: host-side frame handoff from the ART shim or
+     bootstrap to `HostWindow::present_rgba`, without guest-side raw HVC calls.
+   - Production path: model enough `ViewRootImpl`/`Surface`/HWUI behavior that
+     Java framework rendering naturally posts to the existing host window.
+
+3. Improve software Canvas content coverage.
+   - Keep the bitmap backing storage and PNG compression path.
+   - Add missing draw operations only when counters/logs show Launcher3 reaches
+     them.
+   - Once real Launcher3 pixels appear, remove the uniform-bitmap visual
+     pattern from PNG compression.
+
+4. Strengthen `visual-smoke.sh`.
+   - Fail if the log says `fallback screenshot written` once real Bitmap
+     compression is implemented.
+   - Add checks for expected Launcher3 visual regions, not just nonblank pixels.
+
+5. Align Launcher3 APK and framework resources.
+   - Preferred production path: import a Launcher3 APK built from the same
+     framework/sysroot image.
+   - Keep the current SDK system-image fixture only as an early compatibility
+     smoke fixture.
+
+6. Verify through Instance Manager.
+   - Direct `mup --apk` smoke passing is necessary but not enough.
+   - Launch the packaged Launcher3 app through Instance Manager and confirm the
+     same lifecycle/log behavior.
+
+Useful commands:
+
+```sh
+cmake --build build --target mup populate_manager_bundle -j$(sysctl -n hw.ncpu)
+platform/android-aarch64/compat/launcher3/smoke-launch.sh
+platform/android-aarch64/compat/launcher3/visual-smoke.sh
+rg -n "screenshot|fallback screenshot|UnsatisfiedLinkError|No implementation found" \
+  "${TMPDIR:-/tmp}/muplar-launcher3-smoke.log"
+```

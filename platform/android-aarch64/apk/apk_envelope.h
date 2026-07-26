@@ -5,7 +5,8 @@
 #include <string>
 #include <vector>
 
-namespace muplar::runtime::apk {
+namespace muplar::runtime::apk
+{
 
 enum class ApkRuntimeKind {
     Empty,
@@ -55,10 +56,10 @@ struct ApkClassification {
 };
 
 std::string to_string(ApkRuntimeKind kind);
-ApkClassification classify_apk(const std::filesystem::path& apk_path);
-bool extract_apk_entry(const std::filesystem::path& apk_path,
-                       const std::string& entry_path,
-                       const std::filesystem::path& output_path);
-ApkLaunchResult prepare_apk_launch(const ApkLaunchConfig& config);
+ApkClassification classify_apk(const std::filesystem::path &apk_path);
+bool extract_apk_entry(const std::filesystem::path &apk_path,
+                       const std::string &entry_path,
+                       const std::filesystem::path &output_path);
+ApkLaunchResult prepare_apk_launch(const ApkLaunchConfig &config);
 
-} // namespace muplar::runtime::apk
+}  // namespace muplar::runtime::apk

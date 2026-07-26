@@ -7,6 +7,8 @@ public final class ArtApkMain {
     private ArtApkMain() {
     }
 
+    private static native void installTypefaceDefaultsNative();
+
     public static void main(String[] args) {
         String apkPath = args.length > 0 ? args[0] : "";
         String packageName = args.length > 1 ? args[1] : "";
@@ -14,6 +16,11 @@ public final class ArtApkMain {
         String applicationClass = args.length > 3 ? args[3] : "";
 
         System.out.println("[Muplar/ART] ArtApkMain started");
+        relaxHiddenApiChecks();
+        loadFrameworkNativeRuntime();
+        loadRuntimeShim();
+        loadSystemFontMap();
+        MuplarServices.install();
         System.out.println("[Muplar/ART] apk=" + apkPath);
         if (!packageName.isEmpty()) {
             System.out.println("[Muplar/ART] package=" + packageName);
@@ -24,6 +31,8 @@ public final class ArtApkMain {
         FrameworkProcessSession.start(packageName, launchActivity);
 
         try {
+            prepareMainLooper();
+            installActivityThreadForFramework();
             ClassLoader loader = createApkClassLoader(apkPath, packageName);
             Thread.currentThread().setContextClassLoader(loader);
             System.out.println("[Muplar/ART] apk class loader ready");
@@ -55,6 +64,14 @@ public final class ArtApkMain {
                 ctor.setAccessible(true);
                 Object activityObj = ctor.newInstance();
                 System.out.println("[Muplar/ART] instantiated activity class");
+                attachBaseContext(activityObj,
+                    new MuplarContext(packageName, apkPath, loader));
+                attachActivityInfo(activityObj, packageName, activityClassName, apkPath);
+                attachApplication(activityObj, packageName, apkPath, loader);
+                attachWindow(activityObj, packageName, apkPath, loader);
+                attachMainThread(activityObj);
+                attachInstrumentation(activityObj);
+                attachFragmentHost(activityObj);
 
                 // Call onCreate lifecycle method using reflection
                 try {
@@ -74,14 +91,8 @@ public final class ArtApkMain {
                         Object bundleObj = bundleClass.getDeclaredConstructor().newInstance();
                         onCreateMethod.invoke(activityObj, bundleObj);
                         System.out.println("[Muplar/ART] onCreate completed successfully");
-                        try {
-                            java.lang.reflect.Method lifecycle =
-                                activityClass.getMethod("dispatchStartAndResume");
-                            lifecycle.invoke(activityObj);
-                            System.out.println("[Muplar/ART] onStart/onResume completed successfully");
-                        } catch (NoSuchMethodException ignored) {
-                            // Older bootstrap Activity surface.
-                        }
+                        driveActivityLifecycle(activityObj, activityClass, loader);
+                        runMainLooper();
                     } else {
                         System.out.println("[Muplar/ART] onCreate method not found");
                     }
@@ -96,6 +107,649 @@ public final class ArtApkMain {
             t.printStackTrace(System.err);
             throw new RuntimeException("Muplar ART bootstrap failed", t);
         }
+    }
+
+    private static void loadRuntimeShim() {
+        try {
+            System.load("/data/local/tmp/muplar/art/libmuplar_android_art_shim.so");
+            System.out.println("[Muplar/ART] runtime shim loaded");
+        } catch (Throwable t) {
+            System.err.println("[Muplar/ART] runtime shim load failed: "
+                + t.getClass().getName() + ": " + t.getMessage());
+        }
+    }
+
+    private static void loadFrameworkNativeRuntime() {
+        try {
+            System.load("/system/lib64/libandroid_runtime.so");
+            System.out.println("[Muplar/ART] framework native runtime loaded");
+        } catch (Throwable t) {
+            System.err.println("[Muplar/ART] framework native runtime load failed: "
+                + t.getClass().getName() + ": " + t.getMessage());
+        }
+    }
+
+    private static void relaxHiddenApiChecks() {
+        try {
+            Class<?> vmRuntime = Class.forName("dalvik.system.VMRuntime");
+            java.lang.reflect.Method getRuntime =
+                vmRuntime.getDeclaredMethod("getRuntime");
+            Object runtime = getRuntime.invoke(null);
+            java.lang.reflect.Method setHiddenApiExemptions =
+                vmRuntime.getDeclaredMethod(
+                    "setHiddenApiExemptions", String[].class);
+            setHiddenApiExemptions.invoke(
+                runtime, new Object[] { new String[] { "L" } });
+            System.out.println("[Muplar/ART] hidden API checks relaxed");
+        } catch (Throwable t) {
+            System.err.println("[Muplar/ART] hidden API relax failed: "
+                + t.getClass().getName() + ": " + t.getMessage());
+        }
+    }
+
+    private static void prepareMainLooper() {
+        try {
+            Class<?> looperClass = Class.forName("android.os.Looper");
+            java.lang.reflect.Method myLooper =
+                looperClass.getMethod("myLooper");
+            if (myLooper.invoke(null) != null) {
+                return;
+            }
+            try {
+                java.lang.reflect.Method prepareMainLooper =
+                    looperClass.getDeclaredMethod("prepareMainLooper");
+                prepareMainLooper.setAccessible(true);
+                prepareMainLooper.invoke(null);
+            } catch (NoSuchMethodException missingMain) {
+                java.lang.reflect.Method prepare =
+                    looperClass.getDeclaredMethod("prepare");
+                prepare.setAccessible(true);
+                prepare.invoke(null);
+            }
+            System.out.println("[Muplar/ART] main looper prepared");
+        } catch (Throwable t) {
+            System.err.println("[Muplar/ART] main looper prepare failed: "
+                + t.getClass().getName() + ": " + t.getMessage());
+        }
+    }
+
+    private static void installActivityThreadForFramework() {
+        try {
+            Class<?> activityThreadClass =
+                Class.forName("android.app.ActivityThread");
+            java.lang.reflect.Method current =
+                activityThreadClass.getMethod("currentActivityThread");
+            Object thread = current.invoke(null);
+            if (thread == null) {
+                thread = allocateWithoutConstructor(activityThreadClass);
+                setStaticField(activityThreadClass, "sCurrentActivityThread", thread);
+            }
+            setField(thread, "mCoreSettingsLock", new Object());
+            setField(thread, "mCoreSettings",
+                Class.forName("android.os.Bundle").getDeclaredConstructor().newInstance());
+            installConfigurationController(thread);
+            try {
+                Class<?> idsClass = Class.forName("android.app.IdsController");
+                Object ids = idsClass
+                    .getConstructor(Class.forName("android.content.Context"))
+                    .newInstance(new Object[] { null });
+                setField(thread, "mIdsController", ids);
+            } catch (Throwable idsError) {
+                System.err.println("[Muplar/ART] IDS controller install skipped: "
+                    + idsError.getClass().getName() + ": "
+                    + idsError.getMessage());
+            }
+            System.out.println("[Muplar/ART] ActivityThread installed");
+        } catch (Throwable t) {
+            System.err.println("[Muplar/ART] ActivityThread install failed: "
+                + t.getClass().getName() + ": " + t.getMessage());
+        }
+    }
+
+    private static void installConfigurationController(Object activityThread) {
+        try {
+            Object config = Class.forName("android.content.res.Configuration")
+                .getDeclaredConstructor().newInstance();
+            Class<?> controllerClass =
+                Class.forName("android.app.ConfigurationController");
+            java.lang.reflect.Constructor<?> ctor = controllerClass
+                .getDeclaredConstructor(
+                    Class.forName("android.app.ActivityThreadInternal"));
+            ctor.setAccessible(true);
+            Object controller = ctor.newInstance(activityThread);
+            try {
+                java.lang.reflect.Method setConfiguration =
+                    controllerClass.getDeclaredMethod(
+                        "setConfiguration", config.getClass());
+                setConfiguration.setAccessible(true);
+                setConfiguration.invoke(controller, config);
+            } catch (NoSuchMethodException ignored) {
+            }
+            try {
+                java.lang.reflect.Method setCompatConfiguration =
+                    controllerClass.getDeclaredMethod(
+                        "setCompatConfiguration", config.getClass());
+                setCompatConfiguration.setAccessible(true);
+                setCompatConfiguration.invoke(controller, config);
+            } catch (NoSuchMethodException ignored) {
+            }
+            setField(activityThread, "mConfigurationController", controller);
+            setField(activityThread, "mConfiguration", config);
+        } catch (Throwable t) {
+            System.err.println("[Muplar/ART] configuration controller install failed: "
+                + t.getClass().getName() + ": " + t.getMessage());
+        }
+    }
+
+    private static void installTypefaceDefaults() {
+        try {
+            installTypefaceDefaultsNative();
+            System.out.println("[Muplar/ART] Typeface defaults installed");
+        } catch (Throwable t) {
+            System.err.println("[Muplar/ART] Typeface defaults install failed: "
+                + t.getClass().getName() + ": " + t.getMessage());
+        }
+    }
+
+    private static void loadSystemFontMap() {
+        try {
+            Class<?> typeface = Class.forName("android.graphics.Typeface");
+            java.lang.reflect.Method method =
+                typeface.getDeclaredMethod("loadPreinstalledSystemFontMap");
+            method.setAccessible(true);
+            method.invoke(null);
+            repairSystemFontDefaults(typeface);
+            System.out.println("[Muplar/ART] system font map loaded");
+        } catch (Throwable t) {
+            Throwable detail = t instanceof java.lang.reflect.InvocationTargetException
+                && ((java.lang.reflect.InvocationTargetException) t).getCause() != null
+                    ? ((java.lang.reflect.InvocationTargetException) t).getCause()
+                    : t;
+            System.err.println("[Muplar/ART] system font map load failed: "
+                + detail.getClass().getName() + ": " + detail.getMessage());
+            detail.printStackTrace(System.err);
+        }
+    }
+
+    @SuppressWarnings("unchecked")
+    private static void repairSystemFontDefaults(Class<?> typeface) throws Exception {
+        java.lang.reflect.Method getSystemFontMap =
+            typeface.getDeclaredMethod("getSystemFontMap");
+        getSystemFontMap.setAccessible(true);
+        java.util.Map<String, Object> map =
+            (java.util.Map<String, Object>) getSystemFontMap.invoke(null);
+        Object sans = firstNonNull(
+            map.get("sans-serif"), map.get("sans"), map.values().isEmpty()
+                ? null : map.values().iterator().next());
+        if (sans == null) {
+            return;
+        }
+        Object serif = firstNonNull(map.get("serif"), sans);
+        Object monospace = firstNonNull(map.get("monospace"), sans);
+
+        java.lang.reflect.Method create =
+            typeface.getDeclaredMethod("create", typeface, Integer.TYPE);
+        Object bold = create.invoke(null, sans, Integer.valueOf(1));
+        Object italic = create.invoke(null, sans, Integer.valueOf(2));
+        Object boldItalic = create.invoke(null, sans, Integer.valueOf(3));
+
+        java.util.List<Object> defaults = java.util.Arrays.asList(
+            sans, bold, italic, boldItalic);
+        java.util.List<Object> generics = java.util.Arrays.asList(
+            sans, serif, monospace);
+        java.lang.reflect.Method change =
+            typeface.getDeclaredMethod(
+                "changeDefaultFontForTest",
+                java.util.List.class,
+                java.util.List.class);
+        change.setAccessible(true);
+        change.invoke(null, defaults, generics);
+        System.out.println("[Muplar/ART] system font defaults repaired");
+    }
+
+    private static Object firstNonNull(Object... values) {
+        for (Object value : values) {
+            if (value != null) {
+                return value;
+            }
+        }
+        return null;
+    }
+
+    private static void driveActivityLifecycle(Object activityObj,
+                                               Class<?> activityClass,
+                                               ClassLoader loader)
+        throws Exception {
+        java.lang.reflect.Method onStart =
+            findLifecycleMethod(activityClass, "onStart");
+        if (onStart != null) {
+            onStart.setAccessible(true);
+            onStart.invoke(activityObj);
+        }
+
+        try {
+            java.lang.reflect.Method onPostCreate =
+                findLifecycleMethod(activityClass, "onPostCreate",
+                    Class.forName("android.os.Bundle", false, loader));
+            if (onPostCreate != null) {
+                onPostCreate.setAccessible(true);
+                Object bundleObj = Class.forName("android.os.Bundle", false, loader)
+                    .getDeclaredConstructor().newInstance();
+                onPostCreate.invoke(activityObj, bundleObj);
+            }
+        } catch (NoSuchMethodException ignored) {
+        }
+
+        java.lang.reflect.Method onResume =
+            findLifecycleMethod(activityClass, "onResume");
+        if (onResume != null) {
+            onResume.setAccessible(true);
+            onResume.invoke(activityObj);
+        }
+        System.out.println("[Muplar/ART] onStart/onResume completed successfully");
+
+        try {
+            Object decor = getField(activityObj, "mDecor");
+            if (decor == null) {
+                Object window = getField(activityObj, "mWindow");
+                if (window != null) {
+                    java.lang.reflect.Method getDecorView =
+                        window.getClass().getMethod("getDecorView");
+                    decor = getDecorView.invoke(window);
+                    if (decor != null) {
+                        setField(activityObj, "mDecor", decor);
+                    }
+                }
+            }
+            java.lang.reflect.Method makeVisible =
+                Class.forName("android.app.Activity").getDeclaredMethod("makeVisible");
+            makeVisible.setAccessible(true);
+            makeVisible.invoke(activityObj);
+            System.out.println("[Muplar/ART] makeVisible completed successfully");
+            if (decor instanceof android.view.View) {
+                MuplarScreenshot.captureIfRequested((android.view.View) decor);
+            }
+        } catch (Throwable t) {
+            System.err.println("[Muplar/ART] failed to invoke makeVisible: " + t.getMessage());
+            t.printStackTrace();
+        }
+    }
+
+    private static java.lang.reflect.Method findLifecycleMethod(
+        Class<?> type,
+        String name,
+        Class<?>... parameterTypes)
+        throws NoSuchMethodException {
+        Class<?> current = type;
+        while (current != null) {
+            try {
+                return current.getDeclaredMethod(name, parameterTypes);
+            } catch (NoSuchMethodException ignored) {
+                current = current.getSuperclass();
+            }
+        }
+        throw new NoSuchMethodException(name);
+    }
+
+    private static void runMainLooper() {
+        try {
+            System.out.println("[Muplar/ART] entering main looper");
+            Class<?> looperClass = Class.forName("android.os.Looper");
+            java.lang.reflect.Method loop =
+                looperClass.getDeclaredMethod("loop");
+            loop.setAccessible(true);
+            loop.invoke(null);
+        } catch (Throwable t) {
+            Throwable detail = t instanceof java.lang.reflect.InvocationTargetException
+                && ((java.lang.reflect.InvocationTargetException)t).getCause() != null
+                    ? ((java.lang.reflect.InvocationTargetException)t).getCause()
+                    : t;
+            System.err.println("[Muplar/ART] main looper exited: "
+                + detail.getClass().getName() + ": " + detail.getMessage());
+            detail.printStackTrace(System.err);
+        }
+    }
+
+    private static void attachBaseContext(Object activityObj, Object context) {
+        try {
+            Class<?> contextWrapper =
+                Class.forName("android.content.ContextWrapper");
+            java.lang.reflect.Method attachBaseContext =
+                contextWrapper.getDeclaredMethod(
+                    "attachBaseContext",
+                    Class.forName("android.content.Context"));
+            attachBaseContext.setAccessible(true);
+            attachBaseContext.invoke(activityObj, context);
+            setField(activityObj, "mBase", context);
+            if (context instanceof android.content.Context) {
+                setField(activityObj, "mTheme",
+                    ((android.content.Context) context).getTheme());
+            }
+            System.out.println("[Muplar/ART] base context attached");
+        } catch (Throwable t) {
+            System.err.println("[Muplar/ART] base context attach failed: "
+                + t.getClass().getName() + ": " + t.getMessage());
+            t.printStackTrace(System.err);
+            try {
+                setField(activityObj, "mBase", context);
+                if (context instanceof android.content.Context) {
+                    setField(activityObj, "mTheme",
+                        ((android.content.Context) context).getTheme());
+                }
+                System.out.println("[Muplar/ART] base context field attached");
+            } catch (Throwable fieldError) {
+                System.err.println("[Muplar/ART] base context field attach failed: "
+                    + fieldError.getClass().getName() + ": "
+                    + fieldError.getMessage());
+            }
+        }
+        try {
+            setField(activityObj, "mBase", context);
+        } catch (Throwable ignored) {
+        }
+    }
+
+    private static void attachActivityInfo(Object activityObj,
+                                           String packageName,
+                                           String activityName,
+                                           String apkPath) {
+        try {
+            Class<?> activityInfoClass =
+                Class.forName("android.content.pm.ActivityInfo");
+            Object info = activityInfoClass.getDeclaredConstructor().newInstance();
+            setField(info, "packageName", packageName);
+            setField(info, "name", activityName);
+            setField(info, "parentActivityName", null);
+            int theme = 0;
+
+            Class<?> applicationInfoClass =
+                Class.forName("android.content.pm.ApplicationInfo");
+            Object appInfo = applicationInfoClass.getDeclaredConstructor().newInstance();
+            setField(appInfo, "packageName", packageName);
+            setField(appInfo, "sourceDir", apkPath);
+            setField(appInfo, "publicSourceDir", apkPath);
+            setField(appInfo, "dataDir", "/data/user/0/" + packageName);
+            setField(appInfo, "uid", Integer.valueOf(1000));
+            setField(appInfo, "flags", Integer.valueOf(1));
+            setField(appInfo, "targetSdkVersion", Integer.valueOf(30));
+            try {
+                android.content.res.Resources resources =
+                    new MuplarContext(packageName, apkPath,
+                        ArtApkMain.class.getClassLoader()).getResources();
+                theme = resources.getIdentifier(
+                    "LauncherTheme", "style", packageName);
+                if (theme == 0) {
+                    theme = resources.getIdentifier("AppTheme", "style", packageName);
+                }
+                if (theme != 0) {
+                    setField(appInfo, "theme", Integer.valueOf(theme));
+                    setField(info, "theme", Integer.valueOf(theme));
+                }
+            } catch (Throwable ignored) {
+            }
+            setField(info, "applicationInfo", appInfo);
+
+            setField(activityObj, "mActivityInfo", info);
+            System.out.println("[Muplar/ART] activity info attached theme=0x"
+                + Integer.toHexString(theme));
+        } catch (Throwable t) {
+            System.err.println("[Muplar/ART] activity info attach failed: "
+                + t.getClass().getName() + ": " + t.getMessage());
+        }
+    }
+
+    private static void attachFragmentHost(Object activityObj) {
+        try {
+            Object fragments = getField(activityObj, "mFragments");
+            if (fragments == null) {
+                return;
+            }
+            java.lang.reflect.Method attachHost =
+                fragments.getClass().getMethod(
+                    "attachHost", Class.forName("android.app.Fragment"));
+            attachHost.invoke(fragments, new Object[] { null });
+            System.out.println("[Muplar/ART] fragment host attached");
+        } catch (Throwable t) {
+            System.err.println("[Muplar/ART] fragment host attach failed: "
+                + t.getClass().getName() + ": " + t.getMessage());
+        }
+    }
+
+    private static void attachApplication(Object activityObj,
+                                          String packageName,
+                                          String apkPath,
+                                          ClassLoader loader) {
+        try {
+            Object context = new MuplarContext(packageName, apkPath, loader);
+            Object application = new MuplarApplication((android.content.Context)context);
+            try {
+                java.lang.reflect.Method attachBaseContext =
+                    Class.forName("android.content.ContextWrapper")
+                        .getDeclaredMethod(
+                            "attachBaseContext",
+                            Class.forName("android.content.Context"));
+                attachBaseContext.setAccessible(true);
+                attachBaseContext.invoke(application, context);
+            } catch (Throwable ignored) {
+                try {
+                    setField(application, "mBase", context);
+                } catch (Throwable ignoredField) {
+                }
+            }
+            setField(application, "mBase", context);
+            setField(activityObj, "mApplication", application);
+            attachApplicationToActivityThread(application);
+            System.out.println("[Muplar/ART] application attached");
+        } catch (Throwable t) {
+            System.err.println("[Muplar/ART] application attach failed: "
+                + t.getClass().getName() + ": " + t.getMessage());
+        }
+    }
+
+    @SuppressWarnings("unchecked")
+    private static void attachApplicationToActivityThread(Object application) {
+        try {
+            Class<?> activityThreadClass =
+                Class.forName("android.app.ActivityThread");
+            java.lang.reflect.Method current =
+                activityThreadClass.getMethod("currentActivityThread");
+            Object thread = current.invoke(null);
+            if (thread == null) {
+                return;
+            }
+            setField(thread, "mInitialApplication", application);
+            try {
+                Object allApplications = getField(thread, "mAllApplications");
+                if (!(allApplications instanceof java.util.List)) {
+                    allApplications = new java.util.ArrayList<Object>();
+                    setField(thread, "mAllApplications", allApplications);
+                }
+                java.util.List<Object> list =
+                    (java.util.List<Object>)allApplications;
+                if (!list.contains(application)) {
+                    list.add(application);
+                }
+            } catch (Throwable ignored) {
+            }
+            System.out.println("[Muplar/ART] ActivityThread application attached");
+        } catch (Throwable t) {
+            System.err.println("[Muplar/ART] ActivityThread application attach failed: "
+                + t.getClass().getName() + ": " + t.getMessage());
+        }
+    }
+
+    private static void attachWindow(Object activityObj,
+                                     String packageName,
+                                     String apkPath,
+                                     ClassLoader loader) {
+        try {
+            Object context = new MuplarContext(packageName, apkPath, loader);
+            Object window = MuplarWindow.create(
+                (android.content.Context) context);
+            Object windowManager =
+                ((android.content.Context) context).getSystemService(
+                    android.content.Context.WINDOW_SERVICE);
+            if (windowManager != null) {
+                java.lang.reflect.Method setWindowManager =
+                    Class.forName("android.view.Window").getMethod(
+                        "setWindowManager",
+                        Class.forName("android.view.WindowManager"),
+                        Class.forName("android.os.IBinder"),
+                        String.class,
+                        Boolean.TYPE);
+                setWindowManager.invoke(
+                    window,
+                    windowManager,
+                    new android.os.Binder(),
+                    packageName,
+                    Boolean.FALSE);
+                java.lang.reflect.Method getWindowManager =
+                    Class.forName("android.view.Window").getMethod(
+                        "getWindowManager");
+                setField(activityObj, "mWindowManager",
+                    getWindowManager.invoke(window));
+            }
+            setField(activityObj, "mWindow", window);
+            System.out.println("[Muplar/ART] window attached");
+        } catch (Throwable t) {
+            System.err.println("[Muplar/ART] window attach failed: "
+                + t.getClass().getName() + ": " + t.getMessage());
+            t.printStackTrace(System.err);
+        }
+    }
+
+    private static void attachMainThread(Object activityObj) {
+        try {
+            Class<?> activityThreadClass =
+                Class.forName("android.app.ActivityThread");
+            java.lang.reflect.Method current =
+                activityThreadClass.getMethod("currentActivityThread");
+            Object thread = current.invoke(null);
+            if (thread == null) {
+                return;
+            }
+            setField(activityObj, "mMainThread", thread);
+            System.out.println("[Muplar/ART] main thread attached");
+        } catch (Throwable t) {
+            System.err.println("[Muplar/ART] main thread attach failed: "
+                + t.getClass().getName() + ": " + t.getMessage());
+        }
+    }
+
+    private static void attachInstrumentation(Object activityObj) {
+        try {
+            Object instrumentation =
+                Class.forName("android.app.Instrumentation")
+                    .getDeclaredConstructor().newInstance();
+            setField(activityObj, "mInstrumentation", instrumentation);
+
+            Class<?> activityThreadClass =
+                Class.forName("android.app.ActivityThread");
+            java.lang.reflect.Method current =
+                activityThreadClass.getMethod("currentActivityThread");
+            Object thread = current.invoke(null);
+            if (thread != null) {
+                setField(thread, "mInstrumentation", instrumentation);
+            }
+            System.out.println("[Muplar/ART] instrumentation attached");
+        } catch (Throwable t) {
+            System.err.println("[Muplar/ART] instrumentation attach failed: "
+                + t.getClass().getName() + ": " + t.getMessage());
+        }
+    }
+
+    private static Object getField(Object target, String name)
+        throws Exception {
+        Class<?> type = target.getClass();
+        while (type != null) {
+            try {
+                java.lang.reflect.Field field = type.getDeclaredField(name);
+                field.setAccessible(true);
+                return field.get(target);
+            } catch (NoSuchFieldException ignored) {
+                type = type.getSuperclass();
+            }
+        }
+        throw new NoSuchFieldException(name);
+    }
+
+    private static void setField(Object target, String name, Object value)
+        throws Exception {
+        Class<?> type = target.getClass();
+        while (type != null) {
+            try {
+                java.lang.reflect.Field field = type.getDeclaredField(name);
+                field.setAccessible(true);
+                field.set(target, value);
+                return;
+            } catch (NoSuchFieldException ignored) {
+                type = type.getSuperclass();
+            }
+        }
+        throw new NoSuchFieldException(name);
+    }
+
+    private static void setStaticField(Class<?> type, String name, Object value)
+        throws Exception {
+        while (type != null) {
+            try {
+                java.lang.reflect.Field field = type.getDeclaredField(name);
+                field.setAccessible(true);
+                try {
+                    field.set(null, value);
+                } catch (IllegalAccessException finalField) {
+                    setStaticFieldWithUnsafe(field, value);
+                }
+                return;
+            } catch (NoSuchFieldException ignored) {
+                type = type.getSuperclass();
+            }
+        }
+        throw new NoSuchFieldException(name);
+    }
+
+    private static void setStaticFieldWithUnsafe(java.lang.reflect.Field field,
+                                                 Object value)
+        throws Exception {
+        java.lang.reflect.Field unsafeField =
+            Class.forName("sun.misc.Unsafe").getDeclaredField("theUnsafe");
+        unsafeField.setAccessible(true);
+        Object unsafe = unsafeField.get(null);
+        Object base = unsafe.getClass()
+            .getMethod("staticFieldBase", java.lang.reflect.Field.class)
+            .invoke(unsafe, field);
+        long offset = ((Long) unsafe.getClass()
+            .getMethod("staticFieldOffset", java.lang.reflect.Field.class)
+            .invoke(unsafe, field)).longValue();
+        Class<?> fieldType = field.getType();
+        if (fieldType == Integer.TYPE) {
+            unsafe.getClass()
+                .getMethod("putInt", Object.class, Long.TYPE, Integer.TYPE)
+                .invoke(unsafe, base, Long.valueOf(offset), value);
+        } else if (fieldType == Long.TYPE) {
+            unsafe.getClass()
+                .getMethod("putLong", Object.class, Long.TYPE, Long.TYPE)
+                .invoke(unsafe, base, Long.valueOf(offset), value);
+        } else if (fieldType == Boolean.TYPE) {
+            unsafe.getClass()
+                .getMethod("putBoolean", Object.class, Long.TYPE, Boolean.TYPE)
+                .invoke(unsafe, base, Long.valueOf(offset), value);
+        } else {
+            unsafe.getClass()
+                .getMethod("putObject", Object.class, Long.TYPE, Object.class)
+                .invoke(unsafe, base, Long.valueOf(offset), value);
+        }
+    }
+
+    private static Object allocateWithoutConstructor(Class<?> type)
+        throws Exception {
+        java.lang.reflect.Field field =
+            Class.forName("sun.misc.Unsafe").getDeclaredField("theUnsafe");
+        field.setAccessible(true);
+        Object unsafe = field.get(null);
+        java.lang.reflect.Method allocateInstance =
+            unsafe.getClass().getMethod("allocateInstance", Class.class);
+        return allocateInstance.invoke(unsafe, type);
     }
 
     private static ClassLoader createApkClassLoader(

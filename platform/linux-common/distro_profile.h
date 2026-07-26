@@ -5,7 +5,8 @@
 #include <string>
 #include <vector>
 
-namespace muplar::runtime::linux_common {
+namespace muplar::runtime::linux_common
+{
 
 struct DistroProfile {
     std::string id;
@@ -17,8 +18,9 @@ struct DistroProfile {
 
 inline std::string normalize_distro_id(std::string distro)
 {
-    std::transform(distro.begin(), distro.end(), distro.begin(),
-                   [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+    std::transform(
+        distro.begin(), distro.end(), distro.begin(),
+        [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
     if (distro == "opensuse" || distro == "open-suse" || distro == "suse")
         return "opensuse";
     if (distro.empty() || distro == "generic linux")
@@ -144,7 +146,7 @@ inline DistroProfile distro_profile(std::string distro)
     };
 }
 
-inline std::string terminal_install_hint(const DistroProfile& profile)
+inline std::string terminal_install_hint(const DistroProfile &profile)
 {
     std::string hint = profile.display_name + " terminal packages";
     if (!profile.package_manager.empty())
@@ -159,12 +161,17 @@ inline std::string terminal_install_hint(const DistroProfile& profile)
     return hint;
 }
 
-inline std::string os_release_content(const DistroProfile& profile)
+inline std::string os_release_content(const DistroProfile &profile)
 {
-    return "NAME=\"" + profile.display_name + "\"\n"
-           "ID=" + profile.id + "\n"
-           "PRETTY_NAME=\"" + profile.display_name + " (Muplar)\"\n"
+    return "NAME=\"" + profile.display_name +
+           "\"\n"
+           "ID=" +
+           profile.id +
+           "\n"
+           "PRETTY_NAME=\"" +
+           profile.display_name +
+           " (Muplar)\"\n"
            "HOME_URL=\"https://muplar.local/\"\n";
 }
 
-} // namespace muplar::runtime::linux_common
+}  // namespace muplar::runtime::linux_common

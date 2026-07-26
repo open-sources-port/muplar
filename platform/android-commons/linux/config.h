@@ -16,16 +16,17 @@
 
 /* Convert bits to how many unsigned longs are needed */
 #ifndef BITS_TO_LONGS
-#define BITS_TO_LONGS(bits) (((bits) + (sizeof(unsigned long)*8 - 1)) / (sizeof(unsigned long)*8))
+#define BITS_TO_LONGS(bits) \
+    (((bits) + (sizeof(unsigned long) * 8 - 1)) / (sizeof(unsigned long) * 8))
 #endif
 
 /* Compiler-agnostic alignment macro */
 #if defined(_MSC_VER)
-  #define ALIGNED(x) __declspec(align(x))
+#define ALIGNED(x) __declspec(align(x))
 #elif defined(__GNUC__) || defined(__clang__)
-  #define ALIGNED(x) __attribute__((aligned(x)))
+#define ALIGNED(x) __attribute__((aligned(x)))
 #else
-  #define ALIGNED(x)
+#define ALIGNED(x)
 #endif
 
 #endif /* CROSS_PLATFORM_CONFIG_H */

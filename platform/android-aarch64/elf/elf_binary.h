@@ -6,23 +6,24 @@
 
 #include "virtual_memory.h"
 
-namespace muplar::runtime::elf {
+namespace muplar::runtime::elf
+{
 
-    struct MemorySegment {
-        uint64_t guest = 0;
-        uint64_t size  = 0;
+struct MemorySegment {
+    uint64_t guest = 0;
+    uint64_t size = 0;
 
-        uint32_t prot = 0;
-    };
+    uint32_t prot = 0;
+};
 
-    struct ElfBinary {
-        bool valid = false;
+struct ElfBinary {
+    bool valid = false;
 
-        uint64_t entrypoint = 0;
+    uint64_t entrypoint = 0;
 
-        memory::VirtualMemory vm;
+    memory::VirtualMemory vm;
 
-        std::vector<MemorySegment> segments;
-    };
+    std::vector<MemorySegment> segments;
+};
 
-}
+}  // namespace muplar::runtime::elf
