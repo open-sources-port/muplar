@@ -18,11 +18,14 @@
 
 #include "prefix.h"
 #include "distro_profile.h"
+#include "muplard_client.h"
 #include "supervisor_service.h"
+#import "AndroidDeviceShell.h"
 #import "WWNCompositorBridge.h"
 #import "WWNWindow.h"
 
 namespace prefix = muplar::runtime::prefix;
+namespace services = muplar::services;
 namespace supervisor = muplar::supervisor;
 
 static NSString* NSStringFromStdString(const std::string& value)
@@ -635,6 +638,35 @@ static NSString* ParseLnkFile(const std::filesystem::path& lnkPath)
 - (void)prestartLinuxSessionIfNeeded:(prefix::PrefixLayout*)selected;
 - (void)launchAndroidApp:(MuplarAppShortcut*)app
                    prefix:(prefix::PrefixLayout*)selected;
+- (NSString*)androidDeviceKeyForPrefix:(prefix::PrefixLayout*)selected;
+- (AndroidDeviceShell*)androidDeviceShellForPrefix:(prefix::PrefixLayout*)selected
+                                               app:(MuplarAppShortcut*)app
+                                        sessionKey:(NSString*)sessionKey;
+- (void)recordAndroidDeviceEvent:(NSString*)event
+                    tabIdentifier:(NSString*)tabIdentifier
+                          logPath:(NSString*)logPath;
+- (void)sendAndroidDeviceAction:(NSString*)action
+                   tabIdentifier:(NSString*)tabIdentifier
+                      socketPath:(NSString*)socketPath
+                         logPath:(NSString*)logPath;
+- (NSDictionary<NSString*, NSString*>*)androidLaunchMetadataForApp:
+    (MuplarAppShortcut*)app
+                                                           prefix:
+                                                               (prefix::PrefixLayout*)selected;
+- (void)prepareAndroidLaunchMetadataForApp:(MuplarAppShortcut*)app
+                                    rootfs:(NSString*)rootfsPath
+                                completion:
+                                    (void (^)(NSDictionary<NSString*, NSString*>* metadata))
+                                        completion;
+- (NSDictionary<NSString*, NSString*>*)androidLaunchMetadataForAppPath:
+                                          (NSString*)appPath
+                                                           rootfs:
+                                                               (NSString*)rootfsPath;
+- (void)sendAndroidDeviceAction:(NSString*)action
+                   tabIdentifier:(NSString*)tabIdentifier
+                  launchMetadata:(NSDictionary<NSString*, NSString*>*)metadata
+                      socketPath:(NSString*)socketPath
+                         logPath:(NSString*)logPath;
 - (void)waitForLinuxWindowForKey:(NSString*)key
                            token:(NSUUID*)token
            baselineWindowNumbers:(NSSet<NSNumber*>*)baselineWindowNumbers
@@ -664,6 +696,16 @@ static NSString* ParseLnkFile(const std::filesystem::path& lnkPath)
     NSMutableDictionary<NSString*, NSUUID*>* _linuxLaunchTokens;
     NSMutableDictionary<NSString*, NSTask*>* _linuxSessionTasks;
     NSMutableDictionary<NSString*, NSTask*>* _packageInstallTasks;
+    NSMutableDictionary<NSString*, AndroidDeviceShell*>* _androidDeviceShells;
+    NSMutableDictionary<NSString*, NSTask*>* _androidSessionTasks;
+    NSMutableDictionary<NSString*, NSTask*>* _pendingAndroidSessionTasks;
+    NSMutableDictionary<NSString*, NSString*>* _androidSessionAppKeys;
+    NSMutableDictionary<NSString*, NSString*>* _androidSessionTabIdentifiers;
+    NSMutableDictionary<NSString*, NSDictionary<NSString*, NSString*>*>*
+        _androidTabLaunchMetadata;
+    NSMutableSet<NSString*>* _startingAndroidSessionKeys;
+    NSMutableSet<NSString*>* _cancelledAndroidSessionKeys;
+    NSMutableSet<NSString*>* _stoppingAndroidSessionKeys;
     NSTask* _wawonaTask;
     std::unique_ptr<supervisor::SupervisorService> _supervisor;
     dispatch_source_t _termSignalSource;
@@ -743,6 +785,15 @@ static NSString* ParseLnkFile(const std::filesystem::path& lnkPath)
         _linuxLaunchTokens = [NSMutableDictionary dictionary];
         _linuxSessionTasks = [NSMutableDictionary dictionary];
         _packageInstallTasks = [NSMutableDictionary dictionary];
+        _androidDeviceShells = [NSMutableDictionary dictionary];
+        _androidSessionTasks = [NSMutableDictionary dictionary];
+        _pendingAndroidSessionTasks = [NSMutableDictionary dictionary];
+        _androidSessionAppKeys = [NSMutableDictionary dictionary];
+        _androidSessionTabIdentifiers = [NSMutableDictionary dictionary];
+        _androidTabLaunchMetadata = [NSMutableDictionary dictionary];
+        _startingAndroidSessionKeys = [NSMutableSet set];
+        _cancelledAndroidSessionKeys = [NSMutableSet set];
+        _stoppingAndroidSessionKeys = [NSMutableSet set];
         _supervisor = std::make_unique<supervisor::SupervisorService>();
     }
     return self;
@@ -889,6 +940,27 @@ static NSString* ParseLnkFile(const std::filesystem::path& lnkPath)
         }
     }
     [_runningTasks removeAllObjects];
+    NSDictionary<NSString*, NSTask*>* androidSessionTasksCopy =
+        [_androidSessionTasks copy];
+    for (NSTask* task in androidSessionTasksCopy.allValues) {
+        if (task.isRunning)
+            [task terminate];
+    }
+    NSDictionary<NSString*, NSTask*>* pendingAndroidTasksCopy =
+        [_pendingAndroidSessionTasks copy];
+    for (NSTask* task in pendingAndroidTasksCopy.allValues) {
+        if (task.isRunning)
+            [task terminate];
+    }
+    [_androidSessionTasks removeAllObjects];
+    [_pendingAndroidSessionTasks removeAllObjects];
+    [_androidSessionAppKeys removeAllObjects];
+    [_androidSessionTabIdentifiers removeAllObjects];
+    [_androidTabLaunchMetadata removeAllObjects];
+    [_startingAndroidSessionKeys removeAllObjects];
+    [_cancelledAndroidSessionKeys removeAllObjects];
+    [_stoppingAndroidSessionKeys removeAllObjects];
+    [_androidDeviceShells removeAllObjects];
     for (NSTask* task in _packageInstallTasks.allValues) {
         if (task.isRunning)
             [task terminate];
@@ -3106,6 +3178,21 @@ static NSString* MapLinuxIconToSFSymbol(NSString* icon)
 - (NSString*)statusForApp:(MuplarAppShortcut*)app
 {
     NSString* key = [self appKeyForApp:app];
+    prefix::PrefixLayout* selected = [self selectedPrefix];
+    if (selected && selected->kind == prefix::PrefixKind::Android) {
+        NSString* deviceKey = [self androidDeviceKeyForPrefix:selected];
+        NSString* activeKey = _androidSessionAppKeys[deviceKey];
+        if (activeKey && [activeKey isEqualToString:key]) {
+            if ([_stoppingAndroidSessionKeys containsObject:deviceKey])
+                return @"Stopping...";
+            NSTask* task = _androidSessionTasks[deviceKey];
+            if (task && task.isRunning)
+                return @"Running";
+        }
+        if ([_launchingAppPaths containsObject:key])
+            return @"Launching...";
+        return @"Stopped";
+    }
     if ([_launchingAppPaths containsObject:key]) {
         return @"Launching...";
     }
@@ -4515,10 +4602,68 @@ static NSString* MapLinuxIconToSFSymbol(NSString* icon)
         return;
     }
 
+    NSString* key = [self appKeyForApp:app];
+    NSString* deviceKey = [self androidDeviceKeyForPrefix:selected];
+    BOOL isLauncherApp = app.name.length > 0 &&
+        [app.name rangeOfString:@"launcher"
+                        options:NSCaseInsensitiveSearch].location != NSNotFound;
+    NSString* tabIdentifier = isLauncherApp ? @"launcher" : key;
+    NSString* tabTitle = isLauncherApp ? @"Launcher" : (app.name ?: @"App");
+    NSString* sessionSocketPath = NSStringFromPath(selected->root / "run" / "muplard.sock");
+    NSString* sessionLogPath =
+        NSStringFromPath(muplar::runtime::prefix::main_log_path(*selected));
+    NSString* rootfsPath = NSStringFromPath(selected->rootfs);
+    AndroidDeviceShell* shell =
+        [self androidDeviceShellForPrefix:selected app:app sessionKey:deviceKey];
+    [shell focusOrCreateTabWithIdentifier:tabIdentifier title:tabTitle];
+
+    NSTask* existingSession = _androidSessionTasks[deviceKey];
+    BOOL existingRunning = existingSession && existingSession.isRunning;
+    BOOL sessionIsStarting = [_startingAndroidSessionKeys containsObject:deviceKey] ||
+        _pendingAndroidSessionTasks[deviceKey] != nil;
+    if (existingRunning || sessionIsStarting) {
+        _androidSessionAppKeys[deviceKey] = key;
+        _androidSessionTabIdentifiers[deviceKey] = tabIdentifier;
+        [_cancelledAndroidSessionKeys removeObject:deviceKey];
+        [_stoppingAndroidSessionKeys removeObject:deviceKey];
+        [shell showLaunchingApp:app.name];
+        [self prepareAndroidLaunchMetadataForApp:app
+                                          rootfs:rootfsPath
+                                      completion:
+                                          ^(NSDictionary<NSString*, NSString*>*
+                                                metadata) {
+                                              if (metadata)
+                                                  self->_androidTabLaunchMetadata
+                                                      [tabIdentifier] =
+                                                          metadata;
+                                              [shell showRunningApp:app.name];
+                                              if (existingRunning) {
+                                                  [self sendAndroidDeviceAction:
+                                                            @"focus-tab"
+                                                                  tabIdentifier:
+                                                                      tabIdentifier
+                                                                 launchMetadata:
+                                                                     metadata
+                                                                     socketPath:
+                                                                         sessionSocketPath
+                                                                        logPath:
+                                                                            sessionLogPath];
+                                              }
+                                          }];
+        [_appsTableView reloadData];
+        return;
+    }
+
+    if ([_stoppingAndroidSessionKeys containsObject:deviceKey]) {
+        [shell showStoppedWithMessage:@"Android session is stopping."];
+        [_appsTableView reloadData];
+        return;
+    }
+
     NSTask* task = [[NSTask alloc] init];
     task.launchPath = mupBin;
     task.arguments = @[@"--prefix", NSStringFromStdString(selected->name),
-                       @"--apk", @"--host-window", app.path];
+                       @"--apk", app.path];
 
     NSMutableDictionary<NSString*, NSString*>* env =
         [NSProcessInfo.processInfo.environment mutableCopy];
@@ -4533,17 +4678,45 @@ static NSString* MapLinuxIconToSFSymbol(NSString* icon)
     task.environment = env;
     [self setupLoggingForTask:task prefix:selected appName:app.name];
 
-    NSString* key = [self appKeyForApp:app];
+    [shell showLaunchingApp:app.name];
     [_launchingAppPaths addObject:key];
+    _androidSessionAppKeys[deviceKey] = key;
+    _androidSessionTabIdentifiers[deviceKey] = tabIdentifier;
+    _pendingAndroidSessionTasks[deviceKey] = task;
+    [_startingAndroidSessionKeys addObject:deviceKey];
+    [_cancelledAndroidSessionKeys removeObject:deviceKey];
     [_appsTableView reloadData];
 
     task.terminationHandler = ^(NSTask* finished) {
         dispatch_async(dispatch_get_main_queue(), ^{
             [self->_launchingAppPaths removeObject:key];
+            NSString* activeKey = self->_androidSessionAppKeys[deviceKey];
+            if (self->_androidSessionTasks[deviceKey] == finished)
+                [self->_androidSessionTasks removeObjectForKey:deviceKey];
+            if (self->_pendingAndroidSessionTasks[deviceKey] == finished)
+                [self->_pendingAndroidSessionTasks removeObjectForKey:deviceKey];
+            [self->_startingAndroidSessionKeys removeObject:deviceKey];
+            if (activeKey)
+                [self->_runningTasks removeObjectForKey:activeKey];
             [self->_runningTasks removeObjectForKey:key];
+            if (activeKey && [activeKey isEqualToString:key])
+                [self->_androidSessionAppKeys removeObjectForKey:deviceKey];
+            [self->_androidSessionTabIdentifiers removeObjectForKey:deviceKey];
+            [self->_cancelledAndroidSessionKeys removeObject:deviceKey];
+            [self->_stoppingAndroidSessionKeys removeObject:deviceKey];
             [self->_appsTableView reloadData];
             int status = finished.terminationStatus;
-            if (status != 0 && status != 143 && status != 130) {
+            AndroidDeviceShell* activeShell = self->_androidDeviceShells[deviceKey];
+            BOOL expectedStop =
+                status == 0 || status == 15 || status == 130 || status == 143;
+            if (activeShell == shell) {
+                NSString* message = expectedStop
+                    ? @"Android session stopped."
+                    : [NSString stringWithFormat:@"Android session stopped with exit code %d.",
+                                                 status];
+                [activeShell showStoppedWithMessage:message];
+            }
+            if (!expectedStop) {
                 [self showError:[NSString stringWithFormat:
                     @"%@ stopped with exit code %d. See the instance log for details.",
                     app.name, status]];
@@ -4551,17 +4724,352 @@ static NSString* MapLinuxIconToSFSymbol(NSString* icon)
         });
     };
 
-    @try {
-        [task launch];
-        _runningTasks[key] = task;
-        [_launchingAppPaths removeObject:key];
-        [_appsTableView reloadData];
-    } @catch (NSException* ex) {
-        [_launchingAppPaths removeObject:key];
-        [_appsTableView reloadData];
-        [self showError:[NSString stringWithFormat:
-            @"Failed to launch Android app: %@", ex.reason]];
+    dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
+        NSDictionary<NSString*, NSString*>* launchMetadata =
+            [self androidLaunchMetadataForAppPath:app.path rootfs:rootfsPath];
+        __block BOOL cancelledBeforeLaunch = NO;
+        dispatch_sync(dispatch_get_main_queue(), ^{
+            cancelledBeforeLaunch =
+                [self->_cancelledAndroidSessionKeys containsObject:deviceKey];
+        });
+        if (cancelledBeforeLaunch) {
+            dispatch_async(dispatch_get_main_queue(), ^{
+                [self->_launchingAppPaths removeObject:key];
+                if (self->_pendingAndroidSessionTasks[deviceKey] == task)
+                    [self->_pendingAndroidSessionTasks removeObjectForKey:deviceKey];
+                [self->_startingAndroidSessionKeys removeObject:deviceKey];
+                [self->_cancelledAndroidSessionKeys removeObject:deviceKey];
+                [self->_stoppingAndroidSessionKeys removeObject:deviceKey];
+                [self->_androidSessionAppKeys removeObjectForKey:deviceKey];
+                [self->_androidSessionTabIdentifiers removeObjectForKey:
+                                                       deviceKey];
+                [self->_appsTableView reloadData];
+            });
+            return;
+        }
+        @try {
+            [task launch];
+            dispatch_async(dispatch_get_main_queue(), ^{
+                if (!task.isRunning) {
+                    [self->_launchingAppPaths removeObject:key];
+                    if (self->_pendingAndroidSessionTasks[deviceKey] == task)
+                        [self->_pendingAndroidSessionTasks removeObjectForKey:
+                                                            deviceKey];
+                    [self->_startingAndroidSessionKeys removeObject:deviceKey];
+                    [self->_appsTableView reloadData];
+                    return;
+                }
+                if ([self->_cancelledAndroidSessionKeys containsObject:deviceKey]) {
+                    [task terminate];
+                    return;
+                }
+                if (launchMetadata)
+                    self->_androidTabLaunchMetadata[tabIdentifier] =
+                        launchMetadata;
+                NSString* activeTab =
+                    self->_androidSessionTabIdentifiers[deviceKey] ?:
+                    tabIdentifier;
+                NSDictionary<NSString*, NSString*>* activeMetadata =
+                    self->_androidTabLaunchMetadata[activeTab] ?:
+                    launchMetadata;
+                self->_androidSessionTasks[deviceKey] = task;
+                if (self->_pendingAndroidSessionTasks[deviceKey] == task)
+                    [self->_pendingAndroidSessionTasks removeObjectForKey:
+                                                        deviceKey];
+                [self->_launchingAppPaths removeObject:key];
+                [self->_startingAndroidSessionKeys removeObject:deviceKey];
+                [self->_stoppingAndroidSessionKeys removeObject:deviceKey];
+                [shell showRunningApp:app.name];
+                [self sendAndroidDeviceAction:@"focus-tab"
+                                tabIdentifier:activeTab
+                               launchMetadata:activeMetadata
+                                   socketPath:sessionSocketPath
+                                      logPath:sessionLogPath];
+                [self->_appsTableView reloadData];
+            });
+        } @catch (NSException* ex) {
+            dispatch_async(dispatch_get_main_queue(), ^{
+                [self->_launchingAppPaths removeObject:key];
+                [self->_androidSessionAppKeys removeObjectForKey:deviceKey];
+                [self->_androidSessionTabIdentifiers removeObjectForKey:
+                                                       deviceKey];
+                if (self->_pendingAndroidSessionTasks[deviceKey] == task)
+                    [self->_pendingAndroidSessionTasks removeObjectForKey:
+                                                        deviceKey];
+                [self->_startingAndroidSessionKeys removeObject:deviceKey];
+                [self->_cancelledAndroidSessionKeys removeObject:deviceKey];
+                [shell showStoppedWithMessage:@"Failed to start Android session."];
+                [self->_appsTableView reloadData];
+                [self showError:[NSString stringWithFormat:
+                    @"Failed to launch Android app: %@", ex.reason]];
+            });
+        }
+    });
+}
+
+- (NSString*)androidDeviceKeyForPrefix:(prefix::PrefixLayout*)selected
+{
+    if (!selected)
+        return @"android";
+    return [NSString stringWithFormat:@"%s", selected->name.c_str()];
+}
+
+- (AndroidDeviceShell*)androidDeviceShellForPrefix:(prefix::PrefixLayout*)selected
+                                               app:(MuplarAppShortcut*)app
+                                        sessionKey:(NSString*)sessionKey
+{
+    NSString* deviceKey = [self androidDeviceKeyForPrefix:selected];
+    AndroidDeviceShell* shell = _androidDeviceShells[deviceKey];
+    if (!shell) {
+        NSString* prefixName =
+            selected ? NSStringFromStdString(selected->name) : @"Android";
+        shell = [[AndroidDeviceShell alloc] initWithPrefixName:prefixName];
+        _androidDeviceShells[deviceKey] = shell;
     }
+    __weak PrefixManagerAppDelegate* weakSelf = self;
+    __weak AndroidDeviceShell* weakShell = shell;
+    NSString* capturedSessionKey = [sessionKey copy];
+    NSString* capturedDeviceKey = [deviceKey copy];
+    NSString* capturedLogPath = selected
+        ? NSStringFromPath(muplar::runtime::prefix::main_log_path(*selected))
+        : nil;
+    NSString* capturedSocketPath = selected
+        ? NSStringFromPath(selected->root / "run" / "muplard.sock")
+        : nil;
+    shell.closeHandler = ^{
+        PrefixManagerAppDelegate* strongSelf = weakSelf;
+        AndroidDeviceShell* strongShell = weakShell;
+        if (!strongSelf || !strongShell)
+            return;
+        NSTask* running = strongSelf->_androidSessionTasks[capturedSessionKey];
+        NSTask* pending =
+            strongSelf->_pendingAndroidSessionTasks[capturedSessionKey];
+        [strongSelf->_cancelledAndroidSessionKeys addObject:capturedSessionKey];
+        [strongSelf->_stoppingAndroidSessionKeys addObject:capturedSessionKey];
+        if (running.isRunning) {
+            [running terminate];
+        } else if (pending.isRunning) {
+            [pending terminate];
+        } else {
+            [strongSelf->_androidSessionTasks removeObjectForKey:capturedSessionKey];
+            [strongSelf->_pendingAndroidSessionTasks removeObjectForKey:
+                                                  capturedSessionKey];
+            [strongSelf->_androidSessionAppKeys removeObjectForKey:capturedSessionKey];
+            [strongSelf->_androidSessionTabIdentifiers removeObjectForKey:
+                                                    capturedSessionKey];
+            [strongSelf->_startingAndroidSessionKeys removeObject:capturedSessionKey];
+            [strongSelf->_cancelledAndroidSessionKeys removeObject:capturedSessionKey];
+            [strongSelf->_stoppingAndroidSessionKeys removeObject:capturedSessionKey];
+        }
+        [strongSelf->_appsTableView reloadData];
+        if (strongSelf->_androidDeviceShells[capturedDeviceKey] == strongShell)
+            [strongSelf->_androidDeviceShells removeObjectForKey:capturedDeviceKey];
+    };
+    shell.actionHandler = ^(NSString* action, NSString* tabIdentifier) {
+        PrefixManagerAppDelegate* strongSelf = weakSelf;
+        if (!strongSelf)
+            return;
+        [strongSelf recordAndroidDeviceEvent:action
+                               tabIdentifier:tabIdentifier
+                                     logPath:capturedLogPath];
+        [strongSelf sendAndroidDeviceAction:action
+                              tabIdentifier:tabIdentifier
+                                 socketPath:capturedSocketPath
+                                    logPath:capturedLogPath];
+    };
+    shell.tabFocusHandler = ^(NSString* tabIdentifier) {
+        PrefixManagerAppDelegate* strongSelf = weakSelf;
+        if (!strongSelf)
+            return;
+        [strongSelf recordAndroidDeviceEvent:@"focus-tab"
+                               tabIdentifier:tabIdentifier
+                                     logPath:capturedLogPath];
+        NSDictionary<NSString*, NSString*>* metadata =
+            strongSelf->_androidTabLaunchMetadata[tabIdentifier];
+        [strongSelf sendAndroidDeviceAction:@"focus-tab"
+                              tabIdentifier:tabIdentifier
+                             launchMetadata:metadata
+                                 socketPath:capturedSocketPath
+                                    logPath:capturedLogPath];
+    };
+    shell.tabCloseHandler = ^(NSString* tabIdentifier) {
+        PrefixManagerAppDelegate* strongSelf = weakSelf;
+        if (!strongSelf)
+            return;
+        [strongSelf recordAndroidDeviceEvent:@"close-tab"
+                               tabIdentifier:tabIdentifier
+                                     logPath:capturedLogPath];
+        [strongSelf->_androidTabLaunchMetadata removeObjectForKey:
+                                               tabIdentifier];
+        [strongSelf sendAndroidDeviceAction:@"close-tab"
+                              tabIdentifier:tabIdentifier
+                                 socketPath:capturedSocketPath
+                                    logPath:capturedLogPath];
+    };
+    shell.window.title = [NSString stringWithFormat:@"%@ - %@",
+                                                    app.name ?: @"Android",
+                                                    deviceKey];
+    return shell;
+}
+
+- (void)recordAndroidDeviceEvent:(NSString*)event
+                    tabIdentifier:(NSString*)tabIdentifier
+                          logPath:(NSString*)logPath
+{
+    if (event.length == 0 || logPath.length == 0)
+        return;
+    NSFileHandle* logHandle = OpenRotatingLogForAppend(logPath);
+    if (!logHandle)
+        return;
+    NSDateFormatter* formatter = [[NSDateFormatter alloc] init];
+    formatter.dateFormat = @"yyyy-MM-dd HH:mm:ss";
+    NSString* timestamp = [formatter stringFromDate:[NSDate date]];
+    NSString* line = [NSString stringWithFormat:
+        @"[%@] Android device action=%@ tab=%@\n",
+        timestamp, event, tabIdentifier ?: @""];
+    [logHandle writeData:[line dataUsingEncoding:NSUTF8StringEncoding]];
+    [logHandle closeFile];
+}
+
+- (void)sendAndroidDeviceAction:(NSString*)action
+                   tabIdentifier:(NSString*)tabIdentifier
+                      socketPath:(NSString*)socketPath
+                         logPath:(NSString*)logPath
+{
+    [self sendAndroidDeviceAction:action
+                    tabIdentifier:tabIdentifier
+                   launchMetadata:nil
+                       socketPath:socketPath
+                          logPath:logPath];
+}
+
+- (NSDictionary<NSString*, NSString*>*)androidLaunchMetadataForApp:
+    (MuplarAppShortcut*)app
+                                                           prefix:
+                                                               (prefix::PrefixLayout*)selected
+{
+    if (!app || !selected || app.path.length == 0)
+        return nil;
+    return [self androidLaunchMetadataForAppPath:app.path
+                                          rootfs:NSStringFromPath(selected->rootfs)];
+}
+
+- (void)prepareAndroidLaunchMetadataForApp:(MuplarAppShortcut*)app
+                                    rootfs:(NSString*)rootfsPath
+                                completion:
+                                    (void (^)(NSDictionary<NSString*, NSString*>* metadata))
+                                        completion
+{
+    NSString* appPath = [app.path copy];
+    NSString* rootfsCopy = [rootfsPath copy];
+    dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
+        NSDictionary<NSString*, NSString*>* metadata =
+            [self androidLaunchMetadataForAppPath:appPath rootfs:rootfsCopy];
+        dispatch_async(dispatch_get_main_queue(), ^{
+            if (completion)
+                completion(metadata);
+        });
+    });
+}
+
+- (NSDictionary<NSString*, NSString*>*)androidLaunchMetadataForAppPath:
+                                          (NSString*)appPath
+                                                           rootfs:
+                                                               (NSString*)rootfsPath
+{
+    if (appPath.length == 0 || rootfsPath.length == 0)
+        return nil;
+    NSString* guestApkPath = @"";
+    @try {
+        std::filesystem::path source(appPath.UTF8String);
+        std::filesystem::path stagingDir =
+            std::filesystem::path(rootfsPath.UTF8String) / "data" / "local" /
+            "tmp" / "muplar" / "apks";
+        std::error_code ec;
+        std::filesystem::create_directories(stagingDir, ec);
+        std::filesystem::path target = stagingDir / source.filename();
+        std::filesystem::copy_file(
+            source, target,
+            std::filesystem::copy_options::overwrite_existing, ec);
+        if (!ec) {
+            guestApkPath =
+                [@"/data/local/tmp/muplar/apks"
+                    stringByAppendingPathComponent:NSStringFromPath(
+                                                       source.filename())];
+        }
+    } @catch (...) {
+    }
+
+    NSString* packageName = @"";
+    NSString* activityName = @"";
+    NSString* applicationName = @"";
+    @try {
+        auto apk = muplar::runtime::apk::classify_apk(
+            std::filesystem::path(appPath.UTF8String));
+        if (apk.manifest_package)
+            packageName = NSStringFromStdString(*apk.manifest_package);
+        if (apk.manifest_launch_activity)
+            activityName =
+                NSStringFromStdString(*apk.manifest_launch_activity);
+        if (apk.manifest_application_class)
+            applicationName =
+                NSStringFromStdString(*apk.manifest_application_class);
+    } @catch (...) {
+    }
+
+    if (guestApkPath.length == 0 && packageName.length == 0 &&
+        activityName.length == 0 && applicationName.length == 0)
+        return nil;
+    return @{
+        @"apk": guestApkPath,
+        @"package": packageName,
+        @"activity": activityName,
+        @"application": applicationName,
+    };
+}
+
+- (void)sendAndroidDeviceAction:(NSString*)action
+                   tabIdentifier:(NSString*)tabIdentifier
+                  launchMetadata:(NSDictionary<NSString*, NSString*>*)metadata
+                      socketPath:(NSString*)socketPath
+                         logPath:(NSString*)logPath
+{
+    if (action.length == 0 || socketPath.length == 0)
+        return;
+    NSString* actionCopy = [action copy];
+    NSString* tabCopy = [tabIdentifier copy] ?: @"";
+    NSString* apkCopy = [metadata[@"apk"] copy] ?: @"";
+    NSString* packageCopy = [metadata[@"package"] copy] ?: @"";
+    NSString* activityCopy = [metadata[@"activity"] copy] ?: @"";
+    NSString* applicationCopy = [metadata[@"application"] copy] ?: @"";
+    NSString* socketCopy = [socketPath copy];
+    NSString* logCopy = [logPath copy];
+    dispatch_async(dispatch_get_global_queue(QOS_CLASS_UTILITY, 0), ^{
+        services::MuplardClient client(std::string(socketCopy.UTF8String));
+        std::string generation;
+        bool delivered = client.device_action(
+            std::string(actionCopy.UTF8String),
+            std::string(tabCopy.UTF8String),
+            std::string(apkCopy.UTF8String),
+            std::string(packageCopy.UTF8String),
+            std::string(activityCopy.UTF8String),
+            std::string(applicationCopy.UTF8String),
+            generation);
+        if (logCopy.length == 0)
+            return;
+        NSFileHandle* logHandle = OpenRotatingLogForAppend(logCopy);
+        if (!logHandle)
+            return;
+        NSDateFormatter* formatter = [[NSDateFormatter alloc] init];
+        formatter.dateFormat = @"yyyy-MM-dd HH:mm:ss";
+        NSString* timestamp = [formatter stringFromDate:[NSDate date]];
+        NSString* line = [NSString stringWithFormat:
+            @"[%@] Android device delivery action=%@ tab=%@ package=%@ delivered=%@ generation=%s\n",
+            timestamp, actionCopy, tabCopy, packageCopy,
+            delivered ? @"yes" : @"no", delivered ? generation.c_str() : ""];
+        [logHandle writeData:[line dataUsingEncoding:NSUTF8StringEncoding]];
+        [logHandle closeFile];
+    });
 }
 
 - (void)launchWineApp:(MuplarAppShortcut*)app prefix:(prefix::PrefixLayout*)selected

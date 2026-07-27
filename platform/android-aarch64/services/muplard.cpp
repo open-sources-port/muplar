@@ -46,6 +46,7 @@ struct Client {
     pid_t pid = 0;
     uid_t uid = 0;
     bool package_subscriber = false;
+    bool device_action_subscriber = false;
     std::unordered_set<std::string> owned_services;
     std::string app_package;
     std::string app_activity;
@@ -351,6 +352,59 @@ struct SurfaceState {
     bool visible = false;
 };
 
+struct DeviceState {
+    uint64_t generation = 0;
+    std::string action;
+    std::string tab;
+    std::string apk;
+    std::string package_name;
+    std::string activity;
+    std::string application;
+};
+
+bool valid_device_action(const std::string &action)
+{
+    static const std::unordered_set<std::string> actions = {
+        "back",        "home",      "recents",   "settings",
+        "install-apk", "focus-tab", "close-tab",
+    };
+    return actions.count(action) != 0;
+}
+
+bool apply_device_action(DeviceState &state, const std::string &payload)
+{
+    std::vector<std::string> fields;
+    size_t start = 0;
+    while (start <= payload.size()) {
+        size_t end = payload.find('\n', start);
+        fields.push_back(payload.substr(start, end - start));
+        if (end == std::string::npos)
+            break;
+        start = end + 1;
+    }
+    std::string action = fields.size() > 0 ? fields[0] : std::string();
+    std::string tab = fields.size() > 1 ? fields[1] : std::string();
+    if (!valid_device_action(action))
+        return false;
+    state.action = std::move(action);
+    state.tab = std::move(tab);
+    state.apk = fields.size() > 2 ? fields[2] : std::string();
+    state.package_name = fields.size() > 3 ? fields[3] : std::string();
+    state.activity = fields.size() > 4 ? fields[4] : std::string();
+    state.application = fields.size() > 5 ? fields[5] : std::string();
+    ++state.generation;
+    return true;
+}
+
+std::string device_state_reply(const DeviceState &state)
+{
+    return "generation=" + std::to_string(state.generation) +
+           "\naction=" + state.action + "\ntab=" + state.tab +
+           "\napk=" + state.apk + "\npackage=" + state.package_name +
+           "\nactivity=" + state.activity +
+           "\napplication=" + state.application;
+}
+
 bool apply_surface_transaction(
     std::unordered_map<uint64_t, SurfaceState> &surfaces,
     const std::string &payload)
@@ -474,6 +528,32 @@ int run_surface_self_test()
     return 0;
 }
 
+int run_device_self_test()
+{
+    DeviceState state;
+    if (apply_device_action(state, "invalid\nlauncher"))
+        return 1;
+    if (!apply_device_action(
+            state, "focus-tab\nlauncher\n/apk.apk\npkg\n.Main\npkg.App") ||
+        state.generation != 1 || state.action != "focus-tab" ||
+        state.tab != "launcher" || state.apk != "/apk.apk" ||
+        state.package_name != "pkg" || state.activity != ".Main" ||
+        state.application != "pkg.App")
+        return 1;
+    if (!apply_device_action(state, "back\nlauncher") ||
+        state.generation != 2 || state.action != "back")
+        return 1;
+    std::string reply = device_state_reply(state);
+    if (reply.find("generation=2") == std::string::npos ||
+        reply.find("action=back") == std::string::npos ||
+        reply.find("tab=launcher") == std::string::npos)
+        return 1;
+    std::cout << "deviceActionValidation=ok\n"
+              << "deviceActionGeneration=ok\n"
+              << "deviceStateQuery=ok\n";
+    return 0;
+}
+
 void identify_client(Client &client)
 {
 #ifdef __APPLE__
@@ -565,8 +645,12 @@ int run_client(const fs::path &socket_path,
         : operation == "set-permission"      ? Opcode::SetPermission
         : operation == "surface-transaction" ? Opcode::ApplySurfaceTransaction
         : operation == "query-surfaces"      ? Opcode::QuerySurfaces
-        : operation == "binder-transact"     ? Opcode::BinderTransact
-                                             : Opcode::Ping;
+        : operation == "device-action"       ? Opcode::DeviceAction
+        : operation == "query-device-state"  ? Opcode::QueryDeviceState
+        : operation == "subscribe-device-actions"
+            ? Opcode::SubscribeDeviceActions
+        : operation == "binder-transact" ? Opcode::BinderTransact
+                                         : Opcode::Ping;
     int passed_fd = -1;
     bool sent = false;
     if (opcode == Opcode::FdEcho) {
@@ -594,7 +678,8 @@ int run_client(const fs::path &socket_path,
             !receive_exact(fd, payload.data(), payload.size()))
             break;
         std::cout << payload << std::endl;
-        if (operation != "subscribe-packages" && operation != "app-session")
+        if (operation != "subscribe-packages" && operation != "app-session" &&
+            operation != "subscribe-device-actions")
             break;
     }
     close(fd);
@@ -615,6 +700,7 @@ int main(int argc, char **argv)
     bool policy_self_test = false;
     bool surface_self_test = false;
     bool lifecycle_self_test = false;
+    bool device_self_test = false;
     for (int i = 1; i < argc; ++i) {
         std::string arg = argv[i];
         if (arg == "--socket" && i + 1 < argc)
@@ -637,6 +723,8 @@ int main(int argc, char **argv)
             surface_self_test = true;
         else if (arg == "--self-test-lifecycle")
             lifecycle_self_test = true;
+        else if (arg == "--self-test-device")
+            device_self_test = true;
     }
     if (policy_self_test)
         return run_policy_self_test(settings_path);
@@ -644,6 +732,8 @@ int main(int argc, char **argv)
         return run_surface_self_test();
     if (lifecycle_self_test)
         return run_lifecycle_self_test();
+    if (device_self_test)
+        return run_device_self_test();
     if (socket_path.empty()) {
         std::cerr << "muplard: --socket is required\n";
         return 2;
@@ -696,6 +786,7 @@ int main(int argc, char **argv)
     std::unordered_map<uint64_t, PendingTransaction> pending_transactions;
     std::unordered_map<uint64_t, SurfaceState> surfaces;
     uint64_t surface_generation = 0;
+    DeviceState device_state;
     uint64_t next_transaction_id = 1;
     std::vector<Client> clients;
     uint64_t package_generation = 1;
@@ -911,6 +1002,33 @@ int main(int argc, char **argv)
                             send_message(
                                 clients[i].fd, opcode, header.request_id,
                                 surface_list(surfaces, surface_generation));
+                        } else if (opcode == Opcode::SubscribeDeviceActions) {
+                            clients[i].device_action_subscriber = true;
+                            send_message(clients[i].fd, opcode,
+                                         header.request_id,
+                                         device_state_reply(device_state));
+                        } else if (opcode == Opcode::DeviceAction) {
+                            bool valid =
+                                apply_device_action(device_state, payload);
+                            send_message(
+                                clients[i].fd, opcode, header.request_id,
+                                valid ? std::to_string(device_state.generation)
+                                      : "0");
+                            if (valid) {
+                                std::string state =
+                                    device_state_reply(device_state);
+                                for (const auto &client : clients) {
+                                    if (client.device_action_subscriber)
+                                        send_message(
+                                            client.fd,
+                                            Opcode::DeviceActionChanged, 0,
+                                            state, false);
+                                }
+                            }
+                        } else if (opcode == Opcode::QueryDeviceState) {
+                            send_message(clients[i].fd, opcode,
+                                         header.request_id,
+                                         device_state_reply(device_state));
                         } else if (opcode == Opcode::BinderTransact) {
                             size_t separator = payload.find('\n');
                             std::string service = payload.substr(0, separator);

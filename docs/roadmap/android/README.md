@@ -1,19 +1,24 @@
-# Android Roadmap Checklists
+# Android Roadmap
 
-These files track Android work as stable areas instead of ever-growing numbered
-increments. Add new work as checklist items under the relevant area.
+This folder tracks Android work by stable product/runtime areas. Keep the
+overview focused and move detailed implementation notes into a dedicated file.
 
-## Current Path To Real Java Apps
+## Current Focus
 
-This is the intended Android ARM64 progression. Keep new work attached to one
-of these milestones instead of creating more numbered phases.
+Build a user-friendly Android device session:
 
-1. [x] Android ARM64 native runtime
-1. [x] Java APK detection
-1. [x] Minimal ART bootstrap
-1. [x] Tiny Java Activity
-1. [x] Simple Java launcher app
-1. [x] Launcher3 compatibility target
+- One persistent Android window per prefix.
+- Launcher3 starts automatically as Home.
+- Back, Home, and app switching are available from host controls.
+- Apps open as tabs/tasks inside the same Android session, not as separate
+  macOS windows.
+
+Start here:
+
+- [Android Device Window](./device-window.md)
+- [Launcher3 Status](./launcher3.md)
+
+## Supporting Areas
 
 - [Runtime](./runtime.md)
 - [Binder and AIDL](./binder-aidl.md)
@@ -24,5 +29,11 @@ of these milestones instead of creating more numbered phases.
 - [Framework Services Architecture](./framework-services.md)
 - [Android Sysroot](./sysroot.md)
 
-Rule of thumb: use the SVG files for a compact visual summary, and use these
-Markdown files for actionable work tracking.
+## Maintenance Rule
+
+If a roadmap file becomes hard to scan, split it. Each file should answer one
+question clearly:
+
+- What works?
+- What is blocking the next useful user-visible result?
+- What is the next small set of steps?

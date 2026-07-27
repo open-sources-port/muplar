@@ -65,6 +65,33 @@ bool MuplardClient::transact(const std::string &service,
            reply != "DEAD_OBJECT";
 }
 
+bool MuplardClient::device_action(const std::string &action,
+                                  const std::string &tab,
+                                  std::string &generation) const
+{
+    return device_action(action, tab, {}, {}, {}, {}, generation);
+}
+
+bool MuplardClient::device_action(const std::string &action,
+                                  const std::string &tab,
+                                  const std::string &apk,
+                                  const std::string &package_name,
+                                  const std::string &activity,
+                                  const std::string &application,
+                                  std::string &generation) const
+{
+    return request(static_cast<uint16_t>(Opcode::DeviceAction),
+                   action + '\n' + tab + '\n' + apk + '\n' + package_name +
+                       '\n' + activity + '\n' + application,
+                   generation) &&
+           generation != "0";
+}
+
+bool MuplardClient::query_device_state(std::string &state) const
+{
+    return request(static_cast<uint16_t>(Opcode::QueryDeviceState), {}, state);
+}
+
 bool MuplardClient::request(uint16_t opcode,
                             const std::string &payload,
                             std::string &reply) const

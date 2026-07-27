@@ -6,8 +6,6 @@ public final class MuplarGraphics {
     private MuplarGraphics() {
     }
 
-    public static native boolean presentBitmap(long nativePtr, int width, int height);
-
     public static Bitmap createBitmap(int width, int height) {
         try {
             Bitmap bitmap = constructBitmap();

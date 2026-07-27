@@ -51,6 +51,7 @@ add_custom_target(muplar_android_builtin_apps DEPENDS
 set(WAWONA_DIR "${CMAKE_SOURCE_DIR}/third_party/muplar-wayland")
 
 add_executable(muplar_prefix_manager MACOSX_BUNDLE
+    AndroidDeviceShell.mm
     PrefixManagerApp.mm
 )
 
@@ -66,6 +67,7 @@ target_link_libraries(muplar_prefix_manager
     PRIVATE
         muplar_runtime_apk
         muplar_runtime_prefix
+        muplar_services_client
         muplar_runtime_supervisor
 )
 
@@ -74,6 +76,7 @@ target_include_directories(muplar_prefix_manager
         ${CMAKE_SOURCE_DIR}/platform/commons/prefix
         ${CMAKE_SOURCE_DIR}/platform/commons/supervisor
         ${CMAKE_SOURCE_DIR}/platform/android-aarch64/apk
+        ${CMAKE_SOURCE_DIR}/platform/android-aarch64/services
 )
 
 target_compile_definitions(muplar_prefix_manager PRIVATE
