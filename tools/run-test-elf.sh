@@ -11,9 +11,8 @@ NDK_SYSROOT=$NDK_PREBUILT/sysroot
 SYSROOT_TMP="$ROOT_DIR/build/sysroot/data/local/tmp"
 SYSROOT_LIB="$ROOT_DIR/build/sysroot/system/lib64"
 
-export scriptToRun=$ROOT_DIR/tools/build-all-local-only.sh
-chmod +x ${scriptToRun}
-zsh ${scriptToRun}
+"$ROOT_DIR/tools/build-all-local-only.sh"
+"$ROOT_DIR/tools/build-test-fixtures.sh"
 
 ELF="$ROOT_DIR/build/bin/test_return_42"
 echo "========================\nCalling $ELF..."

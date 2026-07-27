@@ -108,6 +108,23 @@ static void EnsureWineSocketDirPrivate()
     chmod(path.UTF8String, 0700);
 }
 
+static void StopAndroidMuplard(const prefix::PrefixLayout& layout)
+{
+    std::filesystem::path runDir = layout.root / "run";
+    std::filesystem::path pidFile = runDir / "muplard.pid";
+    std::filesystem::path socketPath = runDir / "muplard.sock";
+    if (std::filesystem::is_regular_file(pidFile)) {
+        std::ifstream ifs(pidFile);
+        pid_t pid = 0;
+        if (ifs >> pid && pid > 1) {
+            kill(pid, SIGTERM);
+        }
+    }
+    std::error_code ec;
+    std::filesystem::remove(socketPath, ec);
+    std::filesystem::remove(pidFile, ec);
+}
+
 static NSString* SanitizeWindowsCompatibilityLogText(NSString* text)
 {
     if (!text)
@@ -936,8 +953,15 @@ static NSString* ParseLnkFile(const std::filesystem::path& lnkPath)
             if (task.isRunning)
                 [task terminate];
         }
-        if (strongSelf && strongSelf->_supervisor) {
-            strongSelf->_supervisor->stop();
+        if (strongSelf) {
+            if (strongSelf->_supervisor) {
+                strongSelf->_supervisor->stop();
+            }
+            for (const auto& p : strongSelf->_prefixes) {
+                if (p.kind == prefix::PrefixKind::Android) {
+                    StopAndroidMuplard(p);
+                }
+            }
         }
 
         dispatch_async(dispatch_get_main_queue(), ^{
@@ -3911,7 +3935,7 @@ static NSString* MapLinuxIconToSFSymbol(NSString* icon)
     NSString* logDir = NSStringFromPath(selected->logs_dir);
     [[NSFileManager defaultManager] createDirectoryAtPath:logDir withIntermediateDirectories:YES attributes:nil error:nil];
 
-    NSString* logPath = [logDir stringByAppendingPathComponent:@"muplar.log"];
+    NSString* logPath = NSStringFromPath(muplar::runtime::prefix::main_log_path(*selected));
     NSFileHandle* logHandle = OpenRotatingLogForAppend(logPath);
     if (logHandle) {
         NSDateFormatter* formatter = [[NSDateFormatter alloc] init];
@@ -3941,8 +3965,7 @@ static NSString* MapLinuxIconToSFSymbol(NSString* icon)
     task.standardError = pipe;
 
     // Also write to the per-prefix log
-    NSString* prefixLogDir = NSStringFromPath(selected->logs_dir);
-    NSString* prefixLogPath = [prefixLogDir stringByAppendingPathComponent:@"muplar.log"];
+    NSString* prefixLogPath = NSStringFromPath(muplar::runtime::prefix::main_log_path(*selected));
     __block NSFileHandle* prefixHandle = OpenRotatingLogForAppend(prefixLogPath);
     __block unsigned long long prefixLogBytes = LogFileSize(prefixLogPath);
 
@@ -4685,7 +4708,7 @@ int main(int argc, char* argv[])
         NSString* home = NSHomeDirectory();
         NSString* muplarLogsDir = [[home stringByAppendingPathComponent:@".muplar"] stringByAppendingPathComponent:@"logs"];
         [[NSFileManager defaultManager] createDirectoryAtPath:muplarLogsDir withIntermediateDirectories:YES attributes:nil error:nil];
-        NSString* logPath = [muplarLogsDir stringByAppendingPathComponent:@"muplar.log"];
+        NSString* logPath = [muplarLogsDir stringByAppendingPathComponent:[NSString stringWithUTF8String:muplar::runtime::prefix::kMainLogFilename]];
         RotateLogFileIfNeeded(logPath);
 
         const char* logPathStr = [logPath UTF8String];

@@ -1301,6 +1301,12 @@ int main(int argc, char **argv)
 
     launch_cfg.input_path = argv[arg_start];
 
+    if (launch_cfg.sysroot.empty()) {
+        if (std::filesystem::exists("build/sysroot/system/bin/app_process64")) {
+            launch_cfg.sysroot = "build/sysroot";
+        }
+    }
+
     if (launch_cfg.input_path == "sudo" ||
         launch_cfg.input_path == "/usr/bin/sudo" ||
         launch_cfg.input_path == "/usr/local/bin/sudo" ||

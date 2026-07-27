@@ -216,7 +216,7 @@ protected:
     virtual bool collect_host_input_events();
 
     // Protected guest memory helpers
-    static constexpr uint64_t HVC_STUB_SIZE = 12;
+    static constexpr uint64_t HVC_STUB_SIZE = 16;
     static void encode_stub(uint8_t *out, uint32_t hvc_nr);
     static std::string guest_read_string(guest_t *g, uint64_t gpa);
     static void guest_write_u64(guest_t *g, uint64_t gpa, uint64_t v);

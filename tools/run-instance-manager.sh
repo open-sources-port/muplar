@@ -1,41 +1,35 @@
 #!/bin/zsh
-set -e
+set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
-# CMAKE_BIN="${CMAKE_BIN:-cmake}"
-# if ! command -v "$CMAKE_BIN" >/dev/null 2>&1; then
-#   if [ -x /opt/homebrew/bin/cmake ]; then
-#     CMAKE_BIN=/opt/homebrew/bin/cmake
-#   elif [ -x /Applications/CMake.app/Contents/bin/cmake ]; then
-#     CMAKE_BIN=/Applications/CMake.app/Contents/bin/cmake
-#   fi
-# fi
+BUILD_DIR="$ROOT_DIR/build"
+JOBS="${JOBS:-$(sysctl -n hw.ncpu 2>/dev/null || echo 4)}"
 
-# if ! command -v "$CMAKE_BIN" >/dev/null 2>&1; then
-#   echo "cmake not found. Set CMAKE_BIN or install CMake." >&2
-#   exit 1
-# fi
+CMAKE_BIN="${CMAKE_BIN:-cmake}"
+if ! command -v "$CMAKE_BIN" >/dev/null 2>&1; then
+  if [ -x /opt/homebrew/bin/cmake ]; then
+    CMAKE_BIN=/opt/homebrew/bin/cmake
+  elif [ -x /Applications/CMake.app/Contents/bin/cmake ]; then
+    CMAKE_BIN=/Applications/CMake.app/Contents/bin/cmake
+  fi
+fi
 
-# NINJA_BIN="${NINJA_BIN:-ninja}"
-# if ! command -v "$NINJA_BIN" >/dev/null 2>&1; then
-#   if [ -x /opt/homebrew/bin/ninja ]; then
-#     NINJA_BIN=/opt/homebrew/bin/ninja
-#   elif [ -x /usr/local/bin/ninja ]; then
-#     NINJA_BIN=/usr/local/bin/ninja
-#   fi
-# fi
+if ! command -v "$CMAKE_BIN" >/dev/null 2>&1; then
+  echo "cmake not found. Set CMAKE_BIN or install CMake." >&2
+  exit 1
+fi
 
-# if [ ! -f "$ROOT_DIR/build/CMakeCache.txt" ]; then
-#   CMAKE_ARGS=(-S "$ROOT_DIR" -B "$ROOT_DIR/build" -G Ninja)
-#   if command -v "$NINJA_BIN" >/dev/null 2>&1; then
-#     CMAKE_ARGS+=(-DCMAKE_MAKE_PROGRAM="$NINJA_BIN")
-#   fi
-#   "$CMAKE_BIN" "${CMAKE_ARGS[@]}"
-# else
-#   "$CMAKE_BIN" -S "$ROOT_DIR" -B "$ROOT_DIR/build"
-# fi
+if [ ! -f "$BUILD_DIR/CMakeCache.txt" ]; then
+  CMAKE_ARGS=(-S "$ROOT_DIR" -B "$BUILD_DIR" -G Ninja)
+  if command -v ninja >/dev/null 2>&1; then
+    CMAKE_ARGS+=(-DCMAKE_MAKE_PROGRAM="$(command -v ninja)")
+  fi
+  "$CMAKE_BIN" "${CMAKE_ARGS[@]}"
+else
+  "$CMAKE_BIN" -S "$ROOT_DIR" -B "$BUILD_DIR"
+fi
 
-# "$CMAKE_BIN" --build "$ROOT_DIR/build" --target populate_manager_bundle -j4
+"$CMAKE_BIN" --build "$BUILD_DIR" --target populate_manager_bundle -j"$JOBS"
 
 APP="$ROOT_DIR/build/bin/Muplar Instance Manager.app"
 APP_NAME="Muplar Instance Manager"

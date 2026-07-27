@@ -14,6 +14,7 @@
 #include <thread>
 #include <vector>
 #include <unistd.h>
+#include <signal.h>
 #include <sys/socket.h>
 #include <sys/un.h>
 #include <fcntl.h>
@@ -150,62 +151,7 @@ bool unix_socket_is_live(const std::filesystem::path &path)
     return live;
 }
 
-std::filesystem::path ensure_muplard(const prefix::PrefixLayout &active_prefix)
-{
-    std::filesystem::path run_dir = active_prefix.root / "run";
-    std::filesystem::path socket_path = run_dir / "muplard.sock";
-    if (unix_socket_is_live(socket_path))
-        return socket_path;
 
-    std::filesystem::path daemon =
-        current_executable_path().parent_path() / "muplard";
-    if (!std::filesystem::is_regular_file(daemon)) {
-        std::cerr << "[muplard] warning: daemon binary not found at " << daemon
-                  << "\n";
-        return {};
-    }
-    std::error_code ec;
-    std::filesystem::create_directories(run_dir, ec);
-    std::filesystem::create_directories(active_prefix.logs_dir, ec);
-    std::filesystem::path registry =
-        active_prefix.registry_dir / "android-packages.properties";
-    std::filesystem::path pid_file = run_dir / "muplard.pid";
-    std::filesystem::path settings_file =
-        active_prefix.registry_dir / "android-state" / "framework-settings.db";
-    std::filesystem::path log_file = active_prefix.logs_dir / "muplard.log";
-    rotate_log_file_if_needed(log_file);
-
-    pid_t child = fork();
-    if (child == 0) {
-        setsid();
-        int log_fd =
-            open(log_file.c_str(), O_WRONLY | O_CREAT | O_APPEND, 0600);
-        if (log_fd >= 0) {
-            dup2(log_fd, STDOUT_FILENO);
-            dup2(log_fd, STDERR_FILENO);
-            if (log_fd > STDERR_FILENO)
-                close(log_fd);
-        }
-        execl(daemon.c_str(), daemon.c_str(), "--socket", socket_path.c_str(),
-              "--registry", registry.c_str(), "--pid-file", pid_file.c_str(),
-              "--settings", settings_file.c_str(),
-              static_cast<char *>(nullptr));
-        _exit(127);
-    }
-    if (child < 0) {
-        std::cerr << "[muplard] warning: fork failed\n";
-        return {};
-    }
-    for (int attempt = 0; attempt < 40; ++attempt) {
-        if (unix_socket_is_live(socket_path)) {
-            std::cerr << "[muplard] service ready at " << socket_path << "\n";
-            return socket_path;
-        }
-        std::this_thread::sleep_for(std::chrono::milliseconds(50));
-    }
-    std::cerr << "[muplard] warning: daemon did not become ready\n";
-    return {};
-}
 
 void copy_jni_call_config(const RuntimeJniCallConfig &from,
                           elf::JniCallConfig &to)
@@ -334,7 +280,13 @@ void apply_apk_launch(const PlatformLaunchConfig &launch_cfg,
 int handle_guest_art_apk_launch(const PlatformLaunchConfig &launch_cfg,
                                 const apk::ApkClassification &classification)
 {
-    if (launch_cfg.sysroot.empty()) {
+    std::filesystem::path sysroot = launch_cfg.sysroot;
+    if (sysroot.empty() &&
+        std::filesystem::exists("build/sysroot/system/bin/app_process64")) {
+        sysroot = "build/sysroot";
+    }
+
+    if (sysroot.empty()) {
         std::cerr << "APK error: Java/ART bootstrap incomplete: "
                      "--sysroot is required for production Android Java apps. "
                      "Import an Android ART root with "
@@ -345,11 +297,11 @@ int handle_guest_art_apk_launch(const PlatformLaunchConfig &launch_cfg,
     }
 
     std::filesystem::path staged_apk =
-        stage_art_apk_for_sysroot(launch_cfg.input_path, launch_cfg.sysroot);
+        stage_art_apk_for_sysroot(launch_cfg.input_path, sysroot.string());
 
     ArtBootstrapConfig art_cfg;
     art_cfg.apk_path = staged_apk;
-    art_cfg.sysroot = launch_cfg.sysroot;
+    art_cfg.sysroot = sysroot.string();
     art_cfg.apk_classification = classification;
 
     ArtBootstrapPlan plan = build_art_bootstrap_plan(art_cfg);
@@ -402,6 +354,80 @@ int handle_java_apk_launch(const PlatformLaunchConfig &launch_cfg,
 }
 
 }  // namespace
+
+std::filesystem::path ensure_muplard(const prefix::PrefixLayout &active_prefix)
+{
+    std::filesystem::path run_dir = active_prefix.root / "run";
+    std::filesystem::path socket_path = run_dir / "muplard.sock";
+    if (unix_socket_is_live(socket_path))
+        return socket_path;
+
+    std::filesystem::path daemon =
+        current_executable_path().parent_path() / "muplard";
+    if (!std::filesystem::is_regular_file(daemon)) {
+        std::cerr << "[muplard] warning: daemon binary not found at " << daemon
+                  << "\n";
+        return {};
+    }
+    std::error_code ec;
+    std::filesystem::create_directories(run_dir, ec);
+    std::filesystem::create_directories(active_prefix.logs_dir, ec);
+    std::filesystem::path registry =
+        active_prefix.registry_dir / "android-packages.properties";
+    std::filesystem::path pid_file = run_dir / "muplard.pid";
+    std::filesystem::path settings_file =
+        active_prefix.registry_dir / "android-state" / "framework-settings.db";
+    std::filesystem::path log_file = prefix::main_log_path(active_prefix);
+    rotate_log_file_if_needed(log_file);
+
+    pid_t child = fork();
+    if (child == 0) {
+        setsid();
+        int log_fd =
+            open(log_file.c_str(), O_WRONLY | O_CREAT | O_APPEND, 0600);
+        if (log_fd >= 0) {
+            dup2(log_fd, STDOUT_FILENO);
+            dup2(log_fd, STDERR_FILENO);
+            if (log_fd > STDERR_FILENO)
+                close(log_fd);
+        }
+        execl(daemon.c_str(), daemon.c_str(), "--socket", socket_path.c_str(),
+              "--registry", registry.c_str(), "--pid-file", pid_file.c_str(),
+              "--settings", settings_file.c_str(),
+              static_cast<char *>(nullptr));
+        _exit(127);
+    }
+    if (child < 0) {
+        std::cerr << "[muplard] warning: fork failed\n";
+        return {};
+    }
+    for (int attempt = 0; attempt < 40; ++attempt) {
+        if (unix_socket_is_live(socket_path)) {
+            std::cerr << "[muplard] service ready at " << socket_path << "\n";
+            return socket_path;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(50));
+    }
+    std::cerr << "[muplard] warning: daemon did not become ready\n";
+    return {};
+}
+
+void stop_muplard(const prefix::PrefixLayout &active_prefix)
+{
+    std::filesystem::path run_dir = active_prefix.root / "run";
+    std::filesystem::path pid_file = run_dir / "muplard.pid";
+    std::filesystem::path socket_path = run_dir / "muplard.sock";
+    if (std::filesystem::is_regular_file(pid_file)) {
+        std::ifstream ifs(pid_file);
+        pid_t pid = 0;
+        if (ifs >> pid && pid > 1) {
+            kill(pid, SIGTERM);
+        }
+    }
+    std::error_code ec;
+    std::filesystem::remove(socket_path, ec);
+    std::filesystem::remove(pid_file, ec);
+}
 
 int AndroidAarch64Runtime::run(const PlatformLaunchConfig &config)
 {

@@ -2572,6 +2572,11 @@ std::filesystem::path muplar_home()
     return home_dir() / ".muplar";
 }
 
+std::filesystem::path main_log_path(const PrefixLayout &layout)
+{
+    return layout.logs_dir / kMainLogFilename;
+}
+
 std::filesystem::path instance_registry_path()
 {
     return muplar_home() / "instances.json";

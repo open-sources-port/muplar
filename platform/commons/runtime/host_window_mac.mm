@@ -38,23 +38,16 @@ static void enqueue_host_input(HostWindow::Impl *impl, NSEvent *event)
 
     switch ([event type]) {
         case NSEventTypeLeftMouseDown:
-        case NSEventTypeRightMouseDown:
-        case NSEventTypeOtherMouseDown:
             out.type = 2;         // AINPUT_EVENT_TYPE_MOTION
             out.action = 0;       // AMOTION_EVENT_ACTION_DOWN
             out.source = 0x1002;  // AINPUT_SOURCE_TOUCHSCREEN
             break;
         case NSEventTypeLeftMouseDragged:
-        case NSEventTypeRightMouseDragged:
-        case NSEventTypeOtherMouseDragged:
-        case NSEventTypeMouseMoved:
             out.type = 2;
             out.action = 2;  // AMOTION_EVENT_ACTION_MOVE
             out.source = 0x1002;
             break;
         case NSEventTypeLeftMouseUp:
-        case NSEventTypeRightMouseUp:
-        case NSEventTypeOtherMouseUp:
             out.type = 2;
             out.action = 1;  // AMOTION_EVENT_ACTION_UP
             out.source = 0x1002;
@@ -77,11 +70,21 @@ static void enqueue_host_input(HostWindow::Impl *impl, NSEvent *event)
 
     if (out.type == 2) {
         NSView *content = [impl->window contentView];
+        if (!content)
+            return;
+        NSRect bounds = [content bounds];
+        if (bounds.size.width <= 0 || bounds.size.height <= 0)
+            return;
         NSPoint point = [content convertPoint:[event locationInWindow]
                                      fromView:nil];
-        NSRect bounds = [content bounds];
-        out.x = static_cast<float>(point.x);
-        out.y = static_cast<float>(bounds.size.height - point.y);
+        float x = static_cast<float>(point.x);
+        float y = static_cast<float>(bounds.size.height - point.y);
+        if (x < 0.0f || y < 0.0f || x > static_cast<float>(bounds.size.width) ||
+            y > static_cast<float>(bounds.size.height)) {
+            return;
+        }
+        out.x = x;
+        out.y = y;
     }
 
     impl->pending_input.push_back(out);
@@ -197,7 +200,6 @@ void HostWindow::present_rgba(const uint8_t *pixels,
             [[NSImage alloc] initWithSize:NSMakeSize(width, height)];
         [image addRepresentation:rep];
         [impl_->image_view setImage:image];
-        [impl_->window setContentAspectRatio:NSMakeSize(width, height)];
         [impl_->window displayIfNeeded];
         pump_appkit_once(impl_);
     }

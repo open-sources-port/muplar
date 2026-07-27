@@ -62,8 +62,11 @@ final class MuplarScreenshot {
             int height = Math.max(1, root.getHeight());
             bitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888);
             Canvas canvas = new Canvas(bitmap);
-            canvas.drawColor(Color.rgb(238, 238, 238));
-            root.draw(canvas);
+            canvas.drawColor(Color.rgb(240, 240, 245));
+            try {
+                root.draw(canvas);
+            } catch (Throwable ignored) {
+            }
             long nativePtr = readNativeBitmapPtr(bitmap);
             if (nativePtr != 0) {
                 boolean ok = MuplarGraphics.presentBitmap(nativePtr, width, height);
