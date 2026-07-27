@@ -22,7 +22,6 @@ final class MuplarScreenshot {
         if (root == null) {
             return;
         }
-        renderToHostWindow(root);
         if (captured) {
             return;
         }
@@ -48,51 +47,6 @@ final class MuplarScreenshot {
             System.out.println("[Muplar/Window] fallback screenshot written: " + path);
         } catch (Throwable t) {
             System.err.println("[Muplar/Window] screenshot failed: " + t);
-        }
-    }
-
-    private static void renderToHostWindow(View root) {
-        String enabled = System.getenv("MUPLAR_SOFTWARE_HOST_PRESENT");
-        if (!"1".equals(enabled)) {
-            return;
-        }
-        Bitmap bitmap = null;
-        try {
-            int width = Math.max(1, root.getWidth());
-            int height = Math.max(1, root.getHeight());
-            bitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888);
-            Canvas canvas = new Canvas(bitmap);
-            canvas.drawColor(Color.rgb(240, 240, 245));
-            try {
-                root.draw(canvas);
-            } catch (Throwable ignored) {
-            }
-            long nativePtr = readNativeBitmapPtr(bitmap);
-            if (nativePtr != 0) {
-                boolean ok = MuplarGraphics.presentBitmap(nativePtr, width, height);
-                System.out.println("[Muplar/Window] host window present "
-                    + (ok ? "ok" : "skipped"));
-            }
-        } catch (Throwable t) {
-            System.err.println("[Muplar/Window] host window present failed: " + t);
-        } finally {
-            if (bitmap != null) {
-                try {
-                    bitmap.recycle();
-                } catch (Throwable ignored) {
-                }
-            }
-        }
-    }
-
-    private static long readNativeBitmapPtr(Bitmap bitmap) {
-        try {
-            java.lang.reflect.Field field =
-                Bitmap.class.getDeclaredField("mNativePtr");
-            field.setAccessible(true);
-            return field.getLong(bitmap);
-        } catch (Throwable ignored) {
-            return 0;
         }
     }
 

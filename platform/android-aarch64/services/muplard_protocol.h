@@ -33,6 +33,10 @@ enum class Opcode : uint16_t {
     SetPermission = 20,
     ApplySurfaceTransaction = 21,
     QuerySurfaces = 22,
+    DeviceAction = 23,
+    QueryDeviceState = 24,
+    SubscribeDeviceActions = 25,
+    DeviceActionChanged = 26,
 };
 
 struct MessageHeader {

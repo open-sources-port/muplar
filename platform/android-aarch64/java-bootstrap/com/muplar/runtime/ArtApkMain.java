@@ -32,24 +32,11 @@ public final class ArtApkMain {
 
         try {
             prepareMainLooper();
+            FrameworkDeviceController.start();
             installActivityThreadForFramework();
             ClassLoader loader = createApkClassLoader(apkPath, packageName);
             Thread.currentThread().setContextClassLoader(loader);
             System.out.println("[Muplar/ART] apk class loader ready");
-
-            if (!applicationClass.isEmpty()) {
-                Class<?> type = Class.forName(
-                    normalizeActivityClassName(packageName, applicationClass),
-                    false, loader);
-                Constructor<?> constructor = type.getDeclaredConstructor();
-                constructor.setAccessible(true);
-                Object application = constructor.newInstance();
-                java.lang.reflect.Method onCreate =
-                    type.getMethod("onCreate");
-                onCreate.invoke(application);
-                System.out.println("[Muplar/ART] Application onCreate completed class="
-                    + type.getName());
-            }
 
             if (!launchActivity.isEmpty()) {
                 String activityClassName =
@@ -67,7 +54,8 @@ public final class ArtApkMain {
                 attachBaseContext(activityObj,
                     new MuplarContext(packageName, apkPath, loader));
                 attachActivityInfo(activityObj, packageName, activityClassName, apkPath);
-                attachApplication(activityObj, packageName, apkPath, loader);
+                attachApplication(activityObj, packageName, apkPath, loader,
+                    applicationClass);
                 attachWindow(activityObj, packageName, apkPath, loader);
                 attachMainThread(activityObj);
                 attachInstrumentation(activityObj);
@@ -92,6 +80,8 @@ public final class ArtApkMain {
                         onCreateMethod.invoke(activityObj, bundleObj);
                         System.out.println("[Muplar/ART] onCreate completed successfully");
                         driveActivityLifecycle(activityObj, activityClass, loader);
+                        FrameworkDeviceController.registerActivity(activityObj,
+                            packageName, activityClassName, activityClass);
                         runMainLooper();
                     } else {
                         System.out.println("[Muplar/ART] onCreate method not found");
@@ -106,6 +96,76 @@ public final class ArtApkMain {
                 + t.getClass().getName() + ": " + t.getMessage());
             t.printStackTrace(System.err);
             throw new RuntimeException("Muplar ART bootstrap failed", t);
+        }
+    }
+
+    public static synchronized boolean launchActivity(String apkPath,
+                                                      String packageName,
+                                                      String launchActivity) {
+        return launchActivity("", apkPath, packageName, launchActivity, "");
+    }
+
+    public static synchronized boolean launchActivity(String tabIdentifier,
+                                                      String apkPath,
+                                                      String packageName,
+                                                      String launchActivity,
+                                                      String applicationClass) {
+        if (apkPath == null || apkPath.isEmpty() ||
+            packageName == null || packageName.isEmpty() ||
+            launchActivity == null || launchActivity.isEmpty()) {
+            return false;
+        }
+        try {
+            ClassLoader loader = createApkClassLoader(apkPath, packageName);
+            Thread.currentThread().setContextClassLoader(loader);
+            String activityClassName =
+                normalizeActivityClassName(packageName, launchActivity);
+            Class<?> activityClass =
+                Class.forName(activityClassName, false, loader);
+            java.lang.reflect.Constructor<?> ctor =
+                activityClass.getDeclaredConstructor();
+            ctor.setAccessible(true);
+            Object activityObj = ctor.newInstance();
+            attachBaseContext(activityObj,
+                new MuplarContext(packageName, apkPath, loader));
+            attachActivityInfo(activityObj, packageName, activityClassName, apkPath);
+            attachApplication(activityObj, packageName, apkPath, loader,
+                applicationClass);
+            attachWindow(activityObj, packageName, apkPath, loader);
+            attachMainThread(activityObj);
+            attachInstrumentation(activityObj);
+            attachFragmentHost(activityObj);
+
+            java.lang.reflect.Method onCreateMethod = null;
+            Class<?> current = activityClass;
+            while (current != null) {
+                try {
+                    onCreateMethod = current.getDeclaredMethod(
+                        "onCreate",
+                        Class.forName("android.os.Bundle", false, loader));
+                    break;
+                } catch (NoSuchMethodException ignored) {
+                    current = current.getSuperclass();
+                }
+            }
+            if (onCreateMethod != null) {
+                onCreateMethod.setAccessible(true);
+                Object bundleObj = Class.forName("android.os.Bundle", false, loader)
+                    .getDeclaredConstructor().newInstance();
+                onCreateMethod.invoke(activityObj, bundleObj);
+            }
+            driveActivityLifecycle(activityObj, activityClass, loader);
+            FrameworkDeviceController.registerActivityForTab(tabIdentifier,
+                apkPath, packageName, activityClassName, activityObj,
+                activityClass);
+            System.out.println("[Muplar/ART] launched activity class="
+                + activityClassName);
+            return true;
+        } catch (Throwable error) {
+            System.err.println("[Muplar/ART] launchActivity failed: " +
+                error.getClass().getName() + ": " + error.getMessage());
+            error.printStackTrace(System.err);
+            return false;
         }
     }
 
@@ -518,10 +578,53 @@ public final class ArtApkMain {
     private static void attachApplication(Object activityObj,
                                           String packageName,
                                           String apkPath,
-                                          ClassLoader loader) {
+                                          ClassLoader loader,
+                                          String applicationClass) {
         try {
             Object context = new MuplarContext(packageName, apkPath, loader);
-            Object application = new MuplarApplication((android.content.Context)context);
+            Object application = createApplication(packageName, context, loader,
+                applicationClass);
+            setField(activityObj, "mApplication", application);
+            attachApplicationToActivityThread(application);
+            System.out.println("[Muplar/ART] application attached");
+        } catch (Throwable t) {
+            System.err.println("[Muplar/ART] application attach failed: "
+                + t.getClass().getName() + ": " + t.getMessage());
+        }
+    }
+
+    private static Object createApplication(String packageName,
+                                            Object context,
+                                            ClassLoader loader,
+                                            String applicationClass)
+        throws Exception {
+        Object application;
+        String className = applicationClass == null ? "" : applicationClass;
+        if (className.isEmpty()) {
+            application =
+                new MuplarApplication((android.content.Context)context);
+        } else {
+            Class<?> type = Class.forName(
+                normalizeActivityClassName(packageName, className), false,
+                loader);
+            Constructor<?> constructor = type.getDeclaredConstructor();
+            constructor.setAccessible(true);
+            application = constructor.newInstance();
+        }
+        attachApplicationBaseContext(application, context);
+        if (!className.isEmpty()) {
+            java.lang.reflect.Method onCreate =
+                application.getClass().getMethod("onCreate");
+            onCreate.invoke(application);
+            System.out.println("[Muplar/ART] Application onCreate completed class="
+                + application.getClass().getName());
+        }
+        return application;
+    }
+
+    private static void attachApplicationBaseContext(Object application,
+                                                     Object context) {
+        try {
             try {
                 java.lang.reflect.Method attachBaseContext =
                     Class.forName("android.content.ContextWrapper")
@@ -537,11 +640,8 @@ public final class ArtApkMain {
                 }
             }
             setField(application, "mBase", context);
-            setField(activityObj, "mApplication", application);
-            attachApplicationToActivityThread(application);
-            System.out.println("[Muplar/ART] application attached");
         } catch (Throwable t) {
-            System.err.println("[Muplar/ART] application attach failed: "
+            System.err.println("[Muplar/ART] application base attach failed: "
                 + t.getClass().getName() + ": " + t.getMessage());
         }
     }

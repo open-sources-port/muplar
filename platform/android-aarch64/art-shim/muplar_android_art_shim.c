@@ -543,103 +543,6 @@ static void muplar_set_long_field(JNIEnv *env,
     (*env)->SetLongField(env, object, field, value);
 }
 
-struct muplar_native_window_buffer {
-    int32_t width;
-    int32_t height;
-    int32_t stride;
-    int32_t format;
-    void *bits;
-    uint32_t reserved[6];
-};
-
-static int muplar_min_int(int a, int b)
-{
-    return a < b ? a : b;
-}
-
-static int muplar_present_bitmap_to_host_window(
-    struct muplar_bitmap_state *bitmap)
-{
-    static const uint64_t guest_native_window = 0xA11D0001ULL;
-    typedef int32_t (*set_buffers_geometry_fn)(void *, int32_t, int32_t,
-                                               int32_t);
-    typedef int32_t (*lock_fn)(void *, struct muplar_native_window_buffer *,
-                               void *);
-    typedef int32_t (*unlock_fn)(void *);
-    struct muplar_native_window_buffer buffer;
-    void *libandroid;
-    set_buffers_geometry_fn set_buffers_geometry;
-    lock_fn lock_window;
-    unlock_fn unlock_and_post;
-    void *window = (void *) (uintptr_t) guest_native_window;
-    int dst_w;
-    int dst_h;
-    int x;
-    int y;
-    if (!bitmap || !bitmap->pixels || bitmap->width <= 0 || bitmap->height <= 0)
-        return 0;
-
-    dst_h = muplar_min_int(480, bitmap->height);
-    dst_w = (int) (((int64_t) dst_h * bitmap->width) / bitmap->height);
-    if (dst_w < 1)
-        dst_w = 1;
-    if (dst_w > 640) {
-        dst_w = 640;
-        dst_h = (int) (((int64_t) dst_w * bitmap->height) / bitmap->width);
-        if (dst_h < 1)
-            dst_h = 1;
-    }
-
-    libandroid = dlopen("libandroid.so", RTLD_NOW | RTLD_LOCAL);
-    if (!libandroid)
-        libandroid =
-            dlopen("/system/lib64/libandroid.so", RTLD_NOW | RTLD_LOCAL);
-    if (!libandroid)
-        return 0;
-    set_buffers_geometry = (set_buffers_geometry_fn) dlsym(
-        libandroid, "ANativeWindow_setBuffersGeometry");
-    lock_window = (lock_fn) dlsym(libandroid, "ANativeWindow_lock");
-    unlock_and_post =
-        (unlock_fn) dlsym(libandroid, "ANativeWindow_unlockAndPost");
-    if (!set_buffers_geometry || !lock_window || !unlock_and_post) {
-        dlclose(libandroid);
-        return 0;
-    }
-
-    set_buffers_geometry(window, dst_w, dst_h, 1);
-    memset(&buffer, 0, sizeof(buffer));
-    if (lock_window(window, &buffer, NULL) != 0) {
-        dlclose(libandroid);
-        return 0;
-    }
-    if (!buffer.bits || buffer.width <= 0 || buffer.height <= 0 ||
-        buffer.stride < buffer.width) {
-        unlock_and_post(window);
-        dlclose(libandroid);
-        return 0;
-    }
-
-    for (y = 0; y < buffer.height; y++) {
-        int src_y = (int) (((int64_t) y * bitmap->height) / buffer.height);
-        uint8_t *row =
-            (uint8_t *) buffer.bits +
-            (size_t) (buffer.height - 1 - y) * (size_t) buffer.stride * 4u;
-        for (x = 0; x < buffer.width; x++) {
-            int src_x = (int) (((int64_t) x * bitmap->width) / buffer.width);
-            uint32_t color =
-                bitmap->pixels[(size_t) src_y * (size_t) bitmap->width +
-                               (size_t) src_x];
-            row[(size_t) x * 4u + 0] = (uint8_t) (color >> 16);
-            row[(size_t) x * 4u + 1] = (uint8_t) (color >> 8);
-            row[(size_t) x * 4u + 2] = (uint8_t) color;
-            row[(size_t) x * 4u + 3] = (uint8_t) (color >> 24);
-        }
-    }
-    unlock_and_post(window);
-    dlclose(libandroid);
-    return 1;
-}
-
 struct muplar_line_break_result {
     jlong token;
     jint end_offset;
@@ -4603,21 +4506,6 @@ jboolean Java_android_graphics_Bitmap_nativeCompress(JNIEnv *env,
         ok = muplar_write_output_stream(env, stream, png.data, png.len);
     free(png.data);
     return ok ? JNI_TRUE : JNI_FALSE;
-}
-
-jboolean Java_com_muplar_runtime_MuplarGraphics_presentBitmap(
-    JNIEnv *env,
-    jclass clazz,
-    jlong native_bitmap,
-    jint width,
-    jint height)
-{
-    struct muplar_bitmap_state *bitmap = muplar_find_bitmap(native_bitmap);
-    (void) env;
-    (void) clazz;
-    (void) width;
-    (void) height;
-    return muplar_present_bitmap_to_host_window(bitmap) ? JNI_TRUE : JNI_FALSE;
 }
 
 jlong Java_android_graphics_RenderNode_nCreate(JNIEnv *env,

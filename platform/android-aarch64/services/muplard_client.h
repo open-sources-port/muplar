@@ -22,6 +22,17 @@ public:
     bool transact(const std::string &service,
                   const std::string &request,
                   std::string &reply) const;
+    bool device_action(const std::string &action,
+                       const std::string &tab,
+                       std::string &generation) const;
+    bool device_action(const std::string &action,
+                       const std::string &tab,
+                       const std::string &apk,
+                       const std::string &package_name,
+                       const std::string &activity,
+                       const std::string &application,
+                       std::string &generation) const;
+    bool query_device_state(std::string &state) const;
 
 private:
     bool request(uint16_t opcode,

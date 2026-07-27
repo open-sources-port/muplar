@@ -226,8 +226,7 @@ static std::vector<std::string> merge_environment(
         "LC_CTYPE",
         "WAYLAND_DISPLAY",
         "XDG_RUNTIME_DIR",
-        "MUPLAR_LAUNCHER3_SCREENSHOT",
-        "MUPLAR_SOFTWARE_HOST_PRESENT"};
+        "MUPLAR_LAUNCHER3_SCREENSHOT"};
 
     for (size_t i = 0; environ && environ[i]; ++i) {
         std::string entry = environ[i];
