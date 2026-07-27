@@ -112,6 +112,20 @@ Implementation notes:
 
 ## Step 5: Connect Rendering To The Device Window
 
+Status: implemented for the current software-rendered Launcher3 path.
+`HostWindow` can stream rendered RGBA frames over a per-prefix Unix socket when
+launched from Instance Manager, and `AndroidDeviceShell` receives those frames
+inside its reserved phone screen area. Native/EGL and Java software-presented
+frames no longer need a separate standalone host window in this path. Java
+Views render through `MuplarFramePresenter`: the active decor view is drawn to
+a software `Bitmap`, serialized as a raw MHR frame in the prefix rootfs, then
+picked up by `HostWindow` and forwarded into the embedded device screen. Basic
+pointer/key forwarding from the embedded screen back into the runtime is
+implemented, including macOS to Android key-code translation for common
+keyboard input. The device shell also forwards those events through `muplard`
+to the Java bootstrap, where they are dispatched on the main looper to the
+active Activity as `MotionEvent` and `KeyEvent` objects.
+
 Make Java and native Android UI draw into the same device window content area.
 
 Expected behavior:
@@ -121,23 +135,22 @@ Expected behavior:
   surface.
 - All Android UI frames present through `HostWindow`; there is no separate
   Java-specific window handler.
-- Resizing the host window updates Android configuration safely.
+- The device viewport is stable and scaled into the phone frame.
 - Input events are clipped to the content area and delivered to the active tab.
 
 Implementation notes:
 
-- Short path: safe host-side frame handoff from the ART/bootstrap side into
-  `HostWindow`.
-- Production path: enough `ViewRootImpl`, `Surface`, and HWUI behavior that
-  framework rendering naturally posts frames into `HostWindow`.
-- Do not add a second Java-specific window path. If software frames are needed
-  temporarily, treat them as an internal frame source for `HostWindow`.
+- Keep `HostWindow` as the only host-side Android window handler.
+- Treat the Java software frame bridge as an internal `HostWindow` frame
+  source, not a second Java-specific window.
+- Next rendering phase: enough `ViewRootImpl`, `Surface`, and HWUI behavior
+  that framework rendering naturally posts frames into `HostWindow`.
 
 ## Current Priority
 
 Continue with Android task/back-stack handling and Step 5. The host shell,
 prefix-scoped process ownership, tab UI, toolbar action callbacks, `muplard`
-action delivery, Java-side current-activity control, and in-process APK
-Activity launching now exist, but Launcher3 still needs real frame presentation
-inside the device content area and task switching still needs framework-level
-state.
+action/input delivery, Java-side current-activity control, and in-process APK
+Activity launching now exist. Next priorities are Android task/back-stack
+state, app install UX, and replacing the software Java frame bridge with
+framework/HWUI-backed presentation.

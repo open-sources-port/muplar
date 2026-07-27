@@ -37,6 +37,9 @@ enum class Opcode : uint16_t {
     QueryDeviceState = 24,
     SubscribeDeviceActions = 25,
     DeviceActionChanged = 26,
+    DeviceInput = 27,
+    SubscribeDeviceInputs = 28,
+    DeviceInputChanged = 29,
 };
 
 struct MessageHeader {

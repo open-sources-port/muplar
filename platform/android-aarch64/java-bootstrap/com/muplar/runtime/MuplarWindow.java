@@ -218,6 +218,7 @@ public final class MuplarWindow extends Window {
         decorView.removeAllViews();
         decorView.addView(view, normalizedParams(params));
         layoutDecor();
+        MuplarFramePresenter.schedule(decorView);
         System.out.println("[Muplar/Window] decor laid out: decor="
             + decorView.getWidth() + "x" + decorView.getHeight()
             + " content=" + view.getWidth() + "x" + view.getHeight());
@@ -306,27 +307,41 @@ public final class MuplarWindow extends Window {
 
     @Override
     public boolean superDispatchGenericMotionEvent(MotionEvent event) {
-        return false;
+        boolean handled =
+            decorView != null && decorView.dispatchGenericMotionEvent(event);
+        MuplarFramePresenter.schedule(decorView);
+        return handled;
     }
 
     @Override
     public boolean superDispatchKeyEvent(KeyEvent event) {
-        return false;
+        boolean handled = decorView != null && decorView.dispatchKeyEvent(event);
+        MuplarFramePresenter.schedule(decorView);
+        return handled;
     }
 
     @Override
     public boolean superDispatchKeyShortcutEvent(KeyEvent event) {
-        return false;
+        boolean handled =
+            decorView != null && decorView.dispatchKeyShortcutEvent(event);
+        MuplarFramePresenter.schedule(decorView);
+        return handled;
     }
 
     @Override
     public boolean superDispatchTouchEvent(MotionEvent event) {
-        return false;
+        boolean handled =
+            decorView != null && decorView.dispatchTouchEvent(event);
+        MuplarFramePresenter.schedule(decorView);
+        return handled;
     }
 
     @Override
     public boolean superDispatchTrackballEvent(MotionEvent event) {
-        return false;
+        boolean handled =
+            decorView != null && decorView.dispatchTrackballEvent(event);
+        MuplarFramePresenter.schedule(decorView);
+        return handled;
     }
 
     @Override

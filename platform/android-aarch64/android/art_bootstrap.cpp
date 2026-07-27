@@ -632,7 +632,26 @@ ArtBootstrapPlan build_art_bootstrap_plan(const ArtBootstrapConfig &config)
         plan.env.push_back("ANDROID_I18N_ROOT=/apex/com.android.i18n");
     if (exists_dir(sysroot_join(plan.sysroot, "/apex/com.android.tzdata")))
         plan.env.push_back("ANDROID_TZDATA_ROOT=/apex/com.android.tzdata");
+    if (const char *frame_path =
+            std::getenv("MUPLAR_ANDROID_SOFTWARE_FRAME_PATH");
+        frame_path && *frame_path) {
+        plan.env.push_back(std::string("MUPLAR_ANDROID_SOFTWARE_FRAME_PATH=") +
+                           frame_path);
+    }
     plan.env.push_back("ANDROID_PRINTF_LOG=stdio");
+
+    std::vector<std::string> service_property_args;
+    if (const char *service_executable =
+            std::getenv("MUPLAR_SERVICE_EXECUTABLE");
+        service_executable && *service_executable) {
+        service_property_args.push_back(
+            std::string("-Dmuplar.service.executable=") + service_executable);
+    }
+    if (const char *service_socket = std::getenv("MUPLAR_SERVICE_SOCKET");
+        service_socket && *service_socket) {
+        service_property_args.push_back(
+            std::string("-Dmuplar.service.socket=") + service_socket);
+    }
 
     bool use_dalvikvm =
         plan.app_process64_guest_path.find("dalvikvm") != std::string::npos;
@@ -644,6 +663,8 @@ ArtBootstrapPlan build_art_bootstrap_plan(const ArtBootstrapConfig &config)
                                 join_strings(guest_bootclasspath, ":"));
         plan.argv.push_back("-Xint");
         plan.argv.push_back("-Xusejit:false");
+        for (const std::string &property_arg : service_property_args)
+            plan.argv.push_back(property_arg);
         if (!guest_classpath.empty()) {
             plan.argv.push_back("-classpath");
             plan.argv.push_back(join_strings(guest_classpath, ":"));
@@ -653,6 +674,8 @@ ArtBootstrapPlan build_art_bootstrap_plan(const ArtBootstrapConfig &config)
             plan.argv.push_back("-Djava.class.path=" +
                                 join_strings(guest_classpath, ":"));
         }
+        for (const std::string &property_arg : service_property_args)
+            plan.argv.push_back(property_arg);
         plan.argv.push_back("/system/bin");
         plan.argv.push_back("--application");
         plan.argv.push_back("--nice-name=muplar-art");

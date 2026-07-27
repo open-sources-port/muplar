@@ -5,7 +5,9 @@
 #include <string.h>
 #include <time.h>
 #include <dlfcn.h>
+#include <fcntl.h>
 #include <jni.h>
+#include <unistd.h>
 
 #define PROP_VALUE_MAX 92
 
@@ -45,6 +47,14 @@ static uintptr_t muplar_binder_holder_token;
 static char muplar_property_handles[64][96];
 static jclass muplar_graphics_class;
 static jmethodID muplar_graphics_create_bitmap;
+
+struct muplar_frame_header {
+    uint32_t magic;
+    uint32_t width;
+    uint32_t height;
+    uint32_t stride_pixels;
+    uint64_t bytes;
+};
 
 struct muplar_sqlite_statement {
     jlong handle;
@@ -123,6 +133,66 @@ static void muplar_release_bitmap(jlong token)
         return;
     free(bitmap->pixels);
     memset(bitmap, 0, sizeof(*bitmap));
+}
+
+static int muplar_write_all(int fd, const void *data, size_t size)
+{
+    const uint8_t *bytes = data;
+    size_t offset = 0;
+    while (offset < size) {
+        ssize_t written = write(fd, bytes + offset, size - offset);
+        if (written <= 0)
+            return 0;
+        offset += (size_t) written;
+    }
+    return 1;
+}
+
+static int muplar_write_bitmap_frame(struct muplar_bitmap_state *bitmap,
+                                     const char *path)
+{
+    struct muplar_frame_header header;
+    char tmp_path[512];
+    uint8_t *rgba;
+    size_t count;
+    size_t i;
+    int fd;
+    if (!bitmap || !bitmap->pixels || !path || !*path)
+        return 0;
+    if (strlen(path) + 5 >= sizeof(tmp_path))
+        return 0;
+    count = (size_t) bitmap->width * (size_t) bitmap->height;
+    rgba = malloc(count * 4);
+    if (!rgba)
+        return 0;
+    for (i = 0; i < count; i++) {
+        uint32_t argb = bitmap->pixels[i];
+        rgba[i * 4 + 0] = (uint8_t) (argb >> 16);
+        rgba[i * 4 + 1] = (uint8_t) (argb >> 8);
+        rgba[i * 4 + 2] = (uint8_t) argb;
+        rgba[i * 4 + 3] = (uint8_t) (argb >> 24);
+    }
+    snprintf(tmp_path, sizeof(tmp_path), "%s.tmp", path);
+    fd = open(tmp_path, O_CREAT | O_TRUNC | O_WRONLY, 0600);
+    if (fd < 0) {
+        free(rgba);
+        return 0;
+    }
+    header.magic = 0x4d485231u;
+    header.width = (uint32_t) bitmap->width;
+    header.height = (uint32_t) bitmap->height;
+    header.stride_pixels = (uint32_t) bitmap->width;
+    header.bytes = count * 4;
+    if (!muplar_write_all(fd, &header, sizeof(header)) ||
+        !muplar_write_all(fd, rgba, count * 4)) {
+        close(fd);
+        unlink(tmp_path);
+        free(rgba);
+        return 0;
+    }
+    close(fd);
+    free(rgba);
+    return rename(tmp_path, path) == 0;
 }
 
 static struct muplar_canvas_state *muplar_find_canvas(jlong token)
@@ -4505,6 +4575,38 @@ jboolean Java_android_graphics_Bitmap_nativeCompress(JNIEnv *env,
     if (ok)
         ok = muplar_write_output_stream(env, stream, png.data, png.len);
     free(png.data);
+    return ok ? JNI_TRUE : JNI_FALSE;
+}
+
+jboolean Java_com_muplar_runtime_MuplarFramePresenter_writeBitmapNative(
+    JNIEnv *env,
+    jclass clazz,
+    jobject bitmap_object,
+    jstring path)
+{
+    jclass bitmap_class;
+    jfieldID native_ptr_field;
+    jlong native_bitmap;
+    const char *path_chars;
+    int ok;
+    (void) clazz;
+    if (!bitmap_object || !path)
+        return JNI_FALSE;
+    bitmap_class = (*env)->GetObjectClass(env, bitmap_object);
+    if (!bitmap_class)
+        return JNI_FALSE;
+    native_ptr_field = (*env)->GetFieldID(env, bitmap_class, "mNativePtr", "J");
+    if (!native_ptr_field) {
+        (*env)->ExceptionClear(env);
+        return JNI_FALSE;
+    }
+    native_bitmap = (*env)->GetLongField(env, bitmap_object, native_ptr_field);
+    path_chars = (*env)->GetStringUTFChars(env, path, NULL);
+    if (!path_chars)
+        return JNI_FALSE;
+    ok = muplar_write_bitmap_frame(muplar_find_bitmap(native_bitmap),
+                                   path_chars);
+    (*env)->ReleaseStringUTFChars(env, path, path_chars);
     return ok ? JNI_TRUE : JNI_FALSE;
 }
 
