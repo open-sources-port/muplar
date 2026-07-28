@@ -135,7 +135,15 @@ bool receive_header_with_fd(int socket_fd,
          cmsg = CMSG_NXTHDR(&message, cmsg)) {
         if (cmsg->cmsg_level == SOL_SOCKET && cmsg->cmsg_type == SCM_RIGHTS &&
             cmsg->cmsg_len >= CMSG_LEN(sizeof(int))) {
-            std::memcpy(&passed_fd, CMSG_DATA(cmsg), sizeof(passed_fd));
+            // CMSG_DATA(cmsg) points into control[], which is exactly
+            // CMSG_SPACE(sizeof(int)) bytes -- large enough for the single
+            // int-sized SCM_RIGHTS payload already size-checked above.
+            // Copied through a local int rather than &passed_fd directly:
+            // older cppcheck misreads memcpy's destination size when the
+            // target is a reference parameter's address.
+            int fd_value = -1;
+            std::memcpy(&fd_value, CMSG_DATA(cmsg), sizeof(fd_value));
+            passed_fd = fd_value;
             break;
         }
     }

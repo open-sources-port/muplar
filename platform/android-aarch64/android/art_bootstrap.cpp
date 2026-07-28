@@ -655,6 +655,11 @@ ArtBootstrapPlan build_art_bootstrap_plan(const ArtBootstrapConfig &config)
         if (!guest_bootclasspath.empty())
             plan.argv.push_back("-Xbootclasspath:" +
                                 join_strings(guest_bootclasspath, ":"));
+        /* JIT (dropping these flags) reproduces the same elfuse/HVF
+         * guest_bootstrap_prepare -> exit 139 crash signature seen
+         * elsewhere in this stack, apparently via JIT code-cache
+         * mmap/mprotect(PROT_EXEC). Keep the interpreter until that's
+         * root-caused; it's slow but stable. */
         plan.argv.push_back("-Xint");
         plan.argv.push_back("-Xusejit:false");
         for (const std::string &property_arg : service_property_args)

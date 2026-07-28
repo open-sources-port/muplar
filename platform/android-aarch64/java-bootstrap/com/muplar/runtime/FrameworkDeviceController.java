@@ -8,7 +8,9 @@ public final class FrameworkDeviceController {
     // Opcode values must match muplar::services::Opcode in
     // services/muplard_protocol.h.
     private static final int OPCODE_SUBSCRIBE_DEVICE_ACTIONS = 25;
+    private static final int OPCODE_DEVICE_ACTION_CHANGED = 26;
     private static final int OPCODE_SUBSCRIBE_DEVICE_INPUTS = 28;
+    private static final int OPCODE_DEVICE_INPUT_CHANGED = 29;
 
     private static final class DeviceAction {
         final long generation;
@@ -149,8 +151,23 @@ public final class FrameworkDeviceController {
                 "[DeviceController] subscribe failed: could not connect");
             return;
         }
+        // muplard replies to a subscribe request with one ack frame carrying
+        // its current device_state/device_input_state snapshot (same opcode,
+        // REPLY_FLAG set) before any live DeviceActionChanged/
+        // DeviceInputChanged pushes. That ack must be consumed here, not
+        // left for the reader loop below to misparse as a brand new event --
+        // otherwise a freshly registered activity immediately replays
+        // muplard's last action/input as if it just happened.
+        MuplarSocketClient.Frame actionAck;
+        MuplarSocketClient.Frame inputAck;
         if (!actionClient.sendFrame(OPCODE_SUBSCRIBE_DEVICE_ACTIONS, "") ||
-            !inputClient.sendFrame(OPCODE_SUBSCRIBE_DEVICE_INPUTS, "")) {
+            !inputClient.sendFrame(OPCODE_SUBSCRIBE_DEVICE_INPUTS, "") ||
+            (actionAck = actionClient.readFrame()) == null ||
+            actionAck.opcode !=
+                (OPCODE_SUBSCRIBE_DEVICE_ACTIONS | MuplarSocketClient.REPLY_FLAG) ||
+            (inputAck = inputClient.readFrame()) == null ||
+            inputAck.opcode !=
+                (OPCODE_SUBSCRIBE_DEVICE_INPUTS | MuplarSocketClient.REPLY_FLAG)) {
             actionClient.close();
             inputClient.close();
             System.err.println(
@@ -188,6 +205,8 @@ public final class FrameworkDeviceController {
         try {
             MuplarSocketClient.Frame frame;
             while ((frame = client.readFrame()) != null) {
+                if (frame.opcode != OPCODE_DEVICE_ACTION_CHANGED)
+                    continue;
                 applyAction(parseAction(frame.payload));
             }
         } catch (Exception error) {
@@ -231,7 +250,15 @@ public final class FrameworkDeviceController {
         try {
             MuplarSocketClient.Frame frame;
             while ((frame = client.readFrame()) != null) {
-                applyInput(parseInput(frame.payload));
+                if (frame.opcode != OPCODE_DEVICE_INPUT_CHANGED)
+                    continue;
+                DeviceInput parsed = parseInput(frame.payload);
+                System.out.println("[DeviceController] input frame gen=" +
+                    parsed.generation + " tab=" + parsed.tab + " type=" +
+                    parsed.type + " action=" + parsed.action +
+                    " localInputGeneration=" + inputGeneration);
+                System.out.flush();
+                applyInput(parsed);
             }
         } catch (Exception error) {
             System.err.println("[DeviceController] input stream failed: " +
@@ -463,6 +490,11 @@ public final class FrameworkDeviceController {
             ActivityRecord record = activityForTab(input.tab);
             if (record == null)
                 record = activeRecord();
+            System.out.println("[DeviceController] input apply tab=" +
+                input.tab + " type=" + input.type + " action=" +
+                input.action + " x=" + input.x + " y=" + input.y +
+                " record=" + (record != null) + " activity=" +
+                (record != null && record.activity != null));
             if (record == null || record.activity == null)
                 return;
             if (!record.tab.equals(activeTab))
@@ -487,17 +519,39 @@ public final class FrameworkDeviceController {
             pointerDownTime == 0) {
             pointerDownTime = now;
         }
+        System.out.println("[DeviceController] motion trace: before obtain");
+        System.out.flush();
+        android.view.MotionEvent.PointerProperties props =
+            new android.view.MotionEvent.PointerProperties();
+        props.id = 0;
+        props.toolType = android.view.MotionEvent.TOOL_TYPE_FINGER;
+        android.view.MotionEvent.PointerCoords coords =
+            new android.view.MotionEvent.PointerCoords();
+        coords.x = input.x;
+        coords.y = input.y;
+        coords.pressure = 1.0f;
+        coords.size = 1.0f;
         android.view.MotionEvent event = android.view.MotionEvent.obtain(
-            pointerDownTime, now, input.action, input.x, input.y, 0);
-        event.setSource(input.source);
+            pointerDownTime, now, input.action, 1,
+            new android.view.MotionEvent.PointerProperties[] { props },
+            new android.view.MotionEvent.PointerCoords[] { coords },
+            0 /* metaState */, 0 /* buttonState */,
+            1.0f /* xPrecision */, 1.0f /* yPrecision */, input.deviceId,
+            0 /* edgeFlags */, input.source, 0 /* flags */);
+        System.out.println("[DeviceController] motion trace: after obtain");
+        System.out.flush();
         try {
             if (!invokeInputDispatch(record.activity, "dispatchTouchEvent",
                     android.view.MotionEvent.class, event)) {
                 dispatchToDecorView(record.activity, "dispatchTouchEvent",
                     android.view.MotionEvent.class, event);
             }
+            System.out.println("[DeviceController] motion trace: after dispatch");
+            System.out.flush();
         } finally {
             event.recycle();
+            System.out.println("[DeviceController] motion trace: after recycle");
+            System.out.flush();
             if (input.action == android.view.MotionEvent.ACTION_UP ||
                 input.action == android.view.MotionEvent.ACTION_CANCEL) {
                 pointerDownTime = 0;
@@ -656,18 +710,34 @@ public final class FrameworkDeviceController {
             record.tab);
     }
 
-    private static void removeRecord(ActivityRecord record) {
+    private static void removeRecord(ActivityRecord record) throws Exception {
         String tabValue = record.tab;
+        boolean wasActive;
+        String newActiveTab;
         synchronized (lock) {
             activities.remove(tabValue);
-            if (tabValue.equals(activeTab)) {
+            wasActive = tabValue.equals(activeTab);
+            if (wasActive) {
                 activeTab = activities.containsKey("launcher")
                     ? "launcher"
                     : "";
             }
+            newActiveTab = activeTab;
         }
         if (!"launcher".equals(tabValue))
             FrameworkServiceClient.request("tab-finished", tabValue);
+        // The removed activity's decor view was the frame presenter's
+        // presented root; without this, the device window keeps showing
+        // that (now gone) activity's last-drawn pixels forever instead of
+        // switching back to whatever tab is now active.
+        if (wasActive) {
+            ActivityRecord next = activityForTab(newActiveTab);
+            if (next != null) {
+                focusRecord(next);
+            } else {
+                MuplarFramePresenter.clear();
+            }
+        }
     }
 
     private static ActivityRecord activeRecord() {

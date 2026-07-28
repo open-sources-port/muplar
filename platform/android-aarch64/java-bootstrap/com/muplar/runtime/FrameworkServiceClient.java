@@ -4,6 +4,7 @@ public final class FrameworkServiceClient {
     // Opcode values must match muplar::services::Opcode in
     // services/muplard_protocol.h.
     private static final int OPCODE_TAB_FINISHED = 30;
+    private static final int OPCODE_QUERY_PACKAGES = 8;
 
     private FrameworkServiceClient() {}
 
@@ -24,6 +25,8 @@ public final class FrameworkServiceClient {
     private static int opcodeFor(String operation) {
         if ("tab-finished".equals(operation))
             return OPCODE_TAB_FINISHED;
+        if ("query-packages".equals(operation))
+            return OPCODE_QUERY_PACKAGES;
         return -1;
     }
 }

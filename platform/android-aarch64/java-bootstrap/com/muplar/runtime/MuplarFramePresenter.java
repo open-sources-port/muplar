@@ -5,10 +5,15 @@ import android.graphics.Canvas;
 import android.graphics.Color;
 import android.view.View;
 import java.io.File;
+import java.lang.ref.WeakReference;
 
 final class MuplarFramePresenter {
+    private static final long LOOP_INTERVAL_MS = 200;
+
     private static boolean nativeAvailable = true;
     private static long lastFrameUptime;
+    private static volatile WeakReference<View> currentRoot;
+    private static boolean loopStarted;
 
     private MuplarFramePresenter() {
     }
@@ -16,10 +21,22 @@ final class MuplarFramePresenter {
     private static native boolean writeBitmapNative(Bitmap bitmap,
                                                     String path);
 
+    /**
+     * Requests a frame for {@code root} and, the first time this is ever
+     * called, starts a persistent low-frequency loop that keeps
+     * re-presenting whatever the most recently scheduled root is. Real
+     * Android apps get continuous frame delivery from
+     * Choreographer/RenderThread; this bridge has neither, so without the
+     * loop the device window only ever shows the single frame captured at
+     * the moment of the last device action (focus/tab-switch/input),
+     * which is often stale or premature (e.g. before Launcher3's async
+     * model load finishes laying out icons).
+     */
     static void schedule(final View root) {
         if (root == null) {
             return;
         }
+        currentRoot = new WeakReference<>(root);
         try {
             android.os.Looper looper = android.os.Looper.getMainLooper();
             if (looper == null) {
@@ -37,9 +54,39 @@ final class MuplarFramePresenter {
                     present(root);
                 }
             }, 48);
+            startLoop(handler);
         } catch (Throwable error) {
             present(root);
         }
+    }
+
+    /**
+     * Stops the presenter loop from re-drawing whatever root it last had:
+     * used when a tab is removed and no other tab becomes active, so the
+     * device window doesn't keep showing a since-destroyed activity's
+     * decor view forever.
+     */
+    static void clear() {
+        currentRoot = null;
+    }
+
+    private static void startLoop(final android.os.Handler handler) {
+        if (loopStarted) {
+            return;
+        }
+        loopStarted = true;
+        System.out.println("[Muplar/Window] frame loop started interval="
+            + LOOP_INTERVAL_MS);
+        handler.postDelayed(new Runnable() {
+            @Override public void run() {
+                WeakReference<View> ref = currentRoot;
+                View root = ref != null ? ref.get() : null;
+                if (root != null) {
+                    present(root);
+                }
+                handler.postDelayed(this, LOOP_INTERVAL_MS);
+            }
+        }, LOOP_INTERVAL_MS);
     }
 
     static void present(View root) {
@@ -71,6 +118,9 @@ final class MuplarFramePresenter {
             nativeAvailable = writeBitmapNative(bitmap, path);
             if (!nativeAvailable) {
                 System.err.println("[Muplar/Window] software frame bridge disabled");
+            } else {
+                System.out.println("[Muplar/Window] software frame presented w="
+                    + width + " h=" + height + " path=" + path);
             }
         } catch (Throwable error) {
             System.err.println("[Muplar/Window] software frame failed: " +

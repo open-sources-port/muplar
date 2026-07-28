@@ -165,7 +165,7 @@ static void poll_software_frame(HostWindow::Impl *impl)
 {
     if (!impl || impl->frame_fd < 0 || impl->software_frame_path.empty())
         return;
-    struct stat st{};
+    struct stat st = {};
     if (stat(impl->software_frame_path.c_str(), &st) != 0)
         return;
 #ifdef __APPLE__

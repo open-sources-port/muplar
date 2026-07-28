@@ -419,11 +419,11 @@ static uint64_t resolve_jni_call_target(jni::JniEnv &jni_env,
         uint64_t fn =
             jni_env.find_native(cls, call.method_name, call.signature);
         if (fn) {
-            std::fprintf(stderr,
-                         "[Muplar] JNI target resolved from RegisterNatives: "
-                         "%s.%s%s → 0x%llx\n",
-                         class_name.c_str(), call.method_name.c_str(),
-                         call.signature.c_str(), (unsigned long long) fn);
+            log_debug(
+                "[Muplar] JNI target resolved from RegisterNatives: "
+                "%s.%s%s → 0x%llx",
+                class_name.c_str(), call.method_name.c_str(),
+                call.signature.c_str(), (unsigned long long) fn);
             return fn;
         }
     }
@@ -440,17 +440,14 @@ static uint64_t resolve_jni_call_target(jni::JniEnv &jni_env,
         uint64_t fn =
             jni_onload.find_symbol(so_load_base, so_path, symbol, true);
         if (fn) {
-            std::fprintf(
-                stderr,
-                "[Muplar] JNI target resolved from export %s → 0x%llx\n",
-                symbol.c_str(), (unsigned long long) fn);
+            log_debug("[Muplar] JNI target resolved from export %s → 0x%llx",
+                      symbol.c_str(), (unsigned long long) fn);
             return fn;
         }
     }
 
-    std::fprintf(stderr, "[Muplar] JNI target not found: %s.%s%s\n",
-                 class_name.c_str(), call.method_name.c_str(),
-                 call.signature.c_str());
+    log_error("[Muplar] JNI target not found: %s.%s%s", class_name.c_str(),
+              call.method_name.c_str(), call.signature.c_str());
     return 0;
 }
 
@@ -513,11 +510,11 @@ static uint64_t prepare_native_activity(guest_t *g,
 
     (void) kActivitySize;
     (void) kCallbacksSize;
-    std::fprintf(stderr,
-                 "[Muplar] prepared ANativeActivity at GPA 0x%llx "
-                 "callbacks=0x%llx package=%s\n",
-                 (unsigned long long) activity_gpa,
-                 (unsigned long long) callbacks_gpa, package.c_str());
+    log_debug(
+        "[Muplar] prepared ANativeActivity at GPA 0x%llx "
+        "callbacks=0x%llx package=%s",
+        (unsigned long long) activity_gpa, (unsigned long long) callbacks_gpa,
+        package.c_str());
     return activity_gpa;
 }
 
@@ -820,9 +817,8 @@ static bool map_direct_so_object(guest_t *g,
     uint64_t map_end = align_up_u64(runtime_end, BLOCK_2MIB);
 
     if (map_end > g->guest_size) {
-        std::fprintf(
-            stderr,
-            "[Muplar] direct .so dependency range exceeds guest memory: %s\n",
+        log_error(
+            "[Muplar] direct .so dependency range exceeds guest memory: %s",
             obj.path.c_str());
         std::fclose(f);
         return false;
@@ -1025,33 +1021,31 @@ static bool load_direct_so_dependencies(
             if (!dep_path) {
                 if (android_builtin_soname(art, needed))
                     continue;
-                std::fprintf(stderr,
-                             "[Muplar] required direct .so dependency not "
-                             "found locally: %s\n",
-                             needed.c_str());
+                log_error(
+                    "[Muplar] required direct .so dependency not "
+                    "found locally: %s",
+                    needed.c_str());
                 return false;
             }
 
             DirectSoObject dep;
             if (!parse_direct_so_metadata(*dep_path, &dep)) {
-                std::fprintf(stderr, "[Muplar] failed to parse dependency %s\n",
-                             dep_path->c_str());
+                log_error("[Muplar] failed to parse dependency %s",
+                          dep_path->c_str());
                 return false;
             }
 
             uint64_t runtime_min = align_up_u64(next_base, BLOCK_2MIB);
             if (!map_direct_so_object(g, dep, runtime_min)) {
-                std::fprintf(stderr, "[Muplar] failed to map dependency %s\n",
-                             dep.path.c_str());
+                log_error("[Muplar] failed to map dependency %s",
+                          dep.path.c_str());
                 return false;
             }
 
             next_base = align_up_u64(dep.load_base + dep.load_max, BLOCK_2MIB);
-            std::fprintf(
-                stderr,
-                "[Muplar] loaded direct .so dependency %s at GPA 0x%llx\n",
-                dep.soname.c_str(),
-                (unsigned long long) (dep.load_base + dep.load_min));
+            log_info("[Muplar] loaded direct .so dependency %s at GPA 0x%llx",
+                     dep.soname.c_str(),
+                     (unsigned long long) (dep.load_base + dep.load_min));
             objects.push_back(std::move(dep));
         }
     }
@@ -1086,9 +1080,8 @@ static bool apply_direct_so_rela(FILE *f,
         return true;
     uint64_t rela_off = 0;
     if (!vaddr_to_file_offset(obj.phdrs, rela_vaddr, rela_size, &rela_off)) {
-        std::fprintf(
-            stderr,
-            "[Muplar] unable to read relocation table for %s at vaddr 0x%llx\n",
+        log_error(
+            "[Muplar] unable to read relocation table for %s at vaddr 0x%llx",
             obj.soname.c_str(), (unsigned long long) rela_vaddr);
         return false;
     }
@@ -1097,9 +1090,8 @@ static bool apply_direct_so_rela(FILE *f,
     for (size_t i = 0; i < count; ++i) {
         Elf64_Rela rela{};
         if (!read_at(f, rela_off + i * sizeof(rela), &rela, sizeof(rela))) {
-            std::fprintf(stderr,
-                         "[Muplar] unable to read relocation %zu for %s\n", i,
-                         obj.soname.c_str());
+            log_error("[Muplar] unable to read relocation %zu for %s", i,
+                      obj.soname.c_str());
             return false;
         }
 
@@ -1153,20 +1145,19 @@ static bool apply_direct_so_rela(FILE *f,
                         art.unsupported_import_stub(obj.soname, name);
                     constexpr uint32_t kUnresolvedImportLogLimit = 64;
                     if (*unresolved < kUnresolvedImportLogLimit) {
-                        std::fprintf(stderr,
-                                     "[Muplar] unresolved direct .so import: "
-                                     "%s needs %s "
-                                     "(reloc=%u slot=0x%llx%s)\n",
-                                     obj.soname.c_str(),
-                                     name.empty() ? "<unnamed>" : name.c_str(),
-                                     type, (unsigned long long) slot_gpa,
-                                     trap ? " trap=installed" : "");
+                        log_warn(
+                            "[Muplar] unresolved direct .so import: "
+                            "%s needs %s "
+                            "(reloc=%u slot=0x%llx%s)",
+                            obj.soname.c_str(),
+                            name.empty() ? "<unnamed>" : name.c_str(), type,
+                            (unsigned long long) slot_gpa,
+                            trap ? " trap=installed" : "");
                     } else if (*unresolved == kUnresolvedImportLogLimit) {
-                        std::fprintf(
-                            stderr,
+                        log_warn(
                             "[Muplar] unresolved direct .so import: %s has "
                             "more "
-                            "unresolved imports; suppressing further detail\n",
+                            "unresolved imports; suppressing further detail",
                             obj.soname.c_str());
                     }
                     ++(*unresolved);
@@ -1268,21 +1259,19 @@ static bool apply_direct_so_relocations(
                                         obj.dyn.jmprel_size, art, &rela_applied,
                                         &unresolved);
 
-    std::fprintf(stderr,
-                 "[Muplar] direct .so relocations applied for %s: RELR=%zu "
-                 "RELA/PLT=%zu unresolved=%zu\n",
-                 obj.soname.c_str(), relr_applied, rela_applied, unresolved);
+    log_info(
+        "[Muplar] direct .so relocations applied for %s: RELR=%zu "
+        "RELA/PLT=%zu unresolved=%zu",
+        obj.soname.c_str(), relr_applied, rela_applied, unresolved);
     if (unresolved) {
-        std::fprintf(
-            stderr,
+        log_warn(
             "[Muplar] WARNING: %s has %zu unresolved direct import(s); "
-            "continuing until a referenced symbol is actually used\n",
+            "continuing until a referenced symbol is actually used",
             obj.soname.c_str(), unresolved);
         if (strict_direct_imports) {
-            std::fprintf(
-                stderr,
+            log_error(
                 "[Muplar] strict direct import mode: failing %s because "
-                "%zu required import(s) are unresolved\n",
+                "%zu required import(s) are unresolved",
                 obj.soname.c_str(), unresolved);
             std::fclose(f);
             return false;
@@ -1319,8 +1308,8 @@ static uint64_t hvc6_handler(uint64_t call_nr,
         return out;
     }
 
-    std::fprintf(stderr, "[muplar] unknown HVC #6 call_nr=0x%llx\n",
-                 (unsigned long long) call_nr);
+    log_warn("[Muplar] unknown HVC #6 call_nr=0x%llx",
+             (unsigned long long) call_nr);
     return 0;
 }
 
@@ -1371,9 +1360,9 @@ static bool patch_lse_atomics_flag(guest_t *g,
                 uint64_t gpa = load_base + sym.st_value;
                 uint8_t zero = 0;
                 guest_write(g, gpa, &zero, 1);
-                std::printf(
+                log_info(
                     "[Muplar] patched __aarch64_have_lse_atomics=0 at GPA "
-                    "0x%llx for %s\n",
+                    "0x%llx for %s",
                     (unsigned long long) gpa, path.c_str());
                 std::fclose(ef);
                 return true;
@@ -1435,19 +1424,40 @@ static size_t patch_unaligned_zero_vector_stack_stores(
 
     std::fclose(f);
     if (patched) {
-        std::printf(
-            "[Muplar] patched %zu unaligned zero-vector stack store(s) in %s\n",
+        log_info(
+            "[Muplar] patched %zu unaligned zero-vector stack store(s) in %s",
             patched,
             obj.soname.empty() ? obj.path.c_str() : obj.soname.c_str());
     }
     return patched;
 }
 
+bool ensure_preempt_initialized()
+{
+    if (proc_preempt_init() != 0) {
+        log_warn(
+            "[Muplar] proc_preempt_init failed; SIGALRM-based "
+            "GuestRunnerConfig::timeout_sec and cross-thread vCPU "
+            "kicks will not work");
+        return false;
+    }
+    return true;
+}
+
 int GuestRunner::run(const GuestRunnerConfig &cfg)
 {
     log_init();
+    // Single log-level knob for both elfuse's own leveled logging and every
+    // "[Muplar] ..." progress/diagnostic message below: --verbose asks for
+    // per-syscall DEBUG tracing, --quiet asks for WARN-and-above only, and
+    // the default is INFO (milestones visible, per-frame/per-thread chatter
+    // hidden).
     if (cfg.verbose)
         log_set_level(LOG_DEBUG);
+    else if (cfg.quiet)
+        log_set_level(LOG_WARN);
+    else
+        log_set_level(LOG_INFO);
     ScopedHostCwd scoped_host_cwd(cfg.host_cwd);
 
     bool is_shared_lib = false;
@@ -1498,8 +1508,7 @@ int GuestRunner::run(const GuestRunnerConfig &cfg)
     bool guest_initialized = false;
     guest_bootstrap_t boot;
 
-    if (!cfg.quiet)
-        std::printf("[Muplar] guest_bootstrap_prepare...\n");
+    log_info("[Muplar] guest_bootstrap_prepare...");
     int rc = guest_bootstrap_prepare(
         &g, elf_path, false, guest_elf_path, sysroot, guest_argc, guest_argv,
         guest_envp ? const_cast<char **>(guest_envp) : environ, shim_bin,
@@ -1516,8 +1525,7 @@ int GuestRunner::run(const GuestRunnerConfig &cfg)
     hv_vcpu_t vcpu;
     hv_vcpu_exit_t *vexit;
 
-    if (!cfg.quiet)
-        std::printf("[Muplar] guest_bootstrap_create_vcpu...\n");
+    log_info("[Muplar] guest_bootstrap_create_vcpu...");
     rc = guest_bootstrap_create_vcpu(&g, &boot, cfg.verbose, &vcpu, &vexit);
     if (rc < 0) {
         guest_destroy(&g);
@@ -1634,18 +1642,12 @@ int GuestRunner::run(const GuestRunnerConfig &cfg)
         if (lse_flag_gpa) {
             uint8_t zero = 0;
             guest_write(&g, lse_flag_gpa, &zero, 1);
-            if (!cfg.quiet) {
-                std::printf(
-                    "[Muplar] patched __aarch64_have_lse_atomics=0 "
-                    "at GPA 0x%llx\n",
-                    (unsigned long long) lse_flag_gpa);
-            }
+            log_info(
+                "[Muplar] patched __aarch64_have_lse_atomics=0 "
+                "at GPA 0x%llx",
+                (unsigned long long) lse_flag_gpa);
         } else {
-            if (!cfg.quiet) {
-                std::fprintf(
-                    stderr,
-                    "[Muplar] WARNING: __aarch64_have_lse_atomics not found\n");
-            }
+            log_warn("[Muplar] WARNING: __aarch64_have_lse_atomics not found");
         }
     }
 
@@ -1658,8 +1660,7 @@ int GuestRunner::run(const GuestRunnerConfig &cfg)
 
     if (is_shared_lib) {
         // For .so files: run Android/JNI entrypoints directly.
-        std::printf(
-            "[Muplar] detected shared library — running Android .so path\n");
+        log_info("[Muplar] detected shared library — running Android .so path");
 
         auto *art_ptr =
             dynamic_cast<android::AndroidRuntime *>(gpu_bridge.get());
@@ -1726,10 +1727,10 @@ int GuestRunner::run(const GuestRunnerConfig &cfg)
                 }
             }
         } else {
-            std::fprintf(stderr,
-                         "[Muplar] WARNING: unable to parse direct .so "
-                         "metadata for %s\n",
-                         cfg.elf_path.c_str());
+            log_warn(
+                "[Muplar] WARNING: unable to parse direct .so "
+                "metadata for %s",
+                cfg.elf_path.c_str());
             exit_code = 1;
             direct_so_ready = false;
         }
@@ -1821,17 +1822,17 @@ int GuestRunner::run(const GuestRunnerConfig &cfg)
                     thread.ctx.sp_el1 = thread.stack_top;
                 }
                 thread.started = true;
-                std::printf(
+                log_debug(
                     "[Muplar] starting managed guest pthread handle=0x%llx "
-                    "start=0x%llx arg=0x%llx sp=0x%llx\n",
+                    "start=0x%llx arg=0x%llx sp=0x%llx",
                     (unsigned long long) thread.handle,
                     (unsigned long long) thread.start_routine,
                     (unsigned long long) thread.arg,
                     (unsigned long long) thread.ctx.sp_el1);
             } else {
-                std::printf(
+                log_debug(
                     "[Muplar] resuming managed guest pthread handle=0x%llx "
-                    "pc=0x%llx\n",
+                    "pc=0x%llx",
                     (unsigned long long) thread.handle,
                     (unsigned long long) thread.ctx.pc);
             }
@@ -1847,17 +1848,17 @@ int GuestRunner::run(const GuestRunnerConfig &cfg)
                 save_context(thread.ctx);
                 thread.ctx.pc += 4;  // Resume after the trapping HVC insn.
                 thread.yielded = true;
-                std::printf(
-                    "[Muplar] guest pthread yielded handle=0x%llx pc=0x%llx\n",
+                log_debug(
+                    "[Muplar] guest pthread yielded handle=0x%llx pc=0x%llx",
                     (unsigned long long) thread.handle,
                     (unsigned long long) thread.ctx.pc);
             } else {
                 thread.finished = true;
                 uint64_t retval = jni_onload.last_return_value();
                 art.complete_pthread_call(thread.handle, retval);
-                std::printf(
+                log_debug(
                     "[Muplar] guest pthread returned handle=0x%llx "
-                    "ret=0x%llx\n",
+                    "ret=0x%llx",
                     (unsigned long long) thread.handle,
                     (unsigned long long) retval);
             }
@@ -1905,9 +1906,9 @@ int GuestRunner::run(const GuestRunnerConfig &cfg)
                 if (!callback.callback)
                     continue;
                 did_work = true;
-                std::printf(
+                log_debug(
                     "[Muplar] running Choreographer frame callback frame=%llu "
-                    "data=0x%llx callback=0x%llx\n",
+                    "data=0x%llx callback=0x%llx",
                     (unsigned long long) callback.frame_time_nanos,
                     (unsigned long long) callback.data,
                     (unsigned long long) callback.callback);
@@ -1929,10 +1930,10 @@ int GuestRunner::run(const GuestRunnerConfig &cfg)
             bool ran_new_threads = false;
             for (;;) {
                 if (++rounds > kMaxDrainRounds) {
-                    std::fprintf(stderr,
-                                 "[Muplar] guest event drain budget exhausted "
-                                 "(%zu rounds)\n",
-                                 kMaxDrainRounds);
+                    log_warn(
+                        "[Muplar] guest event drain budget exhausted "
+                        "(%zu rounds)",
+                        kMaxDrainRounds);
                     break;
                 }
 
@@ -1955,9 +1956,9 @@ int GuestRunner::run(const GuestRunnerConfig &cfg)
                     if (!callback.callback)
                         continue;
                     did_work = true;
-                    std::printf(
+                    log_debug(
                         "[Muplar] running ALooper callback fd=%d events=0x%x "
-                        "data=0x%llx callback=0x%llx\n",
+                        "data=0x%llx callback=0x%llx",
                         callback.fd, callback.events,
                         (unsigned long long) callback.data,
                         (unsigned long long) callback.callback);
@@ -2003,18 +2004,17 @@ int GuestRunner::run(const GuestRunnerConfig &cfg)
                 std::string label =
                     obj.soname.empty() ? path_filename(obj.path) : obj.soname;
                 if (ri != 0 && android_builtin_soname(art, label)) {
-                    std::printf(
+                    log_debug(
                         "[Muplar] skipping DT_INIT_ARRAY for builtin "
-                        "dependency %s\n",
+                        "dependency %s",
                         label.c_str());
                     continue;
                 }
 
                 if (obj.dyn.init) {
                     uint64_t init_fn = obj.load_base + obj.dyn.init;
-                    std::printf(
-                        "[Muplar] running DT_INIT for %s at GPA 0x%llx\n",
-                        label.c_str(), (unsigned long long) init_fn);
+                    log_debug("[Muplar] running DT_INIT for %s at GPA 0x%llx",
+                              label.c_str(), (unsigned long long) init_fn);
                     call_guest_and_drain(init_fn, {}, false, false);
                 }
 
@@ -2024,9 +2024,8 @@ int GuestRunner::run(const GuestRunnerConfig &cfg)
                 uint64_t array_gpa = obj.load_base + obj.dyn.init_array;
                 size_t count = static_cast<size_t>(obj.dyn.init_array_size /
                                                    sizeof(uint64_t));
-                std::printf(
-                    "[Muplar] running DT_INIT_ARRAY for %s (%zu entries)\n",
-                    label.c_str(), count);
+                log_debug("[Muplar] running DT_INIT_ARRAY for %s (%zu entries)",
+                          label.c_str(), count);
                 for (size_t i = 0; i < count; ++i) {
                     uint64_t init_fn = 0;
                     if (!read_u64_guest(&g, array_gpa + i * sizeof(uint64_t),
@@ -2053,8 +2052,8 @@ int GuestRunner::run(const GuestRunnerConfig &cfg)
                 start + std::chrono::milliseconds(
                             bounded ? cfg.host_window_linger_ms : 0);
 
-            std::printf("[Muplar] entering host app loop%s\n",
-                        bounded ? " (bounded)" : " (close window to exit)");
+            log_info("[Muplar] entering host app loop%s",
+                     bounded ? " (bounded)" : " (close window to exit)");
 
             size_t ticks = 0;
             for (;;) {
@@ -2076,8 +2075,7 @@ int GuestRunner::run(const GuestRunnerConfig &cfg)
                 std::this_thread::sleep_for(16ms);
             }
 
-            std::printf("[Muplar] host app loop exited after %zu ticks\n",
-                        ticks);
+            log_info("[Muplar] host app loop exited after %zu ticks", ticks);
             return true;
         };
 
@@ -2091,22 +2089,22 @@ int GuestRunner::run(const GuestRunnerConfig &cfg)
             int jni_ret = jni_onload.call_jni_onload(jni_onload_gpa, vcpu,
                                                      vexit, run_current_vcpu);
             drain_guest_events();
-            std::printf("[Muplar] JNI_OnLoad returned 0x%x (%s)\n", jni_ret,
-                        jni_ret == jni::JNI_VERSION_1_6 ? "JNI_VERSION_1_6 ✓"
-                        : jni_ret < 0                   ? "error"
-                                                        : "unknown version");
+            log_info("[Muplar] JNI_OnLoad returned 0x%x (%s)", jni_ret,
+                     jni_ret == jni::JNI_VERSION_1_6 ? "JNI_VERSION_1_6 ✓"
+                     : jni_ret < 0                   ? "error"
+                                                     : "unknown version");
             exit_code = (jni_ret == jni::JNI_VERSION_1_6) ? 0 : 1;
         } else if (!cfg.native_activity && !cfg.jni_call.enabled) {
-            std::fprintf(stderr, "[Muplar] no JNI_OnLoad found in %s\n",
-                         cfg.elf_path.c_str());
+            log_error("[Muplar] no JNI_OnLoad found in %s",
+                      cfg.elf_path.c_str());
             exit_code = 1;
         } else if (cfg.jni_call.enabled) {
-            std::printf(
-                "[Muplar] no JNI_OnLoad; continuing with explicit JNI call\n");
+            log_info(
+                "[Muplar] no JNI_OnLoad; continuing with explicit JNI call");
         } else {
-            std::printf(
+            log_info(
                 "[Muplar] no JNI_OnLoad; continuing with NativeActivity "
-                "entry\n");
+                "entry");
         }
 
         if (exit_code == 0) {
@@ -2114,19 +2112,19 @@ int GuestRunner::run(const GuestRunnerConfig &cfg)
                 std::vector<std::string> param_types;
                 if (!parse_jni_parameter_types(cfg.jni_call.signature,
                                                &param_types)) {
-                    std::fprintf(stderr, "[Muplar] invalid JNI signature: %s\n",
-                                 cfg.jni_call.signature.c_str());
+                    log_error("[Muplar] invalid JNI signature: %s",
+                              cfg.jni_call.signature.c_str());
                     exit_code = 1;
                 } else if (param_types.size() > 6 ||
                            cfg.jni_call.int_args.size() > 6) {
-                    std::fprintf(stderr,
-                                 "[Muplar] --jni-call supports up to 6 Java "
-                                 "args for now\n");
+                    log_error(
+                        "[Muplar] --jni-call supports up to 6 Java "
+                        "args for now");
                     exit_code = 1;
                 } else if (cfg.jni_call.int_args.size() > param_types.size()) {
-                    std::fprintf(stderr,
-                                 "[Muplar] --jni-call got more --jni-int "
-                                 "values than signature args\n");
+                    log_error(
+                        "[Muplar] --jni-call got more --jni-int "
+                        "values than signature args");
                     exit_code = 1;
                 } else {
                     std::string class_name;
@@ -2200,11 +2198,11 @@ int GuestRunner::run(const GuestRunnerConfig &cfg)
                         int64_t native_ret = jni_onload.call_native(
                             fn, receiver, native_args, vcpu, vexit,
                             run_current_vcpu);
-                        std::printf("[Muplar] %s.%s%s returned %lld\n",
-                                    class_name.c_str(),
-                                    cfg.jni_call.method_name.c_str(),
-                                    cfg.jni_call.signature.c_str(),
-                                    (long long) native_ret);
+                        log_info("[Muplar] %s.%s%s returned %lld",
+                                 class_name.c_str(),
+                                 cfg.jni_call.method_name.c_str(),
+                                 cfg.jni_call.signature.c_str(),
+                                 (long long) native_ret);
                     }
                 }
             } else if (cfg.native_activity) {
@@ -2213,13 +2211,12 @@ int GuestRunner::run(const GuestRunnerConfig &cfg)
                                            "ANativeActivity_onCreate", true);
                 if (!on_create) {
                     if (jni_onload_gpa) {
-                        std::printf(
+                        log_info(
                             "[Muplar] no NativeActivity entry; JNI_OnLoad-only "
-                            "APK path complete\n");
+                            "APK path complete");
                     } else {
-                        std::fprintf(
-                            stderr,
-                            "[Muplar] no NativeActivity entry found in %s\n",
+                        log_error(
+                            "[Muplar] no NativeActivity entry found in %s",
                             cfg.elf_path.c_str());
                         exit_code = 1;
                     }
@@ -2232,8 +2229,7 @@ int GuestRunner::run(const GuestRunnerConfig &cfg)
                     call_guest_and_drain(on_create, {activity, 0, 0}, true,
                                          false);
 
-                    std::printf(
-                        "[Muplar] ANativeActivity_onCreate returned ✓\n");
+                    log_info("[Muplar] ANativeActivity_onCreate returned ✓");
 
                     uint64_t callbacks =
                         read_guest_u64_or_zero(&g, activity + 0x00);
@@ -2279,18 +2275,18 @@ int GuestRunner::run(const GuestRunnerConfig &cfg)
                                          drain_frames_inline,
                                          resume_bootstrap_threads_inline);
                     if (on_input_created) {
-                        std::printf(
+                        log_info(
                             "[Muplar] dispatching "
-                            "onInputQueueCreated(queue=0x%llx)\n",
+                            "onInputQueueCreated(queue=0x%llx)",
                             (unsigned long long) input_queue);
                         call_guest_and_drain(
                             on_input_created, {activity, input_queue},
                             drain_frames_inline, drain_frames_inline);
                     }
                     if (on_window_created) {
-                        std::printf(
+                        log_info(
                             "[Muplar] dispatching "
-                            "onNativeWindowCreated(window=0x%llx)\n",
+                            "onNativeWindowCreated(window=0x%llx)",
                             (unsigned long long) window);
                         call_guest_and_drain(
                             on_window_created, {activity, window},
@@ -2307,9 +2303,9 @@ int GuestRunner::run(const GuestRunnerConfig &cfg)
                         host_app_loop_ran = run_host_app_loop();
 
                     if (on_input_destroyed) {
-                        std::printf(
+                        log_info(
                             "[Muplar] dispatching "
-                            "onInputQueueDestroyed(queue=0x%llx)\n",
+                            "onInputQueueDestroyed(queue=0x%llx)",
                             (unsigned long long) input_queue);
                         call_guest_and_drain(on_input_destroyed,
                                              {activity, input_queue},
@@ -2333,8 +2329,8 @@ int GuestRunner::run(const GuestRunnerConfig &cfg)
                 if (fn) {
                     int native_ret = jni_onload.call_native_int2(
                         fn, 0, 40, 2, vcpu, vexit, run_current_vcpu);
-                    std::printf("[Muplar] nativeAdd(40, 2) returned %d%s\n",
-                                native_ret, native_ret == 42 ? " ✓" : "");
+                    log_debug("[Muplar] nativeAdd(40, 2) returned %d%s",
+                              native_ret, native_ret == 42 ? " ✓" : "");
                     if (native_ret != 42)
                         exit_code = 1;
                 }
@@ -2388,9 +2384,9 @@ int GuestRunner::run(const GuestRunnerConfig &cfg)
                 state->ticks++;
                 if (state->bounded &&
                     std::chrono::steady_clock::now() >= state->deadline) {
-                    std::printf(
+                    log_info(
                         "[Muplar] host window linger deadline reached (%zu "
-                        "ticks)\n",
+                        "ticks)",
                         state->ticks);
                     state->stop_requested = true;
                     return 1;
@@ -2400,20 +2396,17 @@ int GuestRunner::run(const GuestRunnerConfig &cfg)
             };
             hooks.opaque = &tick_state;
 
-            if (!cfg.quiet) {
-                std::printf(
-                    "[Muplar] entering vcpu_run_loop_with_hooks "
-                    "(host_window%s)...\n",
-                    tick_state.bounded ? " bounded" : "");
-            }
+            log_info(
+                "[Muplar] entering vcpu_run_loop_with_hooks "
+                "(host_window%s)...",
+                tick_state.bounded ? " bounded" : "");
             exit_code = vcpu_run_loop_with_hooks(
                 vcpu, vexit, &g, cfg.verbose, cfg.timeout_sec, nullptr, &hooks);
             if (tick_state.stop_requested)
                 exit_code = 0;
             host_app_loop_ran = true;
         } else {
-            if (!cfg.quiet)
-                std::printf("[Muplar] entering vcpu_run_loop...\n");
+            log_info("[Muplar] entering vcpu_run_loop...");
             exit_code = vcpu_run_loop(vcpu, vexit, &g, cfg.verbose,
                                       cfg.timeout_sec, nullptr);
         }
@@ -2422,8 +2415,7 @@ int GuestRunner::run(const GuestRunnerConfig &cfg)
     if (is_android_run && cfg.host_window && !host_app_loop_ran)
         gpu_bridge->run_host_window_after_guest(cfg.host_window_linger_ms);
 
-    if (!cfg.quiet)
-        std::printf("[Muplar] exit code: %d\n", exit_code);
+    log_info("[Muplar] exit code: %d", exit_code);
 
     guest_destroy(&g);
     return exit_code;

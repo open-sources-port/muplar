@@ -189,17 +189,26 @@ static NSView* AndroidDeviceTabChipView(NSString* title,
 
 - (void)mouseDown:(NSEvent*)event
 {
+#ifdef DEBUG
+    NSLog(@"[PointerDebug] mouseDown");
+#endif
     [self.window makeFirstResponder:self];
     [self.deviceShell sendPointerEvent:event action:0];
 }
 
 - (void)mouseDragged:(NSEvent*)event
 {
+#ifdef DEBUG
+    NSLog(@"[PointerDebug] mouseDragged");
+#endif
     [self.deviceShell sendPointerEvent:event action:2];
 }
 
 - (void)mouseUp:(NSEvent*)event
 {
+#ifdef DEBUG
+    NSLog(@"[PointerDebug] mouseUp");
+#endif
     [self.deviceShell sendPointerEvent:event action:1];
 }
 
@@ -623,15 +632,26 @@ static NSView* AndroidDeviceTabChipView(NSString* title,
 
 - (void)sendPointerEvent:(NSEvent*)event action:(int32_t)action
 {
-    if (self.frameClientFd < 0 || !event)
+    if (self.frameClientFd < 0 || !event) {
+#ifdef DEBUG
+        NSLog(@"[PointerDebug] drop: frameClientFd=%d event=%@", (int)self.frameClientFd, event);
+#endif
         return;
+    }
     NSRect bounds = self.frameView.bounds;
-    if (bounds.size.width <= 0 || bounds.size.height <= 0)
+    if (bounds.size.width <= 0 || bounds.size.height <= 0) {
+#ifdef DEBUG
+        NSLog(@"[PointerDebug] drop: bad bounds %@", NSStringFromRect(bounds));
+#endif
         return;
+    }
     NSPoint point = [self.frameView convertPoint:event.locationInWindow
                                        fromView:nil];
     if (point.x < 0.0 || point.y < 0.0 ||
         point.x > bounds.size.width || point.y > bounds.size.height) {
+#ifdef DEBUG
+        NSLog(@"[PointerDebug] drop: point %@ outside bounds %@", NSStringFromPoint(point), NSStringFromRect(bounds));
+#endif
         return;
     }
     CGFloat scaleX = self.framePixelWidth > 0
@@ -652,7 +672,12 @@ static NSView* AndroidDeviceTabChipView(NSString* title,
         self.inputHandler(self.activeTabIdentifier, packet.type, packet.action,
                           packet.source, packet.deviceId, packet.keyCode,
                           packet.x, packet.y);
-    if (!AndroidDeviceWriteAll(self.frameClientFd, &packet, sizeof(packet))) {
+    BOOL wrote = AndroidDeviceWriteAll(self.frameClientFd, &packet, sizeof(packet));
+#ifdef DEBUG
+    NSLog(@"[PointerDebug] send action=%d x=%.1f y=%.1f fd=%d wrote=%d",
+          action, packet.x, packet.y, (int)self.frameClientFd, (int)wrote);
+#endif
+    if (!wrote) {
         close(self.frameClientFd);
         self.frameClientFd = -1;
     }

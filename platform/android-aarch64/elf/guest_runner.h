@@ -136,4 +136,16 @@ public:
     int run(const GuestRunnerConfig &cfg);
 };
 
+// Starts elfuse's preemption thread (the SIGALRM/SIGUSR2 consumer that
+// backs GuestRunnerConfig::timeout_sec and cross-thread vCPU kicks).
+// elfuse's own standalone CLI (third_party/elfuse/src/main.c) calls this
+// during its own startup; embedders like mup's main() must call it too,
+// once, before any guest/vCPU threads exist, or those signals just sit
+// blocked-and-pending forever with nothing to consume them (timeout_sec
+// silently becomes a no-op, and per elfuse's own comments a missed call
+// site can also surface as spurious HV_EXIT_REASON_UNKNOWN). Safe to call
+// more than once; only the first call does anything. Returns false on
+// failure (see stderr for the reason).
+bool ensure_preempt_initialized();
+
 }  // namespace muplar::runtime::elf

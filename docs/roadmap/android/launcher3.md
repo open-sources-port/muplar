@@ -15,26 +15,69 @@ usable user experience?"
   ScrimView, and Overview children laid out at real bounds.
 - `visual-smoke.sh` can capture a PNG through the Android `Bitmap.compress()`
   path backed by ART-shim pixel storage.
-- Instance Manager can list and launch the packaged Launcher3 APK into a
-  persistent per-prefix Android session with a tabbed device window.
+- Instance Manager can list, launch, and install (copy into `packages_dir`
+  plus register in Instance Manager's own app list) the packaged Launcher3
+  APK and additional APKs, all inside a persistent per-prefix Android
+  session with a tabbed device window.
 - Java View/HWUI frames present through `HostWindow`, the only host-side
   Android window handler. Launcher3 paints into the device window
   automatically.
-- Back, Home, Recents, touch, and keyboard input reach the running Activity.
-  This requires `MUPLAR_SERVICE_EXECUTABLE`/`MUPLAR_SERVICE_SOCKET` to be
-  forwarded into the ART launch as `-Dmuplar.service.*` JVM properties;
-  without them `FrameworkDeviceController` never subscribes to muplard's
-  device-action/input streams and input silently does nothing.
+- Device-action/input dispatch (Home, Recents, Settings, tab focus/close,
+  touch, keyboard) goes through `MuplarSocketClient`, a small native
+  `AF_UNIX` socket bridge in the ART shim — the guest connects to muplard's
+  Unix socket directly, with no subprocess spawning. This replaced an
+  earlier `ProcessBuilder`-spawned-`mup`-subprocess design that could not
+  work: guest `execve()` of a host Mach-O binary does not work through
+  elfuse (elfuse only loads Linux ELF binaries; confirmed via a kernel-panic
+  investigation prompted by trying to force it to). Home/Recents/Settings/
+  tab-switching are confirmed working end-to-end through this bridge.
 - When Back finishes an app on the Java side, `FrameworkDeviceController`
   reports it to muplard (`tab-finished`/`query-tab-finished`) and the host
   polls after sending Back, auto-closing that tab in the device window.
+- `android.view.MotionEvent`'s full native surface (all 44 methods this
+  framework build declares, verified via `dexdump` against
+  `framework-classes4.jar`) is implemented in the ART shim. Pointer events
+  from the device window (`AndroidDeviceShell.mm` -> muplard `DeviceInput`
+  opcode -> `FrameworkDeviceController.readInputs()`) reach
+  `MotionEvent.obtain(...)` and construct a valid event object successfully.
+- `LauncherApps`/`PackageManager` app discovery (2026-07-29): the host
+  (`PrefixManagerApp.mm`'s `scanAndroidApps:`) now writes one record per
+  installed, non-launcher APK — `package`/`activity`/`label`/`apk`,
+  `---`-separated — to `registry_dir/android-packages.properties` using
+  the same `apk::classify_apk` manifest parser Instance Manager's own app
+  list already relies on. The guest reads it back via muplard's
+  previously-unused `QueryPackages` opcode (`FrameworkServiceClient`,
+  operation `"query-packages"`) and `MuplarServices.launcherAppsValue()`
+  builds real `ActivityInfo`/`ApplicationInfo`/`IncrementalStatesInfo`/
+  `LauncherActivityInfoInternal` objects via reflection (field names
+  verified via `dexdump` against `framework.jar`) for
+  `getLauncherActivities`/`getUserProfiles`/`isActivityEnabled`/
+  `isPackageEnabled`, wrapped in a real `ParceledListSlice`. The whole
+  path is wrapped in a top-level `catch (Throwable)` that logs and falls
+  back to `defaultValue(returnType)` — this class runs inside a Java
+  `Proxy` `InvocationHandler` standing in for a real Binder, so any
+  checked exception not assignable to the AIDL method's declared
+  `throws` gets wrapped in `UndeclaredThrowableException` by the JVM and
+  propagates as if the interface method itself threw it; do not remove
+  this catch. Confirmed via `visual-smoke.sh`'s standalone launch (passes
+  cleanly, no crash/hang) and by inspecting the written registry file
+  directly — **not yet confirmed visually in the interactive device
+  window**, because of the separate frame-bridge issue below.
 
 ## User-Visible Problem
 
-The device window now behaves like a real Android device session: Launcher3
-renders, app tabs open and close (each with its own close control), and Back/
-Home/Recents/input all work. What is still missing is real task/back-stack
-modeling, so multitasking does not yet match Android task semantics.
+The device window session/tab UI and Home/Recents/Settings dispatch all work
+now via the native socket transport, and `LauncherApps` now returns real
+installed-app data. Three things still block a real "Android device" feel:
+Back can hang the whole session on some apps, touch input reaches
+`MotionEvent` construction but crashes the guest before `dispatchTouchEvent`
+finishes, and the device window's frame bridge only captures a screenshot
+once per device action rather than continuously, so the window is often
+stuck showing a stale or premature frame (see Main Blockers for all three).
+The target experience is a persistent device session that feels like
+BlueStacks or MuMu Player (see [Android Device Window](./device-window.md))
+— touch and frame updates that reliably work end-to-end are prerequisites
+for that.
 
 The product target is documented in:
 
@@ -42,6 +85,122 @@ The product target is documented in:
 
 ## Main Blockers
 
+- Back can hang the session: pressing Back while the active app's
+  `onBackPressed()` drives a real animation (confirmed on
+  `QuickstepLauncher`) blocks the main thread indefinitely and never
+  recovers, likely because the animation depends on Choreographer/RenderThread
+  frame callbacks this environment does not fully deliver.
+- Touch input crashes the guest process: `MotionEvent` construction (all 44
+  native methods, `nativeInitialize` included) works, and the event reaches
+  `dispatchTouchEvent` on the real `QuickstepLauncher`/View hierarchy, but
+  the guest process dies (native SIGSEGV — `libc: failed to connect to
+  tombstoned` followed by `guest_bootstrap_prepare` / `exit code: 139`,
+  the same crash signature the F-Droid native-launch bug and the two
+  earlier kernel panics share) on essentially the first real touch event,
+  before `dispatchTouchEvent` returns. No Java exception is thrown (it
+  would be caught and logged) — this is a hard native crash, so it's very
+  likely a missing/broken native dependency somewhere inside real
+  Quickstep touch handling (ripple/touch-feedback, `VelocityTracker`,
+  `Choreographer`, etc.), not `MotionEvent` itself.
+  - Two real bugs were found and fixed on the way here, both still worth
+    knowing about:
+    1. Calling `MotionEvent.setSource()` after `obtain()` triggered an ART
+       interpreter argument-marshaling bug — the follow-up
+       `nativeSetSource(J I)V` call received garbage (`ptr`/`source`
+       values that looked like leftover stack addresses from the
+       *previous* native call's locals), despite the registered JNI
+       signature exactly matching the `dexdump`-verified declared
+       signature. Fixed by switching to the public 14-arg
+       `MotionEvent.obtain(downTime, eventTime, action, pointerCount,
+       PointerProperties[], PointerCoords[], metaState, buttonState,
+       xPrecision, yPrecision, deviceId, edgeFlags, source, flags)`
+       overload, which passes `source` straight into `nativeInitialize`
+       and never calls `setSource`/`nativeSetSource` at all.
+    2. Enabling ART's JIT (dropping `-Xint`/`-Xusejit:false` in
+       `art_bootstrap.cpp`) reproduced a crash with the same signature —
+       consistent with hitting the same underlying elfuse/HVF
+       instability via JIT code-cache `mmap`/`mprotect(PROT_EXEC)`. This
+       was reverted; `-Xint` stays until that's root-caused separately.
+       **Caveat:** the touch-dispatch crash above still reproduces with
+       `-Xint` restored, so JIT is not the cause of it — it was only
+       coincidentally triggered during that experiment.
+  - Separately, this build runs `-Xint` (pure interpreter, no JIT) for
+    stability, which makes any touch dispatch that *does* succeed very
+    slow — a burst of drag events (mouse-drag samples) can queue 100+
+    `DeviceInput` frames that take a long time to drain serially on the
+    main looper, one Quickstep-interpreted dispatch at a time. The guest
+    process can also be observed pegging ~500% CPU continuously without
+    crashing while working through a backlog like this — that's a real,
+    separate symptom, not necessarily a hang.
+  - **Root-cause update (2026-07-29):** a *local, uncommitted, reverted*
+    patch to elfuse's SIGSEGV-delivery path
+    (`third_party/elfuse/src/syscall/proc.c`, around the
+    `signal_deliver_fault(..., LINUX_SIGSEGV, ...)` call) was used for one
+    diagnostic session to unconditionally report the faulting PC/address
+    plus a `guest_region_find()` lookup for both — this is a vendored
+    third-party dependency, so the patch was deliberately not kept or
+    committed without the elfuse maintainer's sign-off; reproducing this
+    diagnostic again means re-adding the same small patch locally (see the
+    session transcript) or, better, proposing it upstream since it's a
+    generically useful fix (this diagnostic was previously gated behind
+    `verbose`, which is both off by default and, when turned on for a
+    test, generated so much syscall-trace volume it rotated the crash
+    straight out of the log within a few million lines before the patch —
+    a real trap; raise `kMaxLogFileBytes` in
+    `apps/macos/PrefixManagerApp.mm`, currently 5MB, before ever trying
+    `--verbose` for this again). One captured crash showed *two*
+    faults back to back:
+    1. The real crash: `PC=0x2013debfc` inside a small (~80KB) **unnamed,
+       anonymous, executable** guest region — not a named `.so`, so almost
+       certainly ART-generated code (an interpreter trampoline/stub;
+       `-Xint` should rule out full JIT-compiled method bodies, though an
+       always-on "quick entrypoint" stub cache is plausible) — dereferences
+       a garbage 64-bit value (`0x2c22b3a800000000`, not a remotely valid
+       address) as a pointer.
+    2. A **second, separate** null-pointer crash inside bionic itself
+       (`PC=0xff0009a078`, fault address `0x0`, region resolves to the
+       sysroot-mapped libc), immediately after step 1's signal handler
+       tries and fails to connect to `tombstoned` (which nothing in this
+       stack implements). This is bionic's own tombstoned-unreachable
+       fallback path null-derefing — a real, independent bug that's
+       currently masking any further diagnostics bionic's crash handler
+       might otherwise produce.
+    Next step to actually root-cause #1: disassemble/symbolicate the
+    unnamed region at crash time (no OAT/boot-image symbol source is
+    vendored here yet, so this needs either a boot-image symbol dump or
+    stepping through with a debugger attached to the vcpu thread) rather
+    than more log-based guessing.
+- The device window shows a stale/premature frame, not a live one — and
+  the real root cause is `-Xint` interpreter performance, not missing
+  scheduling. `MuplarFramePresenter.schedule()` originally only captured
+  a screenshot when a device action fired (`focusRecord`'s
+  `scheduleFrame`, or an input dispatch's own `scheduleFrame` at the end
+  of `applyInputOnMain`) — once immediately, plus one retry 48ms later,
+  never again. A self-rescheduling 200ms loop was added
+  (`MuplarFramePresenter.startLoop`, 2026-07-29) so *something* keeps
+  asking for frames, and it does work — confirmed via
+  `[Muplar/Window] frame loop started` / `software frame presented` log
+  lines, and it did produce one real, correctly-sized frame. But in a
+  ~15-20s interactive test it produced **exactly one** frame while 44
+  queued touch/input events sat completely unprocessed (zero
+  `input apply` lines) the whole time. The main thread is simply too
+  backlogged under pure interpretation to get back to a 200ms-interval
+  Runnable in any reasonable time — this is the same underlying cause as
+  the earlier-observed ~500% sustained CPU with an undrained input
+  queue. Scheduling more frame requests can't fix a main thread that
+  can't keep up; the loop is correct but can't overcome this on its own.
+  **This ties directly back to the reverted JIT experiment**: JIT is
+  very likely necessary for this to feel responsive at all, but currently
+  crashes via the elfuse/HVF bug documented in the touch-crash section
+  above. Getting JIT stable (or finding another way to cut
+  interpreted-execution cost) looks like a prerequisite for the device
+  window feeling live, not an independent nice-to-have.
+  Separately: `visual-smoke.sh`'s independent Bitmap.compress()-based
+  capture completes and produces a non-empty image, but **that image is
+  itself a checkerboard artifact, not a normal Launcher3 UI**
+  (`build/launcher3/verification/all-apps.png`, captured 2026-07-29) — a
+  separate, likely pre-existing bug in that capture path worth a look on
+  its own, unrelated to interpreter speed.
 - Android task/back-stack state is host-simulated (simple tab list), not
   backed by real ActivityManager task tracking.
 - The Java View frame path is still the software bitmap bridge
