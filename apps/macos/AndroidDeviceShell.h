@@ -18,6 +18,7 @@
 - (instancetype)initWithPrefixName:(NSString*)prefixName;
 - (void)focusOrCreateTabWithIdentifier:(NSString*)identifier title:(NSString*)title;
 - (void)focusLauncherTab;
+- (void)closeTabWithIdentifier:(NSString*)identifier;
 - (void)startFrameServerAtPath:(NSString*)path;
 - (void)showLaunchingApp:(NSString*)appName;
 - (void)showRunningApp:(NSString*)appName;

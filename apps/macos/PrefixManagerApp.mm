@@ -6,6 +6,7 @@
 #include <filesystem>
 #include <fstream>
 #include <memory>
+#include <sstream>
 #include <string>
 #include <vector>
 
@@ -659,6 +660,9 @@ static NSString* ParseLnkFile(const std::filesystem::path& lnkPath)
                                     y:(float)y
                            socketPath:(NSString*)socketPath
                               logPath:(NSString*)logPath;
+- (void)pollTabFinishedForIdentifier:(NSString*)tabIdentifier
+                          deviceShell:(AndroidDeviceShell*)deviceShell
+                           socketPath:(NSString*)socketPath;
 - (NSDictionary<NSString*, NSString*>*)androidLaunchMetadataForApp:
     (MuplarAppShortcut*)app
                                                            prefix:
@@ -4698,7 +4702,6 @@ static NSString* MapLinuxIconToSFSymbol(NSString* icon)
     env[@"MUPLAR_HOST_WINDOW_SOFTWARE_FRAME_PATH"] = softwareFrameHostPath;
     env[@"MUPLAR_ANDROID_SOFTWARE_FRAME_PATH"] =
         @"/data/local/tmp/muplar/frames/software-frame.mhr";
-    env[@"MUPLAR_SERVICE_EXECUTABLE"] = mupBin;
     env[@"MUPLAR_SERVICE_SOCKET"] = sessionSocketPath;
     task.environment = env;
     [self setupLoggingForTask:task prefix:selected appName:app.name];
@@ -4901,6 +4904,11 @@ static NSString* MapLinuxIconToSFSymbol(NSString* icon)
                               tabIdentifier:tabIdentifier
                                  socketPath:capturedSocketPath
                                     logPath:capturedLogPath];
+        if ([action isEqualToString:@"back"] && tabIdentifier.length > 0) {
+            [strongSelf pollTabFinishedForIdentifier:tabIdentifier
+                                          deviceShell:weakShell
+                                           socketPath:capturedSocketPath];
+        }
     };
     shell.tabFocusHandler = ^(NSString* tabIdentifier) {
         PrefixManagerAppDelegate* strongSelf = weakSelf;
@@ -5151,6 +5159,39 @@ static NSString* MapLinuxIconToSFSymbol(NSString* icon)
         // [logHandle writeData:[line dataUsingEncoding:NSUTF8StringEncoding]];
         // [logHandle closeFile];
     });
+}
+
+- (void)pollTabFinishedForIdentifier:(NSString*)tabIdentifier
+                          deviceShell:(AndroidDeviceShell*)deviceShell
+                           socketPath:(NSString*)socketPath
+{
+    if (tabIdentifier.length == 0 || socketPath.length == 0 || !deviceShell)
+        return;
+    NSString* tabCopy = [tabIdentifier copy];
+    NSString* socketCopy = [socketPath copy];
+    dispatch_after(
+        dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.35 * NSEC_PER_SEC)),
+        dispatch_get_global_queue(QOS_CLASS_UTILITY, 0), ^{
+            services::MuplardClient client(std::string(socketCopy.UTF8String));
+            std::string state;
+            if (!client.query_tab_finished(state))
+                return;
+            std::string finishedTab;
+            std::istringstream stream(state);
+            std::string line;
+            while (std::getline(stream, line)) {
+                if (line.rfind("tab=", 0) == 0) {
+                    finishedTab = line.substr(4);
+                    break;
+                }
+            }
+            if (finishedTab.empty() ||
+                finishedTab != std::string(tabCopy.UTF8String))
+                return;
+            dispatch_async(dispatch_get_main_queue(), ^{
+                [deviceShell closeTabWithIdentifier:tabCopy];
+            });
+        });
 }
 
 - (void)launchWineApp:(MuplarAppShortcut*)app prefix:(prefix::PrefixLayout*)selected

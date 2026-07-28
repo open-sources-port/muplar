@@ -15,29 +15,38 @@ usable user experience?"
   ScrimView, and Overview children laid out at real bounds.
 - `visual-smoke.sh` can capture a PNG through the Android `Bitmap.compress()`
   path backed by ART-shim pixel storage.
-- Instance Manager can list and launch the packaged Launcher3 APK.
+- Instance Manager can list and launch the packaged Launcher3 APK into a
+  persistent per-prefix Android session with a tabbed device window.
+- Java View/HWUI frames present through `HostWindow`, the only host-side
+  Android window handler. Launcher3 paints into the device window
+  automatically.
+- Back, Home, Recents, touch, and keyboard input reach the running Activity.
+  This requires `MUPLAR_SERVICE_EXECUTABLE`/`MUPLAR_SERVICE_SOCKET` to be
+  forwarded into the ART launch as `-Dmuplar.service.*` JVM properties;
+  without them `FrameworkDeviceController` never subscribes to muplard's
+  device-action/input streams and input silently does nothing.
+- When Back finishes an app on the Java side, `FrameworkDeviceController`
+  reports it to muplard (`tab-finished`/`query-tab-finished`) and the host
+  polls after sending Back, auto-closing that tab in the device window.
 
 ## User-Visible Problem
 
-The current experience is not user friendly. Launching Android can show an
-empty or minimally useful window, and each app launch still behaves too much
-like a separate runtime process instead of one Android device session.
+The device window now behaves like a real Android device session: Launcher3
+renders, app tabs open and close (each with its own close control), and Back/
+Home/Recents/input all work. What is still missing is real task/back-stack
+modeling, so multitasking does not yet match Android task semantics.
 
-The product target is now documented in:
+The product target is documented in:
 
 - [Android Device Window](./device-window.md)
 
 ## Main Blockers
 
-- Java View rendering is not safely connected to the host Android device
-  window yet. The existing host window path is strongest for native/EGL or
-  `ANativeWindow` buffers, while Launcher3 is Java View/HWUI UI.
-- `HostWindow` should be the default and only host-side Android window
-  handler. Java View/HWUI frames and native/EGL frames should both present
-  through that path.
-- Android app launch should be routed into a persistent per-prefix Android
-  session instead of spawning an isolated host-window process for each APK.
-- Back, Home, and task switching need first-class host controls.
+- Android task/back-stack state is host-simulated (simple tab list), not
+  backed by real ActivityManager task tracking.
+- The Java View frame path is still the software bitmap bridge
+  (`MuplarFramePresenter` writing raw MHR frames); it should move to
+  framework/HWUI-backed presentation.
 
 ## Verification Commands
 

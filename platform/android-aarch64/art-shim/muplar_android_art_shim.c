@@ -8,6 +8,8 @@
 #include <fcntl.h>
 #include <jni.h>
 #include <unistd.h>
+#include <sys/socket.h>
+#include <sys/un.h>
 
 #define PROP_VALUE_MAX 92
 
@@ -4608,6 +4610,96 @@ jboolean Java_com_muplar_runtime_MuplarFramePresenter_writeBitmapNative(
                                    path_chars);
     (*env)->ReleaseStringUTFChars(env, path, path_chars);
     return ok ? JNI_TRUE : JNI_FALSE;
+}
+
+/* Minimal AF_UNIX SOCK_STREAM client used by MuplarSocketClient to reach
+ * muplard directly, without spawning a host process. Callers own the
+ * muplard wire-protocol framing in Java; these four methods only move raw
+ * bytes.
+ */
+jint Java_com_muplar_runtime_MuplarSocketClient_nativeConnect(JNIEnv *env,
+                                                              jclass clazz,
+                                                              jstring path)
+{
+    struct sockaddr_un addr;
+    const char *path_chars;
+    size_t path_len;
+    int fd;
+    (void) clazz;
+    if (!path)
+        return -1;
+    path_chars = (*env)->GetStringUTFChars(env, path, NULL);
+    if (!path_chars)
+        return -1;
+    path_len = strlen(path_chars);
+    if (path_len >= sizeof(addr.sun_path)) {
+        (*env)->ReleaseStringUTFChars(env, path, path_chars);
+        return -1;
+    }
+    memset(&addr, 0, sizeof(addr));
+    addr.sun_family = AF_UNIX;
+    memcpy(addr.sun_path, path_chars, path_len + 1);
+    (*env)->ReleaseStringUTFChars(env, path, path_chars);
+
+    fd = socket(AF_UNIX, SOCK_STREAM, 0);
+    if (fd < 0)
+        return -1;
+    if (connect(fd, (struct sockaddr *) &addr, sizeof(addr)) < 0) {
+        close(fd);
+        return -1;
+    }
+    return (jint) fd;
+}
+
+jint Java_com_muplar_runtime_MuplarSocketClient_nativeWrite(JNIEnv *env,
+                                                             jclass clazz,
+                                                             jint fd,
+                                                             jbyteArray data,
+                                                             jint offset,
+                                                             jint length)
+{
+    jbyte *bytes;
+    ssize_t written;
+    (void) clazz;
+    if (!data || fd < 0 || offset < 0 || length < 0)
+        return -1;
+    bytes = (*env)->GetByteArrayElements(env, data, NULL);
+    if (!bytes)
+        return -1;
+    written = write((int) fd, bytes + offset, (size_t) length);
+    (*env)->ReleaseByteArrayElements(env, data, bytes, JNI_ABORT);
+    return (jint) written;
+}
+
+jint Java_com_muplar_runtime_MuplarSocketClient_nativeRead(JNIEnv *env,
+                                                            jclass clazz,
+                                                            jint fd,
+                                                            jbyteArray buffer,
+                                                            jint offset,
+                                                            jint length)
+{
+    jbyte *bytes;
+    ssize_t count;
+    (void) clazz;
+    if (!buffer || fd < 0 || offset < 0 || length < 0)
+        return -1;
+    bytes = (*env)->GetByteArrayElements(env, buffer, NULL);
+    if (!bytes)
+        return -1;
+    count = read((int) fd, bytes + offset, (size_t) length);
+    (*env)->ReleaseByteArrayElements(env, buffer, bytes,
+                                    count > 0 ? 0 : JNI_ABORT);
+    return (jint) count;
+}
+
+void Java_com_muplar_runtime_MuplarSocketClient_nativeClose(JNIEnv *env,
+                                                             jclass clazz,
+                                                             jint fd)
+{
+    (void) env;
+    (void) clazz;
+    if (fd >= 0)
+        close((int) fd);
 }
 
 jlong Java_android_graphics_RenderNode_nCreate(JNIEnv *env,

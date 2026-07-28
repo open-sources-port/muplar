@@ -641,12 +641,6 @@ ArtBootstrapPlan build_art_bootstrap_plan(const ArtBootstrapConfig &config)
     plan.env.push_back("ANDROID_PRINTF_LOG=stdio");
 
     std::vector<std::string> service_property_args;
-    if (const char *service_executable =
-            std::getenv("MUPLAR_SERVICE_EXECUTABLE");
-        service_executable && *service_executable) {
-        service_property_args.push_back(
-            std::string("-Dmuplar.service.executable=") + service_executable);
-    }
     if (const char *service_socket = std::getenv("MUPLAR_SERVICE_SOCKET");
         service_socket && *service_socket) {
         service_property_args.push_back(

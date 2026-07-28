@@ -1,13 +1,15 @@
 package com.muplar.runtime;
 
-import java.io.BufferedReader;
-import java.io.File;
-import java.io.InputStreamReader;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.Map;
 
 public final class FrameworkDeviceController {
+    // Opcode values must match muplar::services::Opcode in
+    // services/muplard_protocol.h.
+    private static final int OPCODE_SUBSCRIBE_DEVICE_ACTIONS = 25;
+    private static final int OPCODE_SUBSCRIBE_DEVICE_INPUTS = 28;
+
     private static final class DeviceAction {
         final long generation;
         final String action;
@@ -84,8 +86,8 @@ public final class FrameworkDeviceController {
     private static final ArrayList<DeviceInput> pendingInputs =
         new ArrayList<DeviceInput>();
 
-    private static volatile Process subscriber;
-    private static volatile Process inputSubscriber;
+    private static volatile MuplarSocketClient subscriber;
+    private static volatile MuplarSocketClient inputSubscriber;
     private static volatile long generation;
     private static volatile long inputGeneration;
     private static volatile String activeTab = "launcher";
@@ -136,127 +138,143 @@ public final class FrameworkDeviceController {
 
     public static synchronized void start() {
         if (subscriber != null) return;
-        String executable = System.getProperty("muplar.service.executable", "");
         String socket = System.getProperty("muplar.service.socket", "");
-        if (executable.isEmpty() || socket.isEmpty() ||
-            !new File(executable).isFile()) return;
-        try {
-            subscriber = new ProcessBuilder(executable, "--socket", socket,
-                "--client", "subscribe-device-actions")
-                .redirectError(ProcessBuilder.Redirect.INHERIT).start();
-            inputSubscriber = new ProcessBuilder(executable, "--socket", socket,
-                "--client", "subscribe-device-inputs")
-                .redirectError(ProcessBuilder.Redirect.INHERIT).start();
-            Thread reader = new Thread(new Runnable() {
-                @Override public void run() {
-                    readActions(subscriber);
-                }
-            }, "muplar-device-actions");
-            reader.setDaemon(true);
-            reader.start();
-            Thread inputReader = new Thread(new Runnable() {
-                @Override public void run() {
-                    readInputs(inputSubscriber);
-                }
-            }, "muplar-device-inputs");
-            inputReader.setDaemon(true);
-            inputReader.start();
-            Runtime.getRuntime().addShutdownHook(new Thread(new Runnable() {
-                @Override public void run() {
-                    Process process = subscriber;
-                    if (process != null) process.destroy();
-                    Process inputProcess = inputSubscriber;
-                    if (inputProcess != null) inputProcess.destroy();
-                }
-            }, "muplar-device-actions-shutdown"));
-            System.out.println("[DeviceController] subscribed");
-        } catch (Exception error) {
-            System.err.println("[DeviceController] subscribe failed: " + error);
+        if (socket.isEmpty()) return;
+        MuplarSocketClient actionClient = MuplarSocketClient.connect(socket);
+        MuplarSocketClient inputClient =
+            actionClient == null ? null : MuplarSocketClient.connect(socket);
+        if (actionClient == null || inputClient == null) {
+            if (actionClient != null) actionClient.close();
+            System.err.println(
+                "[DeviceController] subscribe failed: could not connect");
+            return;
         }
+        if (!actionClient.sendFrame(OPCODE_SUBSCRIBE_DEVICE_ACTIONS, "") ||
+            !inputClient.sendFrame(OPCODE_SUBSCRIBE_DEVICE_INPUTS, "")) {
+            actionClient.close();
+            inputClient.close();
+            System.err.println(
+                "[DeviceController] subscribe failed: could not subscribe");
+            return;
+        }
+        subscriber = actionClient;
+        inputSubscriber = inputClient;
+        Thread reader = new Thread(new Runnable() {
+            @Override public void run() {
+                readActions(actionClient);
+            }
+        }, "muplar-device-actions");
+        reader.setDaemon(true);
+        reader.start();
+        Thread inputReader = new Thread(new Runnable() {
+            @Override public void run() {
+                readInputs(inputClient);
+            }
+        }, "muplar-device-inputs");
+        inputReader.setDaemon(true);
+        inputReader.start();
+        Runtime.getRuntime().addShutdownHook(new Thread(new Runnable() {
+            @Override public void run() {
+                MuplarSocketClient client = subscriber;
+                if (client != null) client.close();
+                MuplarSocketClient input = inputSubscriber;
+                if (input != null) input.close();
+            }
+        }, "muplar-device-actions-shutdown"));
+        System.out.println("[DeviceController] subscribed");
     }
 
-    private static void readActions(Process process) {
-        try (BufferedReader input = new BufferedReader(
-                 new InputStreamReader(process.getInputStream(), "UTF-8"))) {
-            String line;
-            long nextGeneration = generation;
-            String nextAction = "";
-            String nextTab = "";
-            String nextApk = "";
-            String nextPackage = "";
-            String nextActivity = "";
-            String nextApplication = "";
-            while ((line = input.readLine()) != null) {
-                if (line.startsWith("generation=")) {
-                    nextGeneration = parseLong(line.substring(11), generation);
-                } else if (line.startsWith("action=")) {
-                    nextAction = line.substring(7);
-                } else if (line.startsWith("tab=")) {
-                    nextTab = line.substring(4);
-                } else if (line.startsWith("apk=")) {
-                    nextApk = line.substring(4);
-                } else if (line.startsWith("package=")) {
-                    nextPackage = line.substring(8);
-                } else if (line.startsWith("activity=")) {
-                    nextActivity = line.substring(9);
-                } else if (line.startsWith("application=")) {
-                    nextApplication = line.substring(12);
-                    applyAction(new DeviceAction(nextGeneration, nextAction,
-                        nextTab, nextApk, nextPackage, nextActivity,
-                        nextApplication));
-                }
+    private static void readActions(MuplarSocketClient client) {
+        try {
+            MuplarSocketClient.Frame frame;
+            while ((frame = client.readFrame()) != null) {
+                applyAction(parseAction(frame.payload));
             }
         } catch (Exception error) {
             System.err.println("[DeviceController] stream failed: " + error);
         } finally {
+            client.close();
             subscriber = null;
         }
     }
 
-    private static void readInputs(Process process) {
-        try (BufferedReader input = new BufferedReader(
-                 new InputStreamReader(process.getInputStream(), "UTF-8"))) {
-            String line;
-            long nextGeneration = inputGeneration;
-            String nextTab = "";
-            int nextType = 0;
-            int nextAction = 0;
-            int nextSource = 0;
-            int nextDeviceId = 0;
-            int nextKeyCode = 0;
-            float nextX = 0.0f;
-            float nextY = 0.0f;
-            while ((line = input.readLine()) != null) {
-                if (line.startsWith("generation=")) {
-                    nextGeneration =
-                        parseLong(line.substring(11), inputGeneration);
-                } else if (line.startsWith("tab=")) {
-                    nextTab = line.substring(4);
-                } else if (line.startsWith("type=")) {
-                    nextType = parseInt(line.substring(5), 0);
-                } else if (line.startsWith("action=")) {
-                    nextAction = parseInt(line.substring(7), 0);
-                } else if (line.startsWith("source=")) {
-                    nextSource = parseInt(line.substring(7), 0);
-                } else if (line.startsWith("deviceId=")) {
-                    nextDeviceId = parseInt(line.substring(9), 0);
-                } else if (line.startsWith("keyCode=")) {
-                    nextKeyCode = parseInt(line.substring(8), 0);
-                } else if (line.startsWith("x=")) {
-                    nextX = parseFloat(line.substring(2), 0.0f);
-                } else if (line.startsWith("y=")) {
-                    nextY = parseFloat(line.substring(2), 0.0f);
-                    applyInput(new DeviceInput(nextGeneration, nextTab,
-                        nextType, nextAction, nextSource, nextDeviceId,
-                        nextKeyCode, nextX, nextY));
-                }
+    private static DeviceAction parseAction(String payload) {
+        long nextGeneration = generation;
+        String nextAction = "";
+        String nextTab = "";
+        String nextApk = "";
+        String nextPackage = "";
+        String nextActivity = "";
+        String nextApplication = "";
+        for (String line : payload.split("\n", -1)) {
+            if (line.startsWith("generation=")) {
+                nextGeneration = parseLong(line.substring(11), generation);
+            } else if (line.startsWith("action=")) {
+                nextAction = line.substring(7);
+            } else if (line.startsWith("tab=")) {
+                nextTab = line.substring(4);
+            } else if (line.startsWith("apk=")) {
+                nextApk = line.substring(4);
+            } else if (line.startsWith("package=")) {
+                nextPackage = line.substring(8);
+            } else if (line.startsWith("activity=")) {
+                nextActivity = line.substring(9);
+            } else if (line.startsWith("application=")) {
+                nextApplication = line.substring(12);
+            }
+        }
+        return new DeviceAction(nextGeneration, nextAction, nextTab, nextApk,
+            nextPackage, nextActivity, nextApplication);
+    }
+
+    private static void readInputs(MuplarSocketClient client) {
+        try {
+            MuplarSocketClient.Frame frame;
+            while ((frame = client.readFrame()) != null) {
+                applyInput(parseInput(frame.payload));
             }
         } catch (Exception error) {
             System.err.println("[DeviceController] input stream failed: " +
                 error);
         } finally {
+            client.close();
             inputSubscriber = null;
         }
+    }
+
+    private static DeviceInput parseInput(String payload) {
+        long nextGeneration = inputGeneration;
+        String nextTab = "";
+        int nextType = 0;
+        int nextAction = 0;
+        int nextSource = 0;
+        int nextDeviceId = 0;
+        int nextKeyCode = 0;
+        float nextX = 0.0f;
+        float nextY = 0.0f;
+        for (String line : payload.split("\n", -1)) {
+            if (line.startsWith("generation=")) {
+                nextGeneration = parseLong(line.substring(11), inputGeneration);
+            } else if (line.startsWith("tab=")) {
+                nextTab = line.substring(4);
+            } else if (line.startsWith("type=")) {
+                nextType = parseInt(line.substring(5), 0);
+            } else if (line.startsWith("action=")) {
+                nextAction = parseInt(line.substring(7), 0);
+            } else if (line.startsWith("source=")) {
+                nextSource = parseInt(line.substring(7), 0);
+            } else if (line.startsWith("deviceId=")) {
+                nextDeviceId = parseInt(line.substring(9), 0);
+            } else if (line.startsWith("keyCode=")) {
+                nextKeyCode = parseInt(line.substring(8), 0);
+            } else if (line.startsWith("x=")) {
+                nextX = parseFloat(line.substring(2), 0.0f);
+            } else if (line.startsWith("y=")) {
+                nextY = parseFloat(line.substring(2), 0.0f);
+            }
+        }
+        return new DeviceInput(nextGeneration, nextTab, nextType, nextAction,
+            nextSource, nextDeviceId, nextKeyCode, nextX, nextY);
     }
 
     private static long parseLong(String value, long fallback) {
@@ -639,14 +657,17 @@ public final class FrameworkDeviceController {
     }
 
     private static void removeRecord(ActivityRecord record) {
+        String tabValue = record.tab;
         synchronized (lock) {
-            activities.remove(record.tab);
-            if (record.tab.equals(activeTab)) {
+            activities.remove(tabValue);
+            if (tabValue.equals(activeTab)) {
                 activeTab = activities.containsKey("launcher")
                     ? "launcher"
                     : "";
             }
         }
+        if (!"launcher".equals(tabValue))
+            FrameworkServiceClient.request("tab-finished", tabValue);
     }
 
     private static ActivityRecord activeRecord() {

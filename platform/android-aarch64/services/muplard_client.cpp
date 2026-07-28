@@ -117,6 +117,11 @@ bool MuplardClient::query_device_state(std::string &state) const
     return request(static_cast<uint16_t>(Opcode::QueryDeviceState), {}, state);
 }
 
+bool MuplardClient::query_tab_finished(std::string &state) const
+{
+    return request(static_cast<uint16_t>(Opcode::QueryTabFinished), {}, state);
+}
+
 bool MuplardClient::request(uint16_t opcode,
                             const std::string &payload,
                             std::string &reply) const
