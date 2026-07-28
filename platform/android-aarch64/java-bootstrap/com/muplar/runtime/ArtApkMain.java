@@ -427,6 +427,7 @@ public final class ArtApkMain {
             makeVisible.invoke(activityObj);
             System.out.println("[Muplar/ART] makeVisible completed successfully");
             if (decor instanceof android.view.View) {
+                MuplarFramePresenter.schedule((android.view.View) decor);
                 MuplarScreenshot.captureIfRequested((android.view.View) decor);
             }
         } catch (Throwable t) {

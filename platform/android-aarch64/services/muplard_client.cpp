@@ -3,6 +3,7 @@
 #include "muplard_protocol.h"
 
 #include <cstring>
+#include <sstream>
 #include <utility>
 #include <vector>
 
@@ -83,6 +84,30 @@ bool MuplardClient::device_action(const std::string &action,
     return request(static_cast<uint16_t>(Opcode::DeviceAction),
                    action + '\n' + tab + '\n' + apk + '\n' + package_name +
                        '\n' + activity + '\n' + application,
+                   generation) &&
+           generation != "0";
+}
+
+bool MuplardClient::device_input(const std::string &tab,
+                                 int32_t type,
+                                 int32_t action,
+                                 int32_t source,
+                                 int32_t device_id,
+                                 int32_t key_code,
+                                 float x,
+                                 float y,
+                                 std::string &generation) const
+{
+    std::ostringstream payload;
+    payload << tab << '\n'
+            << type << '\n'
+            << action << '\n'
+            << source << '\n'
+            << device_id << '\n'
+            << key_code << '\n'
+            << x << '\n'
+            << y;
+    return request(static_cast<uint16_t>(Opcode::DeviceInput), payload.str(),
                    generation) &&
            generation != "0";
 }

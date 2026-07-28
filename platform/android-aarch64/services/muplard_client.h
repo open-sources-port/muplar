@@ -32,6 +32,15 @@ public:
                        const std::string &activity,
                        const std::string &application,
                        std::string &generation) const;
+    bool device_input(const std::string &tab,
+                      int32_t type,
+                      int32_t action,
+                      int32_t source,
+                      int32_t device_id,
+                      int32_t key_code,
+                      float x,
+                      float y,
+                      std::string &generation) const;
     bool query_device_state(std::string &state) const;
 
 private:

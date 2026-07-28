@@ -47,6 +47,7 @@ struct Client {
     uid_t uid = 0;
     bool package_subscriber = false;
     bool device_action_subscriber = false;
+    bool device_input_subscriber = false;
     std::unordered_set<std::string> owned_services;
     std::string app_package;
     std::string app_activity;
@@ -362,6 +363,47 @@ struct DeviceState {
     std::string application;
 };
 
+struct DeviceInputState {
+    uint64_t generation = 0;
+    std::string tab;
+    int32_t type = 0;
+    int32_t action = 0;
+    int32_t source = 0;
+    int32_t device_id = 0;
+    int32_t key_code = 0;
+    float x = 0.0f;
+    float y = 0.0f;
+};
+
+bool parse_int32(const std::string &value, int32_t &out)
+{
+    try {
+        size_t parsed = 0;
+        long converted = std::stol(value, &parsed);
+        if (parsed != value.size() || converted < INT32_MIN ||
+            converted > INT32_MAX)
+            return false;
+        out = static_cast<int32_t>(converted);
+        return true;
+    } catch (...) {
+        return false;
+    }
+}
+
+bool parse_float(const std::string &value, float &out)
+{
+    try {
+        size_t parsed = 0;
+        float converted = std::stof(value, &parsed);
+        if (parsed != value.size())
+            return false;
+        out = converted;
+        return true;
+    } catch (...) {
+        return false;
+    }
+}
+
 bool valid_device_action(const std::string &action)
 {
     static const std::unordered_set<std::string> actions = {
@@ -396,6 +438,35 @@ bool apply_device_action(DeviceState &state, const std::string &payload)
     return true;
 }
 
+bool apply_device_input(DeviceInputState &state, const std::string &payload)
+{
+    std::vector<std::string> fields;
+    size_t start = 0;
+    while (start <= payload.size()) {
+        size_t end = payload.find('\n', start);
+        fields.push_back(payload.substr(start, end - start));
+        if (end == std::string::npos)
+            break;
+        start = end + 1;
+    }
+    if (fields.size() != 8)
+        return false;
+    DeviceInputState next;
+    next.tab = fields[0];
+    if (!parse_int32(fields[1], next.type) ||
+        !parse_int32(fields[2], next.action) ||
+        !parse_int32(fields[3], next.source) ||
+        !parse_int32(fields[4], next.device_id) ||
+        !parse_int32(fields[5], next.key_code) ||
+        !parse_float(fields[6], next.x) || !parse_float(fields[7], next.y))
+        return false;
+    if (next.type != 1 && next.type != 2)
+        return false;
+    next.generation = state.generation + 1;
+    state = std::move(next);
+    return true;
+}
+
 std::string device_state_reply(const DeviceState &state)
 {
     return "generation=" + std::to_string(state.generation) +
@@ -403,6 +474,17 @@ std::string device_state_reply(const DeviceState &state)
            "\napk=" + state.apk + "\npackage=" + state.package_name +
            "\nactivity=" + state.activity +
            "\napplication=" + state.application;
+}
+
+std::string device_input_reply(const DeviceInputState &state)
+{
+    return "generation=" + std::to_string(state.generation) +
+           "\ntab=" + state.tab + "\ntype=" + std::to_string(state.type) +
+           "\naction=" + std::to_string(state.action) +
+           "\nsource=" + std::to_string(state.source) +
+           "\ndeviceId=" + std::to_string(state.device_id) +
+           "\nkeyCode=" + std::to_string(state.key_code) +
+           "\nx=" + std::to_string(state.x) + "\ny=" + std::to_string(state.y);
 }
 
 bool apply_surface_transaction(
@@ -531,6 +613,7 @@ int run_surface_self_test()
 int run_device_self_test()
 {
     DeviceState state;
+    DeviceInputState input;
     if (apply_device_action(state, "invalid\nlauncher"))
         return 1;
     if (!apply_device_action(
@@ -548,9 +631,22 @@ int run_device_self_test()
         reply.find("action=back") == std::string::npos ||
         reply.find("tab=launcher") == std::string::npos)
         return 1;
+    if (!apply_device_input(input, "launcher\n2\n0\n4098\n1\n0\n120.5\n240") ||
+        input.generation != 1 || input.type != 2 || input.action != 0 ||
+        input.x != 120.5f)
+        return 1;
+    if (apply_device_input(input, "launcher\n9\n0\n4098\n1\n0\n0\n0"))
+        return 1;
+    std::string input_reply = device_input_reply(input);
+    if (input_reply.find("generation=1") == std::string::npos ||
+        input_reply.find("type=2") == std::string::npos ||
+        input_reply.find("x=120.500000") == std::string::npos)
+        return 1;
     std::cout << "deviceActionValidation=ok\n"
               << "deviceActionGeneration=ok\n"
-              << "deviceStateQuery=ok\n";
+              << "deviceStateQuery=ok\n"
+              << "deviceInputValidation=ok\n"
+              << "deviceInputGeneration=ok\n";
     return 0;
 }
 
@@ -647,6 +743,8 @@ int run_client(const fs::path &socket_path,
         : operation == "query-surfaces"      ? Opcode::QuerySurfaces
         : operation == "device-action"       ? Opcode::DeviceAction
         : operation == "query-device-state"  ? Opcode::QueryDeviceState
+        : operation == "device-input"        ? Opcode::DeviceInput
+        : operation == "subscribe-device-inputs" ? Opcode::SubscribeDeviceInputs
         : operation == "subscribe-device-actions"
             ? Opcode::SubscribeDeviceActions
         : operation == "binder-transact" ? Opcode::BinderTransact
@@ -679,7 +777,8 @@ int run_client(const fs::path &socket_path,
             break;
         std::cout << payload << std::endl;
         if (operation != "subscribe-packages" && operation != "app-session" &&
-            operation != "subscribe-device-actions")
+            operation != "subscribe-device-actions" &&
+            operation != "subscribe-device-inputs")
             break;
     }
     close(fd);
@@ -787,6 +886,7 @@ int main(int argc, char **argv)
     std::unordered_map<uint64_t, SurfaceState> surfaces;
     uint64_t surface_generation = 0;
     DeviceState device_state;
+    DeviceInputState device_input_state;
     uint64_t next_transaction_id = 1;
     std::vector<Client> clients;
     uint64_t package_generation = 1;
@@ -1007,6 +1107,11 @@ int main(int argc, char **argv)
                             send_message(clients[i].fd, opcode,
                                          header.request_id,
                                          device_state_reply(device_state));
+                        } else if (opcode == Opcode::SubscribeDeviceInputs) {
+                            clients[i].device_input_subscriber = true;
+                            send_message(
+                                clients[i].fd, opcode, header.request_id,
+                                device_input_reply(device_input_state));
                         } else if (opcode == Opcode::DeviceAction) {
                             bool valid =
                                 apply_device_action(device_state, payload);
@@ -1023,6 +1128,24 @@ int main(int argc, char **argv)
                                             client.fd,
                                             Opcode::DeviceActionChanged, 0,
                                             state, false);
+                                }
+                            }
+                        } else if (opcode == Opcode::DeviceInput) {
+                            bool valid =
+                                apply_device_input(device_input_state, payload);
+                            send_message(
+                                clients[i].fd, opcode, header.request_id,
+                                valid ? std::to_string(
+                                            device_input_state.generation)
+                                      : "0");
+                            if (valid) {
+                                std::string state =
+                                    device_input_reply(device_input_state);
+                                for (const auto &client : clients) {
+                                    if (client.device_input_subscriber)
+                                        send_message(client.fd,
+                                                     Opcode::DeviceInputChanged,
+                                                     0, state, false);
                                 }
                             }
                         } else if (opcode == Opcode::QueryDeviceState) {

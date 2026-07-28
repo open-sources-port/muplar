@@ -649,6 +649,16 @@ static NSString* ParseLnkFile(const std::filesystem::path& lnkPath)
                    tabIdentifier:(NSString*)tabIdentifier
                       socketPath:(NSString*)socketPath
                          logPath:(NSString*)logPath;
+- (void)sendAndroidDeviceInputForTab:(NSString*)tabIdentifier
+                                 type:(int32_t)type
+                               action:(int32_t)action
+                               source:(int32_t)source
+                             deviceId:(int32_t)deviceId
+                              keyCode:(int32_t)keyCode
+                                    x:(float)x
+                                    y:(float)y
+                           socketPath:(NSString*)socketPath
+                              logPath:(NSString*)logPath;
 - (NSDictionary<NSString*, NSString*>*)androidLaunchMetadataForApp:
     (MuplarAppShortcut*)app
                                                            prefix:
@@ -4608,13 +4618,22 @@ static NSString* MapLinuxIconToSFSymbol(NSString* icon)
         [app.name rangeOfString:@"launcher"
                         options:NSCaseInsensitiveSearch].location != NSNotFound;
     NSString* tabIdentifier = isLauncherApp ? @"launcher" : key;
-    NSString* tabTitle = isLauncherApp ? @"Launcher" : (app.name ?: @"App");
+    NSString* tabTitle = isLauncherApp ? @"Home" : (app.name ?: @"App");
     NSString* sessionSocketPath = NSStringFromPath(selected->root / "run" / "muplard.sock");
+    NSString* frameSocketPath =
+        NSStringFromPath(selected->root / "run" / "android-frame.sock");
+    std::filesystem::path androidRuntimeRootfs = selected->runtime_sysroot.empty()
+        ? selected->rootfs
+        : selected->runtime_sysroot;
+    NSString* softwareFrameHostPath = NSStringFromPath(
+        androidRuntimeRootfs / "data" / "local" / "tmp" / "muplar" / "frames" /
+        "software-frame.mhr");
     NSString* sessionLogPath =
         NSStringFromPath(muplar::runtime::prefix::main_log_path(*selected));
-    NSString* rootfsPath = NSStringFromPath(selected->rootfs);
+    NSString* rootfsPath = NSStringFromPath(androidRuntimeRootfs);
     AndroidDeviceShell* shell =
         [self androidDeviceShellForPrefix:selected app:app sessionKey:deviceKey];
+    [shell startFrameServerAtPath:frameSocketPath];
     [shell focusOrCreateTabWithIdentifier:tabIdentifier title:tabTitle];
 
     NSTask* existingSession = _androidSessionTasks[deviceKey];
@@ -4663,7 +4682,7 @@ static NSString* MapLinuxIconToSFSymbol(NSString* icon)
     NSTask* task = [[NSTask alloc] init];
     task.launchPath = mupBin;
     task.arguments = @[@"--prefix", NSStringFromStdString(selected->name),
-                       @"--apk", app.path];
+                       @"--apk", @"--host-window", app.path];
 
     NSMutableDictionary<NSString*, NSString*>* env =
         [NSProcessInfo.processInfo.environment mutableCopy];
@@ -4675,6 +4694,12 @@ static NSString* MapLinuxIconToSFSymbol(NSString* icon)
             : angleDir;
     }
     ApplyDefaultLinuxDisplayEnvironment(env);
+    env[@"MUPLAR_HOST_WINDOW_FRAME_SOCKET"] = frameSocketPath;
+    env[@"MUPLAR_HOST_WINDOW_SOFTWARE_FRAME_PATH"] = softwareFrameHostPath;
+    env[@"MUPLAR_ANDROID_SOFTWARE_FRAME_PATH"] =
+        @"/data/local/tmp/muplar/frames/software-frame.mhr";
+    env[@"MUPLAR_SERVICE_EXECUTABLE"] = mupBin;
+    env[@"MUPLAR_SERVICE_SOCKET"] = sessionSocketPath;
     task.environment = env;
     [self setupLoggingForTask:task prefix:selected appName:app.name];
 
@@ -4906,6 +4931,23 @@ static NSString* MapLinuxIconToSFSymbol(NSString* icon)
                                  socketPath:capturedSocketPath
                                     logPath:capturedLogPath];
     };
+    shell.inputHandler = ^(NSString* tabIdentifier, int32_t type,
+                           int32_t action, int32_t source, int32_t deviceId,
+                           int32_t keyCode, float x, float y) {
+        PrefixManagerAppDelegate* strongSelf = weakSelf;
+        if (!strongSelf)
+            return;
+        [strongSelf sendAndroidDeviceInputForTab:tabIdentifier
+                                            type:type
+                                          action:action
+                                          source:source
+                                        deviceId:deviceId
+                                         keyCode:keyCode
+                                               x:x
+                                               y:y
+                                      socketPath:capturedSocketPath
+                                         logPath:capturedLogPath];
+    };
     shell.window.title = [NSString stringWithFormat:@"%@ - %@",
                                                     app.name ?: @"Android",
                                                     deviceKey];
@@ -5069,6 +5111,45 @@ static NSString* MapLinuxIconToSFSymbol(NSString* icon)
             delivered ? @"yes" : @"no", delivered ? generation.c_str() : ""];
         [logHandle writeData:[line dataUsingEncoding:NSUTF8StringEncoding]];
         [logHandle closeFile];
+    });
+}
+
+- (void)sendAndroidDeviceInputForTab:(NSString*)tabIdentifier
+                                 type:(int32_t)type
+                               action:(int32_t)action
+                               source:(int32_t)source
+                             deviceId:(int32_t)deviceId
+                              keyCode:(int32_t)keyCode
+                                    x:(float)x
+                                    y:(float)y
+                           socketPath:(NSString*)socketPath
+                              logPath:(NSString*)logPath
+{
+    if (socketPath.length == 0)
+        return;
+    NSString* tabCopy = [tabIdentifier copy] ?: @"";
+    NSString* socketCopy = [socketPath copy];
+    NSString* logCopy = [logPath copy];
+    dispatch_async(dispatch_get_global_queue(QOS_CLASS_UTILITY, 0), ^{
+        services::MuplardClient client(std::string(socketCopy.UTF8String));
+        std::string generation;
+        bool delivered = client.device_input(std::string(tabCopy.UTF8String),
+                                             type, action, source, deviceId,
+                                             keyCode, x, y, generation);
+        if (logCopy.length == 0)
+            return;
+        // NSFileHandle* logHandle = OpenRotatingLogForAppend(logCopy);
+        // if (!logHandle)
+        //     return;
+        // NSDateFormatter* formatter = [[NSDateFormatter alloc] init];
+        // formatter.dateFormat = @"yyyy-MM-dd HH:mm:ss";
+        // NSString* timestamp = [formatter stringFromDate:[NSDate date]];
+        // NSString* line = [NSString stringWithFormat:
+        //     @"[%@] Android device input tab=%@ type=%d action=%d key=%d x=%.1f y=%.1f delivered=%@ generation=%s\n",
+        //     timestamp, tabCopy, type, action, keyCode, x, y,
+        //     delivered ? @"yes" : @"no", delivered ? generation.c_str() : ""];
+        // [logHandle writeData:[line dataUsingEncoding:NSUTF8StringEncoding]];
+        // [logHandle closeFile];
     });
 }
 

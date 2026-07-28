@@ -74,6 +74,7 @@ target_link_libraries(muplar_prefix_manager
 target_include_directories(muplar_prefix_manager
     PRIVATE
         ${CMAKE_SOURCE_DIR}/platform/commons/prefix
+        ${CMAKE_SOURCE_DIR}/platform/commons/runtime
         ${CMAKE_SOURCE_DIR}/platform/commons/supervisor
         ${CMAKE_SOURCE_DIR}/platform/android-aarch64/apk
         ${CMAKE_SOURCE_DIR}/platform/android-aarch64/services
