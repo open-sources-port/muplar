@@ -148,7 +148,14 @@ Implementation notes:
 
 ## Current Priority
 
-Continue with Android task/back-stack handling and Step 5. The host shell,
+Touch input is the top priority: it reaches `MotionEvent`/`dispatchTouchEvent`
+on the real Launcher3 but crashes the guest natively before returning — see
+"Main Blockers" in [Launcher3 Status](./launcher3.md) for the current
+diagnosis. A device that can't reliably take touch input doesn't feel like
+BlueStacks/MuMuPlayer no matter how solid the surrounding tab/session UI is,
+so this blocks the core product goal directly.
+
+After that: Android task/back-stack handling and Step 5. The host shell,
 prefix-scoped process ownership, tab UI, toolbar action callbacks, `muplard`
 action/input delivery, Java-side current-activity control, and in-process APK
 Activity launching now exist. Next priorities are Android task/back-stack

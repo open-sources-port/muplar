@@ -135,7 +135,15 @@ bool receive_header_with_fd(int socket_fd,
          cmsg = CMSG_NXTHDR(&message, cmsg)) {
         if (cmsg->cmsg_level == SOL_SOCKET && cmsg->cmsg_type == SCM_RIGHTS &&
             cmsg->cmsg_len >= CMSG_LEN(sizeof(int))) {
-            std::memcpy(&passed_fd, CMSG_DATA(cmsg), sizeof(passed_fd));
+            // CMSG_DATA(cmsg) points into control[], which is exactly
+            // CMSG_SPACE(sizeof(int)) bytes -- large enough for the single
+            // int-sized SCM_RIGHTS payload already size-checked above.
+            // Copied through a local int rather than &passed_fd directly:
+            // older cppcheck misreads memcpy's destination size when the
+            // target is a reference parameter's address.
+            int fd_value = -1;
+            std::memcpy(&fd_value, CMSG_DATA(cmsg), sizeof(fd_value));
+            passed_fd = fd_value;
             break;
         }
     }
@@ -375,6 +383,11 @@ struct DeviceInputState {
     float y = 0.0f;
 };
 
+struct TabFinishedState {
+    uint64_t generation = 0;
+    std::string tab;
+};
+
 bool parse_int32(const std::string &value, int32_t &out)
 {
     try {
@@ -485,6 +498,21 @@ std::string device_input_reply(const DeviceInputState &state)
            "\ndeviceId=" + std::to_string(state.device_id) +
            "\nkeyCode=" + std::to_string(state.key_code) +
            "\nx=" + std::to_string(state.x) + "\ny=" + std::to_string(state.y);
+}
+
+bool apply_tab_finished(TabFinishedState &state, const std::string &payload)
+{
+    if (payload.empty())
+        return false;
+    state.tab = payload;
+    ++state.generation;
+    return true;
+}
+
+std::string tab_finished_reply(const TabFinishedState &state)
+{
+    return "generation=" + std::to_string(state.generation) +
+           "\ntab=" + state.tab;
 }
 
 bool apply_surface_transaction(
@@ -743,6 +771,8 @@ int run_client(const fs::path &socket_path,
         : operation == "query-surfaces"      ? Opcode::QuerySurfaces
         : operation == "device-action"       ? Opcode::DeviceAction
         : operation == "query-device-state"  ? Opcode::QueryDeviceState
+        : operation == "tab-finished"        ? Opcode::TabFinished
+        : operation == "query-tab-finished"  ? Opcode::QueryTabFinished
         : operation == "device-input"        ? Opcode::DeviceInput
         : operation == "subscribe-device-inputs" ? Opcode::SubscribeDeviceInputs
         : operation == "subscribe-device-actions"
@@ -887,6 +917,7 @@ int main(int argc, char **argv)
     uint64_t surface_generation = 0;
     DeviceState device_state;
     DeviceInputState device_input_state;
+    TabFinishedState tab_finished_state;
     uint64_t next_transaction_id = 1;
     std::vector<Client> clients;
     uint64_t package_generation = 1;
@@ -1152,6 +1183,18 @@ int main(int argc, char **argv)
                             send_message(clients[i].fd, opcode,
                                          header.request_id,
                                          device_state_reply(device_state));
+                        } else if (opcode == Opcode::TabFinished) {
+                            bool valid =
+                                apply_tab_finished(tab_finished_state, payload);
+                            send_message(
+                                clients[i].fd, opcode, header.request_id,
+                                valid ? std::to_string(
+                                            tab_finished_state.generation)
+                                      : "0");
+                        } else if (opcode == Opcode::QueryTabFinished) {
+                            send_message(
+                                clients[i].fd, opcode, header.request_id,
+                                tab_finished_reply(tab_finished_state));
                         } else if (opcode == Opcode::BinderTransact) {
                             size_t separator = payload.find('\n');
                             std::string service = payload.substr(0, separator);

@@ -63,6 +63,7 @@ dkms.conf
 /**/.DS_Store
 .codegraph
 dist/
+.*_orig.c
 
 # Bundled JDK binaries — downloaded by tools/setup-jdk.sh, not committed to git.
 # Each developer runs this once: tools/setup-jdk.sh

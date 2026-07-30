@@ -40,6 +40,8 @@ enum class Opcode : uint16_t {
     DeviceInput = 27,
     SubscribeDeviceInputs = 28,
     DeviceInputChanged = 29,
+    TabFinished = 30,
+    QueryTabFinished = 31,
 };
 
 struct MessageHeader {

@@ -1,3 +1,4 @@
+#include <math.h>
 #include <stddef.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -8,6 +9,8 @@
 #include <fcntl.h>
 #include <jni.h>
 #include <unistd.h>
+#include <sys/socket.h>
+#include <sys/un.h>
 
 #define PROP_VALUE_MAX 92
 
@@ -30,7 +33,6 @@ static uintptr_t muplar_next_measured_text_token = 0x2a000;
 static uintptr_t muplar_next_measured_text_builder_token = 0x2b000;
 static uintptr_t muplar_next_parcel_token = 0x30000;
 static uintptr_t muplar_next_velocity_tracker_token = 0x32000;
-static uintptr_t muplar_next_display_event_receiver_token = 0x34000;
 static uintptr_t muplar_next_region_token = 0x36000;
 static uintptr_t muplar_next_surface_control_token = 0x38000;
 static uintptr_t muplar_next_surface_transaction_token = 0x3a000;
@@ -1462,10 +1464,123 @@ static void muplar_Matrix_nVoid(JNIEnv *env, jclass clazz, ...)
     (void) clazz;
 }
 
+/* None of the Matrix setters above (nSetScale/nSetRotate/nPostTranslate/...)
+ * actually track real matrix state -- they're all unconditional no-ops. The
+ * query/read-back natives below are written to match that: every matrix
+ * behaves as the identity matrix. This is internally consistent (nothing
+ * anywhere in this shim ever makes a matrix become non-identity) and is the
+ * safest default for callers that branch on "is this transform trivial" --
+ * exactly the case that was crashing (View.invalidateChild ->
+ * Matrix.isIdentity) before nIsIdentity existed at all. nEquals also returns
+ * true unconditionally for the same reason: no two handles can ever be
+ * distinguished here, so always-true is both internally consistent and keeps
+ * m.equals(m) true.
+ */
 static jboolean muplar_Matrix_nTrue(JNIEnv *env, jclass clazz, ...)
 {
     (void) env;
     (void) clazz;
+    return JNI_TRUE;
+}
+
+static jlong muplar_Matrix_ni(JNIEnv *env, jclass clazz)
+{
+    (void) env;
+    (void) clazz;
+    muplar_next_matrix_token += 0x100;
+    return (jlong) muplar_next_matrix_token;
+}
+
+/* Identity 3x3 matrix in Android's MSCALE_X/MSKEW_X/MTRANS_X/MSKEW_Y/
+ * MSCALE_Y/MTRANS_Y/MPERSP_0/MPERSP_1/MPERSP_2 float[9] order.
+ */
+static void muplar_Matrix_nGetValues(JNIEnv *env,
+                                     jclass clazz,
+                                     jlong matrix,
+                                     jfloatArray values)
+{
+    (void) clazz;
+    (void) matrix;
+    if (!values || (*env)->GetArrayLength(env, values) < 9)
+        return;
+    jfloat identity[9] = {1.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f, 0.0f, 0.0f, 1.0f};
+    (*env)->SetFloatArrayRegion(env, values, 0, 9, identity);
+}
+
+/* Identity transform: dst gets the same points as src, unchanged. */
+static void muplar_Matrix_nMapPoints(JNIEnv *env,
+                                     jclass clazz,
+                                     jlong matrix,
+                                     jfloatArray dst,
+                                     jint dst_index,
+                                     jfloatArray src,
+                                     jint src_index,
+                                     jint point_count,
+                                     jboolean is_points)
+{
+    (void) clazz;
+    (void) matrix;
+    (void) is_points;
+    if (!dst || !src || point_count <= 0)
+        return;
+    jint count = point_count * 2;
+    if (dst_index < 0 || src_index < 0)
+        return;
+    if (dst_index + count > (*env)->GetArrayLength(env, dst))
+        return;
+    if (src_index + count > (*env)->GetArrayLength(env, src))
+        return;
+    jfloat stackbuf[64];
+    jfloat *buf = (count <= (jint) (sizeof(stackbuf) / sizeof(stackbuf[0])))
+                      ? stackbuf
+                      : (jfloat *) malloc((size_t) count * sizeof(jfloat));
+    if (!buf)
+        return;
+    (*env)->GetFloatArrayRegion(env, src, src_index, count, buf);
+    (*env)->SetFloatArrayRegion(env, dst, dst_index, count, buf);
+    if (buf != stackbuf)
+        free(buf);
+}
+
+static jfloat muplar_Matrix_nMapRadius(JNIEnv *env,
+                                       jclass clazz,
+                                       jlong matrix,
+                                       jfloat radius)
+{
+    (void) env;
+    (void) clazz;
+    (void) matrix;
+    return radius;
+}
+
+/* Identity transform: dst rect gets the src rect's bounds unchanged. */
+static jboolean muplar_Matrix_nMapRect(JNIEnv *env,
+                                       jclass clazz,
+                                       jlong matrix,
+                                       jobject dst,
+                                       jobject src)
+{
+    (void) clazz;
+    (void) matrix;
+    if (!dst || !src)
+        return JNI_TRUE;
+    jclass rectFClass = (*env)->GetObjectClass(env, src);
+    jfieldID leftField = (*env)->GetFieldID(env, rectFClass, "left", "F");
+    jfieldID topField = (*env)->GetFieldID(env, rectFClass, "top", "F");
+    jfieldID rightField = (*env)->GetFieldID(env, rectFClass, "right", "F");
+    jfieldID bottomField = (*env)->GetFieldID(env, rectFClass, "bottom", "F");
+    if (!leftField || !topField || !rightField || !bottomField) {
+        (*env)->ExceptionClear(env);
+        return JNI_TRUE;
+    }
+    jfloat left = (*env)->GetFloatField(env, src, leftField);
+    jfloat top = (*env)->GetFloatField(env, src, topField);
+    jfloat right = (*env)->GetFloatField(env, src, rightField);
+    jfloat bottom = (*env)->GetFloatField(env, src, bottomField);
+    (*env)->SetFloatField(env, dst, leftField, left);
+    (*env)->SetFloatField(env, dst, topField, top);
+    (*env)->SetFloatField(env, dst, rightField, right);
+    (*env)->SetFloatField(env, dst, bottomField, bottom);
     return JNI_TRUE;
 }
 
@@ -4610,6 +4725,105 @@ jboolean Java_com_muplar_runtime_MuplarFramePresenter_writeBitmapNative(
     return ok ? JNI_TRUE : JNI_FALSE;
 }
 
+/* Minimal AF_UNIX SOCK_STREAM client used by MuplarSocketClient to reach
+ * muplard directly, without spawning a host process. Callers own the
+ * muplard wire-protocol framing in Java; these four methods only move raw
+ * bytes.
+ */
+jint Java_com_muplar_runtime_MuplarSocketClient_nativeConnect(JNIEnv *env,
+                                                              jclass clazz,
+                                                              jstring path)
+{
+    struct sockaddr_un addr;
+    const char *path_chars;
+    size_t path_len;
+    int fd;
+    (void) clazz;
+    if (!path)
+        return -1;
+    path_chars = (*env)->GetStringUTFChars(env, path, NULL);
+    if (!path_chars)
+        return -1;
+    path_len = strlen(path_chars);
+    if (path_len >= sizeof(addr.sun_path)) {
+        (*env)->ReleaseStringUTFChars(env, path, path_chars);
+        return -1;
+    }
+    memset(&addr, 0, sizeof(addr));
+    addr.sun_family = AF_UNIX;
+    memcpy(addr.sun_path, path_chars, path_len + 1);
+    (*env)->ReleaseStringUTFChars(env, path, path_chars);
+
+    fd = socket(AF_UNIX, SOCK_STREAM, 0);
+    if (fd < 0)
+        return -1;
+    if (connect(fd, (struct sockaddr *) &addr, sizeof(addr)) < 0) {
+        close(fd);
+        return -1;
+    }
+    return (jint) fd;
+}
+
+jint Java_com_muplar_runtime_MuplarSocketClient_nativeWrite(JNIEnv *env,
+                                                            jclass clazz,
+                                                            jint fd,
+                                                            jbyteArray data,
+                                                            jint offset,
+                                                            jint length)
+{
+    jbyte *bytes;
+    ssize_t written;
+    (void) clazz;
+    if (!data || fd < 0 || offset < 0 || length < 0)
+        return -1;
+    if ((jlong) offset + (jlong) length > (*env)->GetArrayLength(env, data))
+        return -1;
+    bytes = (*env)->GetByteArrayElements(env, data, NULL);
+    if (!bytes)
+        return -1;
+    /* send() with MSG_NOSIGNAL, not write(): a muplard disconnect mid-write
+     * hits EPIPE, and elfuse's guest signal emulation queues a real SIGPIPE
+     * for plain write() on a socket fd (default-terminates the guest
+     * process). MSG_NOSIGNAL tells elfuse's own send() syscall emulation to
+     * suppress that and just return -EPIPE instead. */
+    written = send((int) fd, bytes + offset, (size_t) length, MSG_NOSIGNAL);
+    (*env)->ReleaseByteArrayElements(env, data, bytes, JNI_ABORT);
+    return (jint) written;
+}
+
+jint Java_com_muplar_runtime_MuplarSocketClient_nativeRead(JNIEnv *env,
+                                                           jclass clazz,
+                                                           jint fd,
+                                                           jbyteArray buffer,
+                                                           jint offset,
+                                                           jint length)
+{
+    jbyte *bytes;
+    ssize_t count;
+    (void) clazz;
+    if (!buffer || fd < 0 || offset < 0 || length < 0)
+        return -1;
+    if ((jlong) offset + (jlong) length > (*env)->GetArrayLength(env, buffer))
+        return -1;
+    bytes = (*env)->GetByteArrayElements(env, buffer, NULL);
+    if (!bytes)
+        return -1;
+    count = read((int) fd, bytes + offset, (size_t) length);
+    (*env)->ReleaseByteArrayElements(env, buffer, bytes,
+                                     count > 0 ? 0 : JNI_ABORT);
+    return (jint) count;
+}
+
+void Java_com_muplar_runtime_MuplarSocketClient_nativeClose(JNIEnv *env,
+                                                            jclass clazz,
+                                                            jint fd)
+{
+    (void) env;
+    (void) clazz;
+    if (fd >= 0)
+        close((int) fd);
+}
+
 jlong Java_android_graphics_RenderNode_nCreate(JNIEnv *env,
                                                jclass clazz,
                                                jstring name)
@@ -4715,6 +4929,106 @@ static jboolean muplar_RenderNode_getBooleanTrue(JNIEnv *env,
     (void) env;
     (void) clazz;
     (void) node;
+    return JNI_TRUE;
+}
+
+static jboolean muplar_RenderNode_getBooleanFalse(JNIEnv *env,
+                                                  jclass clazz,
+                                                  jlong node)
+{
+    (void) env;
+    (void) clazz;
+    (void) node;
+    return JNI_FALSE;
+}
+
+static void muplar_RenderNode_nVoidLong(JNIEnv *env, jclass clazz, jlong node)
+{
+    (void) env;
+    (void) clazz;
+    (void) node;
+}
+
+static void muplar_RenderNode_nVoidLongLong(JNIEnv *env,
+                                            jclass clazz,
+                                            jlong node,
+                                            jlong arg)
+{
+    (void) env;
+    (void) clazz;
+    (void) node;
+    (void) arg;
+}
+
+static jboolean muplar_RenderNode_nSetOutlinePath(JNIEnv *env,
+                                                  jclass clazz,
+                                                  jlong node,
+                                                  jlong path,
+                                                  jfloat elevation)
+{
+    (void) env;
+    (void) clazz;
+    (void) node;
+    (void) path;
+    (void) elevation;
+    return JNI_TRUE;
+}
+
+static jboolean muplar_RenderNode_nSetOutlineRoundRect(JNIEnv *env,
+                                                       jclass clazz,
+                                                       jlong node,
+                                                       jint left,
+                                                       jint top,
+                                                       jint right,
+                                                       jint bottom,
+                                                       jfloat radius,
+                                                       jfloat alpha)
+{
+    (void) env;
+    (void) clazz;
+    (void) node;
+    (void) left;
+    (void) top;
+    (void) right;
+    (void) bottom;
+    (void) radius;
+    (void) alpha;
+    return JNI_TRUE;
+}
+
+static jboolean muplar_RenderNode_nSetRevealClip(JNIEnv *env,
+                                                 jclass clazz,
+                                                 jlong node,
+                                                 jboolean show,
+                                                 jfloat x,
+                                                 jfloat y,
+                                                 jfloat radius)
+{
+    (void) env;
+    (void) clazz;
+    (void) node;
+    (void) show;
+    (void) x;
+    (void) y;
+    (void) radius;
+    return JNI_TRUE;
+}
+
+static jboolean muplar_RenderNode_nStretch(JNIEnv *env,
+                                           jclass clazz,
+                                           jlong node,
+                                           jfloat vx,
+                                           jfloat vy,
+                                           jfloat maxStretchX,
+                                           jfloat maxStretchY)
+{
+    (void) env;
+    (void) clazz;
+    (void) node;
+    (void) vx;
+    (void) vy;
+    (void) maxStretchX;
+    (void) maxStretchY;
     return JNI_TRUE;
 }
 
@@ -5666,52 +5980,154 @@ jboolean Java_android_view_VelocityTracker_nativeIsAxisSupported(JNIEnv *env,
     return JNI_TRUE;
 }
 
-typedef int32_t (*fn_AMotionEvent_getAction)(const void *);
-typedef float (*fn_AMotionEvent_getX)(const void *, size_t);
-typedef float (*fn_AMotionEvent_getY)(const void *, size_t);
-typedef float (*fn_AMotionEvent_getRawX)(const void *, size_t);
-typedef float (*fn_AMotionEvent_getRawY)(const void *, size_t);
-typedef size_t (*fn_AMotionEvent_getPointerCount)(const void *);
-typedef int32_t (*fn_AMotionEvent_getPointerId)(const void *, size_t);
-typedef int64_t (*fn_AMotionEvent_getEventTime)(const void *);
-typedef int64_t (*fn_AMotionEvent_getDownTime)(const void *);
-typedef float (*fn_AMotionEvent_getPressure)(const void *, size_t);
-typedef size_t (*fn_AMotionEvent_getHistorySize)(const void *);
-typedef float (*fn_AMotionEvent_getAxisValue)(const void *, int32_t, size_t);
+/* Muplar-owned native backing for android.view.MotionEvent. Real AOSP
+ * backs this with a private, non-NDK android::MotionEvent C++ object
+ * (frameworks/native/libs/input) that isn't safely constructible from here:
+ * its layout isn't part of any public header, and getting a private C++
+ * ABI wrong is exactly the kind of memory-unsafe mistake worth avoiding.
+ * Muplar's device-action pipeline only ever needs single-pointer touch
+ * events (down/move/up with x/y), so a small self-contained struct is
+ * enough; no history, no multi-touch. The full set of native methods this
+ * exact framework build declares on MotionEvent was pulled via dexdump
+ * against the real framework-classes4.jar so every one of them has a real
+ * implementation here instead of failing case by case at runtime.
+ */
+typedef struct {
+    jint action;
+    jint actionButton;
+    jint pointerCount;
+    jint pointerId;
+    jint toolType;
+    jfloat x;
+    jfloat y;
+    jlong downTimeNanos;
+    jlong eventTimeNanos;
+    jint deviceId;
+    jint source;
+    jint displayId;
+    jint flags;
+    jint edgeFlags;
+    jint metaState;
+    jint buttonState;
+    jint classification;
+    jfloat xPrecision;
+    jfloat yPrecision;
+    jfloat xOffset;
+    jfloat yOffset;
+} muplar_motion_event_t;
 
-static fn_AMotionEvent_getAction p_AMotionEvent_getAction = NULL;
-static fn_AMotionEvent_getRawX p_AMotionEvent_getRawX = NULL;
-static fn_AMotionEvent_getRawY p_AMotionEvent_getRawY = NULL;
-static fn_AMotionEvent_getPointerCount p_AMotionEvent_getPointerCount = NULL;
-static fn_AMotionEvent_getPointerId p_AMotionEvent_getPointerId = NULL;
-static fn_AMotionEvent_getEventTime p_AMotionEvent_getEventTime = NULL;
-static fn_AMotionEvent_getDownTime p_AMotionEvent_getDownTime = NULL;
-static fn_AMotionEvent_getHistorySize p_AMotionEvent_getHistorySize = NULL;
-static fn_AMotionEvent_getAxisValue p_AMotionEvent_getAxisValue = NULL;
-
-static void ensure_amotion_event_symbols(void)
+static void muplar_motion_event_read_pointer0(JNIEnv *env,
+                                              muplar_motion_event_t *event,
+                                              jobjectArray pointerProperties,
+                                              jobjectArray pointerCoords)
 {
-    if (p_AMotionEvent_getAction)
-        return;
-    void *lib = RTLD_DEFAULT;
-    p_AMotionEvent_getAction =
-        (fn_AMotionEvent_getAction) dlsym(lib, "AMotionEvent_getAction");
-    p_AMotionEvent_getRawX =
-        (fn_AMotionEvent_getRawX) dlsym(lib, "AMotionEvent_getRawX");
-    p_AMotionEvent_getRawY =
-        (fn_AMotionEvent_getRawY) dlsym(lib, "AMotionEvent_getRawY");
-    p_AMotionEvent_getPointerCount = (fn_AMotionEvent_getPointerCount) dlsym(
-        lib, "AMotionEvent_getPointerCount");
-    p_AMotionEvent_getPointerId =
-        (fn_AMotionEvent_getPointerId) dlsym(lib, "AMotionEvent_getPointerId");
-    p_AMotionEvent_getEventTime =
-        (fn_AMotionEvent_getEventTime) dlsym(lib, "AMotionEvent_getEventTime");
-    p_AMotionEvent_getDownTime =
-        (fn_AMotionEvent_getDownTime) dlsym(lib, "AMotionEvent_getDownTime");
-    p_AMotionEvent_getHistorySize = (fn_AMotionEvent_getHistorySize) dlsym(
-        lib, "AMotionEvent_getHistorySize");
-    p_AMotionEvent_getAxisValue =
-        (fn_AMotionEvent_getAxisValue) dlsym(lib, "AMotionEvent_getAxisValue");
+    event->pointerId = 0;
+    event->toolType = 1; /* TOOL_TYPE_FINGER */
+    event->x = 0.0f;
+    event->y = 0.0f;
+
+    if (pointerProperties &&
+        (*env)->GetArrayLength(env, pointerProperties) > 0) {
+        jobject props0 =
+            (*env)->GetObjectArrayElement(env, pointerProperties, 0);
+        if (props0) {
+            jclass propsClass = (*env)->GetObjectClass(env, props0);
+            jfieldID idField = (*env)->GetFieldID(env, propsClass, "id", "I");
+            jfieldID toolTypeField =
+                (*env)->GetFieldID(env, propsClass, "toolType", "I");
+            if (idField)
+                event->pointerId = (*env)->GetIntField(env, props0, idField);
+            else
+                (*env)->ExceptionClear(env);
+            if (toolTypeField)
+                event->toolType =
+                    (*env)->GetIntField(env, props0, toolTypeField);
+            else
+                (*env)->ExceptionClear(env);
+        }
+    }
+    if (pointerCoords && (*env)->GetArrayLength(env, pointerCoords) > 0) {
+        jobject coords0 = (*env)->GetObjectArrayElement(env, pointerCoords, 0);
+        if (coords0) {
+            jclass coordsClass = (*env)->GetObjectClass(env, coords0);
+            jfieldID xField = (*env)->GetFieldID(env, coordsClass, "x", "F");
+            jfieldID yField = (*env)->GetFieldID(env, coordsClass, "y", "F");
+            if (xField && yField) {
+                event->x = (*env)->GetFloatField(env, coords0, xField);
+                event->y = (*env)->GetFloatField(env, coords0, yField);
+            } else {
+                (*env)->ExceptionClear(env);
+            }
+        }
+    }
+}
+
+jlong Java_android_view_MotionEvent_nativeInitialize(
+    JNIEnv *env,
+    jclass clazz,
+    jlong nativePtr,
+    jint deviceId,
+    jint source,
+    jint displayId,
+    jint action,
+    jint flags,
+    jint edgeFlags,
+    jint metaState,
+    jint buttonState,
+    jint classification,
+    jfloat xOffset,
+    jfloat yOffset,
+    jfloat xPrecision,
+    jfloat yPrecision,
+    jlong downTimeNanos,
+    jlong eventTimeNanos,
+    jint pointerCount,
+    jobjectArray pointerProperties,
+    jobjectArray pointerCoords)
+{
+    (void) clazz;
+
+    fprintf(stderr, "[MuplarShim] nativeInitialize: enter ptr=0x%llx pc=%d\n",
+            (unsigned long long) nativePtr, (int) pointerCount);
+    fflush(stderr);
+
+    muplar_motion_event_t *event =
+        (muplar_motion_event_t *) (uintptr_t) nativePtr;
+    if (!event) {
+        event = (muplar_motion_event_t *) calloc(1, sizeof(*event));
+        if (!event)
+            return 0;
+    }
+
+    event->action = action;
+    event->actionButton = 0;
+    event->pointerCount = pointerCount > 0 ? pointerCount : 1;
+    event->downTimeNanos = downTimeNanos;
+    event->eventTimeNanos = eventTimeNanos;
+    event->deviceId = deviceId;
+    event->source = source;
+    event->displayId = displayId;
+    event->flags = flags;
+    event->edgeFlags = edgeFlags;
+    event->metaState = metaState;
+    event->buttonState = buttonState;
+    event->classification = classification;
+    event->xPrecision = xPrecision;
+    event->yPrecision = yPrecision;
+    event->xOffset = xOffset;
+    event->yOffset = yOffset;
+    fprintf(stderr,
+            "[MuplarShim] nativeInitialize: before read_pointer0 "
+            "props=%p coords=%p\n",
+            (void *) pointerProperties, (void *) pointerCoords);
+    fflush(stderr);
+    muplar_motion_event_read_pointer0(env, event, pointerProperties,
+                                      pointerCoords);
+    fprintf(stderr, "[MuplarShim] nativeInitialize: exit event=%p\n",
+            (void *) event);
+    fflush(stderr);
+
+    return (jlong) (uintptr_t) event;
 }
 
 void Java_android_view_MotionEvent_nativeDispose(JNIEnv *env,
@@ -5720,7 +6136,7 @@ void Java_android_view_MotionEvent_nativeDispose(JNIEnv *env,
 {
     (void) env;
     (void) clazz;
-    (void) ptr;
+    free((void *) (uintptr_t) ptr);
 }
 
 jint Java_android_view_MotionEvent_nativeGetAction(JNIEnv *env,
@@ -5729,10 +6145,42 @@ jint Java_android_view_MotionEvent_nativeGetAction(JNIEnv *env,
 {
     (void) env;
     (void) clazz;
-    ensure_amotion_event_symbols();
-    return (ptr && p_AMotionEvent_getAction)
-               ? (jint) p_AMotionEvent_getAction((const void *) (uintptr_t) ptr)
-               : 0;
+    muplar_motion_event_t *event = (muplar_motion_event_t *) (uintptr_t) ptr;
+    return event ? event->action : 0;
+}
+
+void Java_android_view_MotionEvent_nativeSetAction(JNIEnv *env,
+                                                   jclass clazz,
+                                                   jlong ptr,
+                                                   jint action)
+{
+    (void) env;
+    (void) clazz;
+    muplar_motion_event_t *event = (muplar_motion_event_t *) (uintptr_t) ptr;
+    if (event)
+        event->action = action;
+}
+
+jint Java_android_view_MotionEvent_nativeGetActionButton(JNIEnv *env,
+                                                         jclass clazz,
+                                                         jlong ptr)
+{
+    (void) env;
+    (void) clazz;
+    muplar_motion_event_t *event = (muplar_motion_event_t *) (uintptr_t) ptr;
+    return event ? event->actionButton : 0;
+}
+
+void Java_android_view_MotionEvent_nativeSetActionButton(JNIEnv *env,
+                                                         jclass clazz,
+                                                         jlong ptr,
+                                                         jint actionButton)
+{
+    (void) env;
+    (void) clazz;
+    muplar_motion_event_t *event = (muplar_motion_event_t *) (uintptr_t) ptr;
+    if (event)
+        event->actionButton = actionButton;
 }
 
 jint Java_android_view_MotionEvent_nativeGetPointerCount(JNIEnv *env,
@@ -5741,11 +6189,8 @@ jint Java_android_view_MotionEvent_nativeGetPointerCount(JNIEnv *env,
 {
     (void) env;
     (void) clazz;
-    ensure_amotion_event_symbols();
-    return (ptr && p_AMotionEvent_getPointerCount)
-               ? (jint) p_AMotionEvent_getPointerCount(
-                     (const void *) (uintptr_t) ptr)
-               : 1;
+    muplar_motion_event_t *event = (muplar_motion_event_t *) (uintptr_t) ptr;
+    return event ? event->pointerCount : 1;
 }
 
 jint Java_android_view_MotionEvent_nativeGetPointerId(JNIEnv *env,
@@ -5755,43 +6200,93 @@ jint Java_android_view_MotionEvent_nativeGetPointerId(JNIEnv *env,
 {
     (void) env;
     (void) clazz;
-    ensure_amotion_event_symbols();
-    return (ptr && p_AMotionEvent_getPointerId)
-               ? (jint) p_AMotionEvent_getPointerId(
-                     (const void *) (uintptr_t) ptr, (size_t) index)
-               : 0;
+    (void) index;
+    muplar_motion_event_t *event = (muplar_motion_event_t *) (uintptr_t) ptr;
+    return event ? event->pointerId : 0;
 }
 
-jfloat Java_android_view_MotionEvent_nativeGetRawX(JNIEnv *env,
-                                                   jclass clazz,
-                                                   jlong ptr,
-                                                   jint index,
-                                                   jint historicalIndex)
+jint Java_android_view_MotionEvent_nativeFindPointerIndex(JNIEnv *env,
+                                                          jclass clazz,
+                                                          jlong ptr,
+                                                          jint pointerId)
 {
     (void) env;
     (void) clazz;
-    (void) historicalIndex;
-    ensure_amotion_event_symbols();
-    return (ptr && p_AMotionEvent_getRawX)
-               ? p_AMotionEvent_getRawX((const void *) (uintptr_t) ptr,
-                                        (size_t) index)
-               : 0.0f;
+    muplar_motion_event_t *event = (muplar_motion_event_t *) (uintptr_t) ptr;
+    return (event && event->pointerId == pointerId) ? 0 : -1;
 }
 
-jfloat Java_android_view_MotionEvent_nativeGetRawY(JNIEnv *env,
-                                                   jclass clazz,
-                                                   jlong ptr,
-                                                   jint index,
-                                                   jint historicalIndex)
+jint Java_android_view_MotionEvent_nativeGetToolType(JNIEnv *env,
+                                                     jclass clazz,
+                                                     jlong ptr,
+                                                     jint index)
 {
     (void) env;
     (void) clazz;
+    (void) index;
+    muplar_motion_event_t *event = (muplar_motion_event_t *) (uintptr_t) ptr;
+    return event ? event->toolType : 1;
+}
+
+void Java_android_view_MotionEvent_nativeGetPointerProperties(
+    JNIEnv *env,
+    jclass clazz,
+    jlong ptr,
+    jint pointerIndex,
+    jobject outProperties)
+{
+    (void) clazz;
+    (void) pointerIndex;
+    muplar_motion_event_t *event = (muplar_motion_event_t *) (uintptr_t) ptr;
+    if (!event || !outProperties)
+        return;
+    jclass propsClass = (*env)->GetObjectClass(env, outProperties);
+    jfieldID idField = (*env)->GetFieldID(env, propsClass, "id", "I");
+    jfieldID toolTypeField =
+        (*env)->GetFieldID(env, propsClass, "toolType", "I");
+    if (idField)
+        (*env)->SetIntField(env, outProperties, idField, event->pointerId);
+    else
+        (*env)->ExceptionClear(env);
+    if (toolTypeField)
+        (*env)->SetIntField(env, outProperties, toolTypeField, event->toolType);
+    else
+        (*env)->ExceptionClear(env);
+}
+
+void Java_android_view_MotionEvent_nativeGetPointerCoords(JNIEnv *env,
+                                                          jclass clazz,
+                                                          jlong ptr,
+                                                          jint pointerIndex,
+                                                          jint historicalIndex,
+                                                          jobject outCoords)
+{
+    (void) clazz;
+    (void) pointerIndex;
     (void) historicalIndex;
-    ensure_amotion_event_symbols();
-    return (ptr && p_AMotionEvent_getRawY)
-               ? p_AMotionEvent_getRawY((const void *) (uintptr_t) ptr,
-                                        (size_t) index)
-               : 0.0f;
+    muplar_motion_event_t *event = (muplar_motion_event_t *) (uintptr_t) ptr;
+    if (!event || !outCoords)
+        return;
+    jclass coordsClass = (*env)->GetObjectClass(env, outCoords);
+    jfieldID xField = (*env)->GetFieldID(env, coordsClass, "x", "F");
+    jfieldID yField = (*env)->GetFieldID(env, coordsClass, "y", "F");
+    jfieldID pressureField =
+        (*env)->GetFieldID(env, coordsClass, "pressure", "F");
+    jfieldID sizeField = (*env)->GetFieldID(env, coordsClass, "size", "F");
+    if (xField && yField) {
+        (*env)->SetFloatField(env, outCoords, xField, event->x);
+        (*env)->SetFloatField(env, outCoords, yField, event->y);
+    } else {
+        (*env)->ExceptionClear(env);
+    }
+    if (pressureField)
+        (*env)->SetFloatField(env, outCoords, pressureField, 1.0f);
+    else
+        (*env)->ExceptionClear(env);
+    if (sizeField)
+        (*env)->SetFloatField(env, outCoords, sizeField, 1.0f);
+    else
+        (*env)->ExceptionClear(env);
 }
 
 jfloat Java_android_view_MotionEvent_nativeGetAxisValue(JNIEnv *env,
@@ -5803,12 +6298,48 @@ jfloat Java_android_view_MotionEvent_nativeGetAxisValue(JNIEnv *env,
 {
     (void) env;
     (void) clazz;
+    (void) index;
     (void) historicalIndex;
-    ensure_amotion_event_symbols();
-    return (ptr && p_AMotionEvent_getAxisValue)
-               ? p_AMotionEvent_getAxisValue((const void *) (uintptr_t) ptr,
-                                             axis, (size_t) index)
-               : 0.0f;
+    muplar_motion_event_t *event = (muplar_motion_event_t *) (uintptr_t) ptr;
+    if (!event)
+        return 0.0f;
+    /* AMOTION_EVENT_AXIS_X = 0, AMOTION_EVENT_AXIS_Y = 1 */
+    if (axis == 0)
+        return event->x;
+    if (axis == 1)
+        return event->y;
+    return 0.0f;
+}
+
+jfloat Java_android_view_MotionEvent_nativeGetRawAxisValue(JNIEnv *env,
+                                                           jclass clazz,
+                                                           jlong ptr,
+                                                           jint axis,
+                                                           jint index,
+                                                           jint historicalIndex)
+{
+    return Java_android_view_MotionEvent_nativeGetAxisValue(
+        env, clazz, ptr, axis, index, historicalIndex);
+}
+
+jfloat Java_android_view_MotionEvent_nativeGetRawXOffset(JNIEnv *env,
+                                                         jclass clazz,
+                                                         jlong ptr)
+{
+    (void) env;
+    (void) clazz;
+    muplar_motion_event_t *event = (muplar_motion_event_t *) (uintptr_t) ptr;
+    return event ? event->xOffset : 0.0f;
+}
+
+jfloat Java_android_view_MotionEvent_nativeGetRawYOffset(JNIEnv *env,
+                                                         jclass clazz,
+                                                         jlong ptr)
+{
+    (void) env;
+    (void) clazz;
+    muplar_motion_event_t *event = (muplar_motion_event_t *) (uintptr_t) ptr;
+    return event ? event->yOffset : 0.0f;
 }
 
 jint Java_android_view_MotionEvent_nativeGetHistorySize(JNIEnv *env,
@@ -5817,11 +6348,8 @@ jint Java_android_view_MotionEvent_nativeGetHistorySize(JNIEnv *env,
 {
     (void) env;
     (void) clazz;
-    ensure_amotion_event_symbols();
-    return (ptr && p_AMotionEvent_getHistorySize)
-               ? (jint) p_AMotionEvent_getHistorySize(
-                     (const void *) (uintptr_t) ptr)
-               : 0;
+    (void) ptr;
+    return 0;
 }
 
 jlong Java_android_view_MotionEvent_nativeGetEventTimeNanos(
@@ -5833,11 +6361,8 @@ jlong Java_android_view_MotionEvent_nativeGetEventTimeNanos(
     (void) env;
     (void) clazz;
     (void) historicalIndex;
-    ensure_amotion_event_symbols();
-    return (ptr && p_AMotionEvent_getEventTime)
-               ? (jlong) p_AMotionEvent_getEventTime(
-                     (const void *) (uintptr_t) ptr)
-               : 0;
+    muplar_motion_event_t *event = (muplar_motion_event_t *) (uintptr_t) ptr;
+    return event ? event->eventTimeNanos : 0;
 }
 
 jlong Java_android_view_MotionEvent_nativeGetDownTimeNanos(JNIEnv *env,
@@ -5846,11 +6371,445 @@ jlong Java_android_view_MotionEvent_nativeGetDownTimeNanos(JNIEnv *env,
 {
     (void) env;
     (void) clazz;
-    ensure_amotion_event_symbols();
-    return (ptr && p_AMotionEvent_getDownTime)
-               ? (jlong) p_AMotionEvent_getDownTime(
-                     (const void *) (uintptr_t) ptr)
-               : 0;
+    muplar_motion_event_t *event = (muplar_motion_event_t *) (uintptr_t) ptr;
+    return event ? event->downTimeNanos : 0;
+}
+
+void Java_android_view_MotionEvent_nativeSetDownTimeNanos(JNIEnv *env,
+                                                          jclass clazz,
+                                                          jlong ptr,
+                                                          jlong downTimeNanos)
+{
+    (void) env;
+    (void) clazz;
+    muplar_motion_event_t *event = (muplar_motion_event_t *) (uintptr_t) ptr;
+    if (event)
+        event->downTimeNanos = downTimeNanos;
+}
+
+jint Java_android_view_MotionEvent_nativeGetDeviceId(JNIEnv *env,
+                                                     jclass clazz,
+                                                     jlong ptr)
+{
+    (void) env;
+    (void) clazz;
+    muplar_motion_event_t *event = (muplar_motion_event_t *) (uintptr_t) ptr;
+    return event ? event->deviceId : 0;
+}
+
+jint Java_android_view_MotionEvent_nativeGetSource(JNIEnv *env,
+                                                   jclass clazz,
+                                                   jlong ptr)
+{
+    (void) env;
+    (void) clazz;
+    muplar_motion_event_t *event = (muplar_motion_event_t *) (uintptr_t) ptr;
+    return event ? event->source : 0;
+}
+
+void Java_android_view_MotionEvent_nativeSetSource(JNIEnv *env,
+                                                   jclass clazz,
+                                                   jlong ptr,
+                                                   jint source)
+{
+    (void) env;
+    (void) clazz;
+    fprintf(stderr,
+            "[MuplarShim] nativeSetSource: enter ptr=0x%llx source=%d\n",
+            (unsigned long long) ptr, (int) source);
+    fflush(stderr);
+    muplar_motion_event_t *event = (muplar_motion_event_t *) (uintptr_t) ptr;
+    if (event)
+        event->source = source;
+    fprintf(stderr, "[MuplarShim] nativeSetSource: exit\n");
+    fflush(stderr);
+}
+
+jint Java_android_view_MotionEvent_nativeGetDisplayId(JNIEnv *env,
+                                                      jclass clazz,
+                                                      jlong ptr)
+{
+    (void) env;
+    (void) clazz;
+    muplar_motion_event_t *event = (muplar_motion_event_t *) (uintptr_t) ptr;
+    return event ? event->displayId : 0;
+}
+
+void Java_android_view_MotionEvent_nativeSetDisplayId(JNIEnv *env,
+                                                      jclass clazz,
+                                                      jlong ptr,
+                                                      jint displayId)
+{
+    (void) env;
+    (void) clazz;
+    muplar_motion_event_t *event = (muplar_motion_event_t *) (uintptr_t) ptr;
+    if (event)
+        event->displayId = displayId;
+}
+
+jint Java_android_view_MotionEvent_nativeGetFlags(JNIEnv *env,
+                                                  jclass clazz,
+                                                  jlong ptr)
+{
+    (void) env;
+    (void) clazz;
+    muplar_motion_event_t *event = (muplar_motion_event_t *) (uintptr_t) ptr;
+    return event ? event->flags : 0;
+}
+
+void Java_android_view_MotionEvent_nativeSetFlags(JNIEnv *env,
+                                                  jclass clazz,
+                                                  jlong ptr,
+                                                  jint flags)
+{
+    (void) env;
+    (void) clazz;
+    muplar_motion_event_t *event = (muplar_motion_event_t *) (uintptr_t) ptr;
+    if (event)
+        event->flags = flags;
+}
+
+jint Java_android_view_MotionEvent_nativeGetEdgeFlags(JNIEnv *env,
+                                                      jclass clazz,
+                                                      jlong ptr)
+{
+    (void) env;
+    (void) clazz;
+    muplar_motion_event_t *event = (muplar_motion_event_t *) (uintptr_t) ptr;
+    return event ? event->edgeFlags : 0;
+}
+
+void Java_android_view_MotionEvent_nativeSetEdgeFlags(JNIEnv *env,
+                                                      jclass clazz,
+                                                      jlong ptr,
+                                                      jint edgeFlags)
+{
+    (void) env;
+    (void) clazz;
+    muplar_motion_event_t *event = (muplar_motion_event_t *) (uintptr_t) ptr;
+    if (event)
+        event->edgeFlags = edgeFlags;
+}
+
+jint Java_android_view_MotionEvent_nativeGetMetaState(JNIEnv *env,
+                                                      jclass clazz,
+                                                      jlong ptr)
+{
+    (void) env;
+    (void) clazz;
+    muplar_motion_event_t *event = (muplar_motion_event_t *) (uintptr_t) ptr;
+    return event ? event->metaState : 0;
+}
+
+jint Java_android_view_MotionEvent_nativeGetButtonState(JNIEnv *env,
+                                                        jclass clazz,
+                                                        jlong ptr)
+{
+    (void) env;
+    (void) clazz;
+    muplar_motion_event_t *event = (muplar_motion_event_t *) (uintptr_t) ptr;
+    return event ? event->buttonState : 0;
+}
+
+void Java_android_view_MotionEvent_nativeSetButtonState(JNIEnv *env,
+                                                        jclass clazz,
+                                                        jlong ptr,
+                                                        jint buttonState)
+{
+    (void) env;
+    (void) clazz;
+    muplar_motion_event_t *event = (muplar_motion_event_t *) (uintptr_t) ptr;
+    if (event)
+        event->buttonState = buttonState;
+}
+
+jint Java_android_view_MotionEvent_nativeGetClassification(JNIEnv *env,
+                                                           jclass clazz,
+                                                           jlong ptr)
+{
+    (void) env;
+    (void) clazz;
+    muplar_motion_event_t *event = (muplar_motion_event_t *) (uintptr_t) ptr;
+    return event ? event->classification : 0;
+}
+
+jint Java_android_view_MotionEvent_nativeGetId(JNIEnv *env,
+                                               jclass clazz,
+                                               jlong ptr)
+{
+    (void) env;
+    (void) clazz;
+    (void) ptr;
+    return 0;
+}
+
+jfloat Java_android_view_MotionEvent_nativeGetXPrecision(JNIEnv *env,
+                                                         jclass clazz,
+                                                         jlong ptr)
+{
+    (void) env;
+    (void) clazz;
+    muplar_motion_event_t *event = (muplar_motion_event_t *) (uintptr_t) ptr;
+    return event ? event->xPrecision : 0.0f;
+}
+
+jfloat Java_android_view_MotionEvent_nativeGetYPrecision(JNIEnv *env,
+                                                         jclass clazz,
+                                                         jlong ptr)
+{
+    (void) env;
+    (void) clazz;
+    muplar_motion_event_t *event = (muplar_motion_event_t *) (uintptr_t) ptr;
+    return event ? event->yPrecision : 0.0f;
+}
+
+jfloat Java_android_view_MotionEvent_nativeGetXCursorPosition(JNIEnv *env,
+                                                              jclass clazz,
+                                                              jlong ptr)
+{
+    (void) env;
+    (void) clazz;
+    (void) ptr;
+    return NAN; /* AMOTION_EVENT_INVALID_CURSOR_POSITION: no mouse cursor */
+}
+
+jfloat Java_android_view_MotionEvent_nativeGetYCursorPosition(JNIEnv *env,
+                                                              jclass clazz,
+                                                              jlong ptr)
+{
+    (void) env;
+    (void) clazz;
+    (void) ptr;
+    return NAN;
+}
+
+void Java_android_view_MotionEvent_nativeSetCursorPosition(JNIEnv *env,
+                                                           jclass clazz,
+                                                           jlong ptr,
+                                                           jfloat x,
+                                                           jfloat y)
+{
+    (void) env;
+    (void) clazz;
+    (void) ptr;
+    (void) x;
+    (void) y;
+    /* No mouse cursor concept in Muplar's touch-only input model. */
+}
+
+jint Java_android_view_MotionEvent_nativeGetSurfaceRotation(JNIEnv *env,
+                                                            jclass clazz,
+                                                            jlong ptr)
+{
+    (void) env;
+    (void) clazz;
+    (void) ptr;
+    return 0; /* Surface.ROTATION_0: Muplar's device viewport is fixed */
+}
+
+jboolean Java_android_view_MotionEvent_nativeIsTouchEvent(JNIEnv *env,
+                                                          jclass clazz,
+                                                          jlong ptr)
+{
+    (void) env;
+    (void) clazz;
+    (void) ptr;
+    return JNI_TRUE; /* every event Muplar synthesizes comes from touch */
+}
+
+void Java_android_view_MotionEvent_nativeOffsetLocation(JNIEnv *env,
+                                                        jclass clazz,
+                                                        jlong ptr,
+                                                        jfloat deltaX,
+                                                        jfloat deltaY)
+{
+    (void) env;
+    (void) clazz;
+    muplar_motion_event_t *event = (muplar_motion_event_t *) (uintptr_t) ptr;
+    if (event) {
+        event->x += deltaX;
+        event->y += deltaY;
+    }
+}
+
+void Java_android_view_MotionEvent_nativeScale(JNIEnv *env,
+                                               jclass clazz,
+                                               jlong ptr,
+                                               jfloat scale)
+{
+    (void) env;
+    (void) clazz;
+    muplar_motion_event_t *event = (muplar_motion_event_t *) (uintptr_t) ptr;
+    if (event) {
+        event->x *= scale;
+        event->y *= scale;
+    }
+}
+
+/* android.graphics.Matrix transforms are a single-window concern Muplar's
+ * one-Activity-per-tab device model doesn't need: there is no nested,
+ * independently-transformed view hierarchy across processes here, so a
+ * no-op (leave x/y as dispatched) is safe rather than reimplementing 2D
+ * affine math against a Matrix object whose own native backing may not be
+ * any more real than this one.
+ */
+void Java_android_view_MotionEvent_nativeApplyTransform(JNIEnv *env,
+                                                        jclass clazz,
+                                                        jlong ptr,
+                                                        jobject matrix)
+{
+    (void) env;
+    (void) clazz;
+    (void) ptr;
+    (void) matrix;
+}
+
+void Java_android_view_MotionEvent_nativeTransform(JNIEnv *env,
+                                                   jclass clazz,
+                                                   jlong ptr,
+                                                   jobject matrix)
+{
+    (void) env;
+    (void) clazz;
+    (void) ptr;
+    (void) matrix;
+}
+
+jlong Java_android_view_MotionEvent_nativeCopy(JNIEnv *env,
+                                               jclass clazz,
+                                               jlong destPtr,
+                                               jlong sourcePtr,
+                                               jboolean keepHistory)
+{
+    (void) env;
+    (void) clazz;
+    (void) keepHistory; /* no history is tracked to keep or drop */
+    muplar_motion_event_t *source =
+        (muplar_motion_event_t *) (uintptr_t) sourcePtr;
+    if (!source)
+        return 0;
+    muplar_motion_event_t *dest = (muplar_motion_event_t *) (uintptr_t) destPtr;
+    if (!dest) {
+        dest = (muplar_motion_event_t *) malloc(sizeof(*dest));
+        if (!dest)
+            return 0;
+    }
+    *dest = *source;
+    return (jlong) (uintptr_t) dest;
+}
+
+jlong Java_android_view_MotionEvent_nativeSplit(JNIEnv *env,
+                                                jclass clazz,
+                                                jlong destPtr,
+                                                jlong sourcePtr,
+                                                jint idBits)
+{
+    (void) idBits; /* single-pointer only: nothing to split out by id mask */
+    return Java_android_view_MotionEvent_nativeCopy(env, clazz, destPtr,
+                                                    sourcePtr, JNI_FALSE);
+}
+
+void Java_android_view_MotionEvent_nativeAddBatch(JNIEnv *env,
+                                                  jclass clazz,
+                                                  jlong ptr,
+                                                  jlong eventTimeNanos,
+                                                  jobjectArray pointerCoords,
+                                                  jint metaState)
+{
+    (void) clazz;
+    muplar_motion_event_t *event = (muplar_motion_event_t *) (uintptr_t) ptr;
+    if (!event)
+        return;
+    /* No history buffer: a batched sample just becomes the current sample,
+     * matching what a real event would show right after this call anyway
+     * (its most recent/"current" position is the last batched one).
+     */
+    event->eventTimeNanos = eventTimeNanos;
+    event->metaState = metaState;
+    if (pointerCoords && (*env)->GetArrayLength(env, pointerCoords) > 0) {
+        jobject coords0 = (*env)->GetObjectArrayElement(env, pointerCoords, 0);
+        if (coords0) {
+            jclass coordsClass = (*env)->GetObjectClass(env, coords0);
+            jfieldID xField = (*env)->GetFieldID(env, coordsClass, "x", "F");
+            jfieldID yField = (*env)->GetFieldID(env, coordsClass, "y", "F");
+            if (xField && yField) {
+                event->x = (*env)->GetFloatField(env, coords0, xField);
+                event->y = (*env)->GetFloatField(env, coords0, yField);
+            } else {
+                (*env)->ExceptionClear(env);
+            }
+        }
+    }
+}
+
+jint Java_android_view_MotionEvent_nativeAxisFromString(JNIEnv *env,
+                                                        jclass clazz,
+                                                        jstring label)
+{
+    (void) clazz;
+    if (!label)
+        return -1;
+    const char *chars = (*env)->GetStringUTFChars(env, label, NULL);
+    if (!chars)
+        return -1;
+    jint axis = -1;
+    if (!strcmp(chars, "x") || !strcmp(chars, "AXIS_X"))
+        axis = 0;
+    else if (!strcmp(chars, "y") || !strcmp(chars, "AXIS_Y"))
+        axis = 1;
+    (*env)->ReleaseStringUTFChars(env, label, chars);
+    return axis;
+}
+
+jstring Java_android_view_MotionEvent_nativeAxisToString(JNIEnv *env,
+                                                         jclass clazz,
+                                                         jint axis)
+{
+    (void) clazz;
+    if (axis == 0)
+        return (*env)->NewStringUTF(env, "x");
+    if (axis == 1)
+        return (*env)->NewStringUTF(env, "y");
+    return NULL;
+}
+
+jlong Java_android_view_MotionEvent_nativeReadFromParcel(JNIEnv *env,
+                                                         jclass clazz,
+                                                         jlong ptr,
+                                                         jobject parcel)
+{
+    (void) env;
+    (void) clazz;
+    (void) parcel;
+    /* Not exercised by live device-action dispatch (only by cross-process
+     * Parcel transport, e.g. saved instance state); returning the existing
+     * pointer unchanged rather than throwing keeps any caller that does
+     * reach this from crashing outright.
+     */
+    return ptr;
+}
+
+void Java_android_view_MotionEvent_nativeWriteToParcel(JNIEnv *env,
+                                                       jclass clazz,
+                                                       jlong ptr,
+                                                       jobject parcel)
+{
+    (void) env;
+    (void) clazz;
+    (void) ptr;
+    (void) parcel;
+}
+
+/* NativeAllocationRegistry (real AOSP/libnativehelper code, unmodified
+ * here) calls the returned function pointer as void(*)(void*) from its own
+ * reference-queue processing thread with no JNIEnv attached -- it must not
+ * touch JNI. That means state->receiver_global_ref can't be released here
+ * (DeleteGlobalRef needs a JNIEnv); it's intentionally leaked in exchange
+ * for freeing the native struct itself, which is what nativeInit's
+ * calloc() actually needs cleaned up. */
+static void muplar_display_event_receiver_free(void *ptr)
+{
+    free(ptr);
 }
 
 jlong Java_android_view_DisplayEventReceiver_nativeGetDisplayEventReceiverFinalizer(
@@ -5859,8 +6818,21 @@ jlong Java_android_view_DisplayEventReceiver_nativeGetDisplayEventReceiverFinali
 {
     (void) env;
     (void) clazz;
-    return 0;
+    return (jlong) (uintptr_t) &muplar_display_event_receiver_free;
 }
+
+/* Real AOSP backs DisplayEventReceiver with a native connection to
+ * SurfaceFlinger/the display HAL, which is what actually sources vsync
+ * timing. This environment has none of that, so instead of no-op'ing
+ * scheduleVsync() (which left any caller blocked on the callback waiting
+ * forever -- see MuplarVsyncScheduler), keep a global ref to the real
+ * DisplayEventReceiver instance (dereferenced from the WeakReference
+ * nativeInit receives) and hand it to a Java-side Handler-based ~60fps
+ * timer that calls dispatchVsync(...) by reflection.
+ */
+typedef struct {
+    jobject receiver_global_ref;
+} muplar_display_event_receiver_t;
 
 jlong Java_android_view_DisplayEventReceiver_nativeInit(JNIEnv *env,
                                                         jclass clazz,
@@ -5871,15 +6843,34 @@ jlong Java_android_view_DisplayEventReceiver_nativeInit(JNIEnv *env,
                                                         jint event_registration,
                                                         jlong layer_handle)
 {
-    (void) env;
     (void) clazz;
-    (void) receiver;
     (void) vsync_receiver;
     (void) message_queue;
     (void) vsync_source;
     (void) event_registration;
     (void) layer_handle;
-    return (jlong) ++muplar_next_display_event_receiver_token;
+
+    muplar_display_event_receiver_t *state =
+        (muplar_display_event_receiver_t *) calloc(1, sizeof(*state));
+    if (!state)
+        return 0;
+
+    if (receiver) {
+        jclass weakRefClass = (*env)->GetObjectClass(env, receiver);
+        jmethodID getMethod = (*env)->GetMethodID(env, weakRefClass, "get",
+                                                  "()Ljava/lang/Object;");
+        jobject actual = NULL;
+        if (getMethod) {
+            actual = (*env)->CallObjectMethod(env, receiver, getMethod);
+        } else {
+            (*env)->ExceptionClear(env);
+        }
+        if (actual)
+            state->receiver_global_ref = (*env)->NewGlobalRef(env, actual);
+    }
+
+    jlong handle = (jlong) (uintptr_t) state;
+    return handle;
 }
 
 void Java_android_view_DisplayEventReceiver_nativeScheduleVsync(
@@ -5887,9 +6878,26 @@ void Java_android_view_DisplayEventReceiver_nativeScheduleVsync(
     jclass clazz,
     jlong receiver_ptr)
 {
-    (void) env;
     (void) clazz;
-    (void) receiver_ptr;
+    muplar_display_event_receiver_t *state =
+        (muplar_display_event_receiver_t *) (uintptr_t) receiver_ptr;
+    if (!state || !state->receiver_global_ref)
+        return;
+
+    jclass schedulerClass =
+        (*env)->FindClass(env, "com/muplar/runtime/MuplarVsyncScheduler");
+    if (!schedulerClass) {
+        (*env)->ExceptionClear(env);
+        return;
+    }
+    jmethodID scheduleMethod = (*env)->GetStaticMethodID(
+        env, schedulerClass, "schedule", "(Ljava/lang/Object;)V");
+    if (!scheduleMethod) {
+        (*env)->ExceptionClear(env);
+        return;
+    }
+    (*env)->CallStaticVoidMethod(env, schedulerClass, scheduleMethod,
+                                 state->receiver_global_ref);
 }
 
 jobject Java_android_view_DisplayEventReceiver_nativeGetLatestVsyncEventData(
@@ -7307,8 +8315,61 @@ JNIEXPORT jint JNICALL JNI_OnLoad(JavaVM *vm, void *reserved)
                         (void *) muplar_Matrix_nVoid);
     muplar_register_one(env, cls, "nSetSkew", "(JFFFF)V",
                         (void *) muplar_Matrix_nVoid);
-    muplar_register_one(env, cls, "nSetConcat", "(JJJ)Z",
+    muplar_register_one(env, cls, "nSetConcat", "(JJJ)V",
+                        (void *) muplar_Matrix_nVoid);
+    muplar_register_one(env, cls, "ni", "()J", (void *) muplar_Matrix_ni);
+    /* No handle carries real per-matrix state here (nGetValues/nMapPoints/
+     * nMapRadius/nMapRect all report identity regardless of handle), so
+     * nFalse would break reflexivity (m.equals(m) failing) without being
+     * any more correct for genuinely different matrices either -- this
+     * stub can't tell those apart in the first place. nTrue matches the
+     * rest of this file's "every matrix behaves like identity" stance. */
+    muplar_register_one(env, cls, "nEquals", "(JJ)Z",
                         (void *) muplar_Matrix_nTrue);
+    muplar_register_one(env, cls, "nGetValues", "(J[F)V",
+                        (void *) muplar_Matrix_nGetValues);
+    muplar_register_one(env, cls, "nInvert", "(JJ)Z",
+                        (void *) muplar_Matrix_nTrue);
+    muplar_register_one(env, cls, "nIsAffine", "(J)Z",
+                        (void *) muplar_Matrix_nTrue);
+    muplar_register_one(env, cls, "nIsIdentity", "(J)Z",
+                        (void *) muplar_Matrix_nTrue);
+    muplar_register_one(env, cls, "nMapPoints", "(J[FI[FIIZ)V",
+                        (void *) muplar_Matrix_nMapPoints);
+    muplar_register_one(env, cls, "nMapRadius", "(JF)F",
+                        (void *) muplar_Matrix_nMapRadius);
+    muplar_register_one(env, cls, "nMapRect",
+                        "(JLandroid/graphics/RectF;Landroid/graphics/RectF;)Z",
+                        (void *) muplar_Matrix_nMapRect);
+    muplar_register_one(env, cls, "nPostConcat", "(JJ)V",
+                        (void *) muplar_Matrix_nVoid);
+    muplar_register_one(env, cls, "nPostSkew", "(JFF)V",
+                        (void *) muplar_Matrix_nVoid);
+    muplar_register_one(env, cls, "nPostSkew", "(JFFFF)V",
+                        (void *) muplar_Matrix_nVoid);
+    muplar_register_one(env, cls, "nPreConcat", "(JJ)V",
+                        (void *) muplar_Matrix_nVoid);
+    muplar_register_one(env, cls, "nPreSkew", "(JFF)V",
+                        (void *) muplar_Matrix_nVoid);
+    muplar_register_one(env, cls, "nPreSkew", "(JFFFF)V",
+                        (void *) muplar_Matrix_nVoid);
+    muplar_register_one(env, cls, "nRectStaysRect", "(J)Z",
+                        (void *) muplar_Matrix_nTrue);
+    muplar_register_one(env, cls, "nReset", "(J)V",
+                        (void *) muplar_Matrix_nVoid);
+    muplar_register_one(env, cls, "nSet", "(JJ)V",
+                        (void *) muplar_Matrix_nVoid);
+    muplar_register_one(env, cls, "nSetPolyToPoly", "(J[FI[FII)Z",
+                        (void *) muplar_Matrix_nTrue);
+    muplar_register_one(env, cls, "nSetRectToRect",
+                        "(JLandroid/graphics/RectF;Landroid/graphics/RectF;I)Z",
+                        (void *) muplar_Matrix_nTrue);
+    muplar_register_one(env, cls, "nSetSinCos", "(JFF)V",
+                        (void *) muplar_Matrix_nVoid);
+    muplar_register_one(env, cls, "nSetSinCos", "(JFFFF)V",
+                        (void *) muplar_Matrix_nVoid);
+    muplar_register_one(env, cls, "nSetValues", "(J[F)V",
+                        (void *) muplar_Matrix_nVoid);
 
     cls = (*env)->FindClass(env, "android/graphics/ColorSpace$Rgb$Native");
     if (!cls) {
@@ -8358,6 +9419,84 @@ JNIEXPORT jint JNICALL JNI_OnLoad(JavaVM *vm, void *reserved)
                         (void *) muplar_RenderNode_nGetLayerType);
     muplar_register_one(env, cls, "nSetLayerPaint", "(JJ)Z",
                         (void *) muplar_RenderNode_nSetLayerPaint);
+    muplar_register_one(env, cls, "nAddAnimator", "(JJ)V",
+                        (void *) muplar_RenderNode_nVoidLongLong);
+    muplar_register_one(env, cls, "nClearStretch", "(J)Z",
+                        (void *) muplar_RenderNode_getBooleanTrue);
+    muplar_register_one(env, cls, "nDiscardDisplayList", "(J)V",
+                        (void *) muplar_RenderNode_nVoidLong);
+    muplar_register_one(env, cls, "nEndAllAnimators", "(J)V",
+                        (void *) muplar_RenderNode_nVoidLong);
+    muplar_register_one(env, cls, "nForceEndAnimators", "(J)V",
+                        (void *) muplar_RenderNode_nVoidLong);
+    muplar_register_one(env, cls, "nGetAllocatedSize", "(J)I",
+                        (void *) muplar_RenderNode_getIntZero);
+    muplar_register_one(env, cls, "nGetAllowForceDark", "(J)Z",
+                        (void *) muplar_RenderNode_getBooleanTrue);
+    muplar_register_one(env, cls, "nGetAmbientShadowColor", "(J)I",
+                        (void *) muplar_RenderNode_getIntZero);
+    muplar_register_one(env, cls, "nGetAnimationMatrix", "(JJ)Z",
+                        (void *) muplar_RenderNode_nSetLong);
+    muplar_register_one(env, cls, "nGetClipToBounds", "(J)Z",
+                        (void *) muplar_RenderNode_getBooleanFalse);
+    muplar_register_one(env, cls, "nGetClipToOutline", "(J)Z",
+                        (void *) muplar_RenderNode_getBooleanFalse);
+    muplar_register_one(env, cls, "nGetHeight", "(J)I",
+                        (void *) muplar_RenderNode_getIntZero);
+    muplar_register_one(env, cls, "nGetInverseTransformMatrix", "(JJ)V",
+                        (void *) muplar_RenderNode_nVoidLongLong);
+    muplar_register_one(env, cls, "nGetSpotShadowColor", "(J)I",
+                        (void *) muplar_RenderNode_getIntZero);
+    muplar_register_one(env, cls, "nGetTransformMatrix", "(JJ)V",
+                        (void *) muplar_RenderNode_nVoidLongLong);
+    muplar_register_one(env, cls, "nGetUsageSize", "(J)I",
+                        (void *) muplar_RenderNode_getIntZero);
+    muplar_register_one(env, cls, "nGetWidth", "(J)I",
+                        (void *) muplar_RenderNode_getIntZero);
+    muplar_register_one(env, cls, "nHasOverlappingRendering", "(J)Z",
+                        (void *) muplar_RenderNode_getBooleanTrue);
+    muplar_register_one(env, cls, "nHasShadow", "(J)Z",
+                        (void *) muplar_RenderNode_getBooleanFalse);
+    muplar_register_one(env, cls, "nIsValid", "(J)Z",
+                        (void *) muplar_RenderNode_getBooleanTrue);
+    muplar_register_one(env, cls, "nOutput", "(J)V",
+                        (void *) muplar_RenderNode_nVoidLong);
+    muplar_register_one(env, cls, "nSetAmbientShadowColor", "(JI)Z",
+                        (void *) muplar_RenderNode_nSetInt);
+    muplar_register_one(env, cls, "nSetBackdropRenderEffect", "(JJ)Z",
+                        (void *) muplar_RenderNode_nSetLong);
+    muplar_register_one(env, cls, "nSetBottom", "(JI)Z",
+                        (void *) muplar_RenderNode_nSetInt);
+    muplar_register_one(env, cls, "nSetClipBoundsEmpty", "(J)Z",
+                        (void *) muplar_RenderNode_getBooleanTrue);
+    muplar_register_one(env, cls, "nSetIsTextureView", "(J)V",
+                        (void *) muplar_RenderNode_nVoidLong);
+    muplar_register_one(env, cls, "nSetLeft", "(JI)Z",
+                        (void *) muplar_RenderNode_nSetInt);
+    muplar_register_one(env, cls, "nSetOutlineEmpty", "(J)Z",
+                        (void *) muplar_RenderNode_getBooleanTrue);
+    muplar_register_one(env, cls, "nSetOutlineNone", "(J)Z",
+                        (void *) muplar_RenderNode_getBooleanTrue);
+    muplar_register_one(env, cls, "nSetOutlinePath", "(JJF)Z",
+                        (void *) muplar_RenderNode_nSetOutlinePath);
+    muplar_register_one(env, cls, "nSetOutlineRoundRect", "(JIIIIFF)Z",
+                        (void *) muplar_RenderNode_nSetOutlineRoundRect);
+    muplar_register_one(env, cls, "nSetProjectBackwards", "(JZ)Z",
+                        (void *) Java_android_graphics_RenderNode_nSetBoolean);
+    muplar_register_one(env, cls, "nSetProjectionReceiver", "(JZ)Z",
+                        (void *) Java_android_graphics_RenderNode_nSetBoolean);
+    muplar_register_one(env, cls, "nSetRenderEffect", "(JJ)Z",
+                        (void *) muplar_RenderNode_nSetLong);
+    muplar_register_one(env, cls, "nSetRevealClip", "(JZFFF)Z",
+                        (void *) muplar_RenderNode_nSetRevealClip);
+    muplar_register_one(env, cls, "nSetRight", "(JI)Z",
+                        (void *) muplar_RenderNode_nSetInt);
+    muplar_register_one(env, cls, "nSetSpotShadowColor", "(JI)Z",
+                        (void *) muplar_RenderNode_nSetInt);
+    muplar_register_one(env, cls, "nSetTop", "(JI)Z",
+                        (void *) muplar_RenderNode_nSetInt);
+    muplar_register_one(env, cls, "nStretch", "(JFFFF)Z",
+                        (void *) muplar_RenderNode_nStretch);
 
     cls = (*env)->FindClass(env, "android/graphics/HardwareRenderer");
     if (!cls) {
@@ -8915,6 +10054,15 @@ JNIEXPORT jint JNICALL JNI_OnLoad(JavaVM *vm, void *reserved)
     if ((*env)->ExceptionCheck(env)) {
         (*env)->ExceptionClear(env);
     } else if (cls) {
+        /* Full set of native methods this exact framework build declares on
+         * MotionEvent, per dexdump against framework-classes4.jar — every
+         * one is registered so none can fail with UnsatisfiedLinkError.
+         */
+        muplar_register_one(
+            env, cls, "nativeInitialize",
+            "(JIIIIIIIIIFFFFJJI[Landroid/view/MotionEvent$PointerProperties;"
+            "[Landroid/view/MotionEvent$PointerCoords;)J",
+            (void *) Java_android_view_MotionEvent_nativeInitialize);
         muplar_register_one(
             env, cls, "nativeDispose", "(J)V",
             (void *) Java_android_view_MotionEvent_nativeDispose);
@@ -8922,20 +10070,46 @@ JNIEXPORT jint JNICALL JNI_OnLoad(JavaVM *vm, void *reserved)
             env, cls, "nativeGetAction", "(J)I",
             (void *) Java_android_view_MotionEvent_nativeGetAction);
         muplar_register_one(
+            env, cls, "nativeSetAction", "(JI)V",
+            (void *) Java_android_view_MotionEvent_nativeSetAction);
+        muplar_register_one(
+            env, cls, "nativeGetActionButton", "(J)I",
+            (void *) Java_android_view_MotionEvent_nativeGetActionButton);
+        muplar_register_one(
+            env, cls, "nativeSetActionButton", "(JI)V",
+            (void *) Java_android_view_MotionEvent_nativeSetActionButton);
+        muplar_register_one(
             env, cls, "nativeGetPointerCount", "(J)I",
             (void *) Java_android_view_MotionEvent_nativeGetPointerCount);
         muplar_register_one(
             env, cls, "nativeGetPointerId", "(JI)I",
             (void *) Java_android_view_MotionEvent_nativeGetPointerId);
         muplar_register_one(
-            env, cls, "nativeGetRawX", "(JII)F",
-            (void *) Java_android_view_MotionEvent_nativeGetRawX);
+            env, cls, "nativeFindPointerIndex", "(JI)I",
+            (void *) Java_android_view_MotionEvent_nativeFindPointerIndex);
         muplar_register_one(
-            env, cls, "nativeGetRawY", "(JII)F",
-            (void *) Java_android_view_MotionEvent_nativeGetRawY);
+            env, cls, "nativeGetToolType", "(JI)I",
+            (void *) Java_android_view_MotionEvent_nativeGetToolType);
+        muplar_register_one(
+            env, cls, "nativeGetPointerProperties",
+            "(JILandroid/view/MotionEvent$PointerProperties;)V",
+            (void *) Java_android_view_MotionEvent_nativeGetPointerProperties);
+        muplar_register_one(
+            env, cls, "nativeGetPointerCoords",
+            "(JIILandroid/view/MotionEvent$PointerCoords;)V",
+            (void *) Java_android_view_MotionEvent_nativeGetPointerCoords);
         muplar_register_one(
             env, cls, "nativeGetAxisValue", "(JIII)F",
             (void *) Java_android_view_MotionEvent_nativeGetAxisValue);
+        muplar_register_one(
+            env, cls, "nativeGetRawAxisValue", "(JIII)F",
+            (void *) Java_android_view_MotionEvent_nativeGetRawAxisValue);
+        muplar_register_one(
+            env, cls, "nativeGetRawXOffset", "(J)F",
+            (void *) Java_android_view_MotionEvent_nativeGetRawXOffset);
+        muplar_register_one(
+            env, cls, "nativeGetRawYOffset", "(J)F",
+            (void *) Java_android_view_MotionEvent_nativeGetRawYOffset);
         muplar_register_one(
             env, cls, "nativeGetHistorySize", "(J)I",
             (void *) Java_android_view_MotionEvent_nativeGetHistorySize);
@@ -8945,6 +10119,102 @@ JNIEXPORT jint JNICALL JNI_OnLoad(JavaVM *vm, void *reserved)
         muplar_register_one(
             env, cls, "nativeGetDownTimeNanos", "(J)J",
             (void *) Java_android_view_MotionEvent_nativeGetDownTimeNanos);
+        muplar_register_one(
+            env, cls, "nativeSetDownTimeNanos", "(JJ)V",
+            (void *) Java_android_view_MotionEvent_nativeSetDownTimeNanos);
+        muplar_register_one(
+            env, cls, "nativeGetDeviceId", "(J)I",
+            (void *) Java_android_view_MotionEvent_nativeGetDeviceId);
+        muplar_register_one(
+            env, cls, "nativeGetSource", "(J)I",
+            (void *) Java_android_view_MotionEvent_nativeGetSource);
+        muplar_register_one(
+            env, cls, "nativeSetSource", "(JI)V",
+            (void *) Java_android_view_MotionEvent_nativeSetSource);
+        muplar_register_one(
+            env, cls, "nativeGetDisplayId", "(J)I",
+            (void *) Java_android_view_MotionEvent_nativeGetDisplayId);
+        muplar_register_one(
+            env, cls, "nativeSetDisplayId", "(JI)V",
+            (void *) Java_android_view_MotionEvent_nativeSetDisplayId);
+        muplar_register_one(
+            env, cls, "nativeGetFlags", "(J)I",
+            (void *) Java_android_view_MotionEvent_nativeGetFlags);
+        muplar_register_one(
+            env, cls, "nativeSetFlags", "(JI)V",
+            (void *) Java_android_view_MotionEvent_nativeSetFlags);
+        muplar_register_one(
+            env, cls, "nativeGetEdgeFlags", "(J)I",
+            (void *) Java_android_view_MotionEvent_nativeGetEdgeFlags);
+        muplar_register_one(
+            env, cls, "nativeSetEdgeFlags", "(JI)V",
+            (void *) Java_android_view_MotionEvent_nativeSetEdgeFlags);
+        muplar_register_one(
+            env, cls, "nativeGetMetaState", "(J)I",
+            (void *) Java_android_view_MotionEvent_nativeGetMetaState);
+        muplar_register_one(
+            env, cls, "nativeGetButtonState", "(J)I",
+            (void *) Java_android_view_MotionEvent_nativeGetButtonState);
+        muplar_register_one(
+            env, cls, "nativeSetButtonState", "(JI)V",
+            (void *) Java_android_view_MotionEvent_nativeSetButtonState);
+        muplar_register_one(
+            env, cls, "nativeGetClassification", "(J)I",
+            (void *) Java_android_view_MotionEvent_nativeGetClassification);
+        muplar_register_one(env, cls, "nativeGetId", "(J)I",
+                            (void *) Java_android_view_MotionEvent_nativeGetId);
+        muplar_register_one(
+            env, cls, "nativeGetXPrecision", "(J)F",
+            (void *) Java_android_view_MotionEvent_nativeGetXPrecision);
+        muplar_register_one(
+            env, cls, "nativeGetYPrecision", "(J)F",
+            (void *) Java_android_view_MotionEvent_nativeGetYPrecision);
+        muplar_register_one(
+            env, cls, "nativeGetXCursorPosition", "(J)F",
+            (void *) Java_android_view_MotionEvent_nativeGetXCursorPosition);
+        muplar_register_one(
+            env, cls, "nativeGetYCursorPosition", "(J)F",
+            (void *) Java_android_view_MotionEvent_nativeGetYCursorPosition);
+        muplar_register_one(
+            env, cls, "nativeSetCursorPosition", "(JFF)V",
+            (void *) Java_android_view_MotionEvent_nativeSetCursorPosition);
+        muplar_register_one(
+            env, cls, "nativeGetSurfaceRotation", "(J)I",
+            (void *) Java_android_view_MotionEvent_nativeGetSurfaceRotation);
+        muplar_register_one(
+            env, cls, "nativeIsTouchEvent", "(J)Z",
+            (void *) Java_android_view_MotionEvent_nativeIsTouchEvent);
+        muplar_register_one(
+            env, cls, "nativeOffsetLocation", "(JFF)V",
+            (void *) Java_android_view_MotionEvent_nativeOffsetLocation);
+        muplar_register_one(env, cls, "nativeScale", "(JF)V",
+                            (void *) Java_android_view_MotionEvent_nativeScale);
+        muplar_register_one(
+            env, cls, "nativeApplyTransform", "(JLandroid/graphics/Matrix;)V",
+            (void *) Java_android_view_MotionEvent_nativeApplyTransform);
+        muplar_register_one(
+            env, cls, "nativeTransform", "(JLandroid/graphics/Matrix;)V",
+            (void *) Java_android_view_MotionEvent_nativeTransform);
+        muplar_register_one(env, cls, "nativeCopy", "(JJZ)J",
+                            (void *) Java_android_view_MotionEvent_nativeCopy);
+        muplar_register_one(env, cls, "nativeSplit", "(JJI)J",
+                            (void *) Java_android_view_MotionEvent_nativeSplit);
+        muplar_register_one(
+            env, cls, "nativeAddBatch",
+            "(JJ[Landroid/view/MotionEvent$PointerCoords;I)V",
+            (void *) Java_android_view_MotionEvent_nativeAddBatch);
+        muplar_register_one(
+            env, cls, "nativeAxisFromString", "(Ljava/lang/String;)I",
+            (void *) Java_android_view_MotionEvent_nativeAxisFromString);
+        muplar_register_one(
+            env, cls, "nativeAxisToString", "(I)Ljava/lang/String;",
+            (void *) Java_android_view_MotionEvent_nativeAxisToString);
+        muplar_register_one(
+            env, cls, "nativeReadFromParcel", "(JLandroid/os/Parcel;)J",
+            (void *) Java_android_view_MotionEvent_nativeReadFromParcel);
+        muplar_register_one(
+            env, cls, "nativeWriteToParcel", "(JLandroid/os/Parcel;)V",
+            (void *) Java_android_view_MotionEvent_nativeWriteToParcel);
     }
 
     cls = (*env)->FindClass(env, "android/view/DisplayEventReceiver");

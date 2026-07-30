@@ -42,6 +42,7 @@ public:
                       float y,
                       std::string &generation) const;
     bool query_device_state(std::string &state) const;
+    bool query_tab_finished(std::string &state) const;
 
 private:
     bool request(uint16_t opcode,

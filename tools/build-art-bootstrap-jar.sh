@@ -152,6 +152,7 @@ $SRC_DIR/com/muplar/runtime/MuplarLayoutInflater.java
 $SRC_DIR/com/muplar/runtime/MuplarPackageManager.java
 $SRC_DIR/com/muplar/runtime/MuplarServices.java
 $SRC_DIR/com/muplar/runtime/MuplarSharedPreferences.java
+$SRC_DIR/com/muplar/runtime/MuplarVsyncScheduler.java
 $SRC_DIR/com/muplar/runtime/MuplarWindow.java
 $SRC_DIR/android/app/admin/IDevicePolicyManager.java
 $SRC_DIR/android/app/admin/ParcelableResource.java

@@ -13,6 +13,7 @@ import java.lang.reflect.Field;
 import java.lang.reflect.InvocationHandler;
 import java.lang.reflect.Method;
 import java.lang.reflect.Proxy;
+import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
@@ -291,25 +292,176 @@ public final class MuplarServices {
         }
 
         private Object launcherAppsValue(Method method, Object[] args) {
-            if ("getActivityOverrides".equals(method.getName())) {
-                return Collections.emptyMap();
-            }
-            if ("getAllSessions".equals(method.getName())
-                || "getAllPackageInstallerSessions".equals(method.getName())) {
-                return createParceledListSlice();
+            String name = method.getName();
+            System.out.println("[Muplar/ART] launcherAppsValue enter name="
+                + name);
+            System.out.flush();
+            try {
+                if ("getActivityOverrides".equals(name)) {
+                    return Collections.emptyMap();
+                }
+                if ("getAllSessions".equals(name)
+                    || "getAllPackageInstallerSessions".equals(name)) {
+                    return createParceledListSlice(Collections.emptyList());
+                }
+                if ("getUserProfiles".equals(name)) {
+                    List<Object> profiles = new ArrayList<>();
+                    Object user = buildUserHandle(0);
+                    if (user != null) profiles.add(user);
+                    return profiles;
+                }
+                if ("getLauncherActivities".equals(name)) {
+                    String packageFilter = args != null && args.length > 1
+                        && args[1] instanceof String
+                        ? (String) args[1] : null;
+                    return createParceledListSlice(
+                        buildLauncherActivities(packageFilter));
+                }
+                if ("isActivityEnabled".equals(name)
+                    || "isPackageEnabled".equals(name)) {
+                    return Boolean.TRUE;
+                }
+            } catch (Throwable t) {
+                System.err.println(
+                    "[Muplar/ART] launcherAppsValue " + name + " failed: "
+                    + t.getClass().getName() + ": " + t.getMessage());
+                return defaultValue(method.getReturnType());
             }
             return null;
         }
     }
 
-    private static Object createParceledListSlice() {
+    private static Object createParceledListSlice(List<?> items) {
         try {
             Class<?> type = Class.forName("android.content.pm.ParceledListSlice");
             Constructor<?> ctor = type.getConstructor(List.class);
-            return ctor.newInstance(Collections.emptyList());
+            return ctor.newInstance(items);
         } catch (Throwable ignored) {
             return null;
         }
+    }
+
+    private static List<Object> buildLauncherActivities(String packageFilter) {
+        List<Object> result = new ArrayList<>();
+        for (InstalledPackage pkg : queryInstalledPackages()) {
+            if (packageFilter != null && !packageFilter.isEmpty()
+                && !packageFilter.equals(pkg.packageName)) {
+                continue;
+            }
+            try {
+                Object info = buildLauncherActivityInfoInternal(pkg);
+                if (info != null) result.add(info);
+            } catch (Throwable t) {
+                System.err.println(
+                    "[Muplar/ART] launcher activity build failed package="
+                    + pkg.packageName + " error=" + t.getClass().getName()
+                    + ": " + t.getMessage());
+            }
+        }
+        return result;
+    }
+
+    private static final class InstalledPackage {
+        String packageName = "";
+        String activity = "";
+        String label = "";
+        String apk = "";
+    }
+
+    /**
+     * Reads the host-written package registry via muplard's QueryPackages
+     * opcode. The host (PrefixManagerApp.mm) writes one record per
+     * installed, non-launcher APK, "---"-separated, each a block of
+     * "key=value" lines (package/activity/label/apk).
+     */
+    private static List<InstalledPackage> queryInstalledPackages() {
+        List<InstalledPackage> result = new ArrayList<>();
+        String text = FrameworkServiceClient.request("query-packages", "");
+        if (text == null || text.isEmpty()) return result;
+        InstalledPackage current = new InstalledPackage();
+        boolean any = false;
+        for (String line : text.split("\n", -1)) {
+            if ("---".equals(line.trim())) {
+                if (any && !current.packageName.isEmpty())
+                    result.add(current);
+                current = new InstalledPackage();
+                any = false;
+                continue;
+            }
+            if (line.startsWith("package=")) {
+                current.packageName = line.substring(8);
+                any = true;
+            } else if (line.startsWith("activity=")) {
+                current.activity = line.substring(9);
+                any = true;
+            } else if (line.startsWith("label=")) {
+                current.label = line.substring(6);
+                any = true;
+            } else if (line.startsWith("apk=")) {
+                current.apk = line.substring(4);
+                any = true;
+            }
+        }
+        if (any && !current.packageName.isEmpty())
+            result.add(current);
+        return result;
+    }
+
+    private static Object buildUserHandle(int uid) throws Exception {
+        Class<?> type = Class.forName("android.os.UserHandle");
+        Method of = type.getMethod("of", Integer.TYPE);
+        return of.invoke(null, Integer.valueOf(uid));
+    }
+
+    private static Object buildApplicationInfo(InstalledPackage pkg)
+        throws Exception {
+        Class<?> type = Class.forName("android.content.pm.ApplicationInfo");
+        Object info = type.getDeclaredConstructor().newInstance();
+        setFieldIfPresent(info, "packageName", pkg.packageName);
+        setFieldIfPresent(info, "processName", pkg.packageName);
+        setFieldIfPresent(info, "sourceDir", pkg.apk);
+        setFieldIfPresent(info, "publicSourceDir", pkg.apk);
+        setFieldIfPresent(info, "uid", Integer.valueOf(10000));
+        setFieldIfPresent(info, "targetSdkVersion", Integer.valueOf(35));
+        setFieldIfPresent(info, "flags", Integer.valueOf(0));
+        if (pkg.label != null && !pkg.label.isEmpty())
+            setFieldIfPresent(info, "nonLocalizedLabel", pkg.label);
+        return info;
+    }
+
+    private static Object buildLauncherActivityInfoInternal(
+        InstalledPackage pkg) throws Exception {
+        Object appInfo = buildApplicationInfo(pkg);
+
+        Class<?> activityInfoType =
+            Class.forName("android.content.pm.ActivityInfo");
+        Object activityInfo = activityInfoType.getDeclaredConstructor()
+            .newInstance();
+        setFieldIfPresent(activityInfo, "packageName", pkg.packageName);
+        setFieldIfPresent(activityInfo, "name", pkg.activity);
+        setFieldIfPresent(activityInfo, "processName", pkg.packageName);
+        setFieldIfPresent(activityInfo, "applicationInfo", appInfo);
+        setFieldIfPresent(activityInfo, "enabled", Boolean.TRUE);
+        setFieldIfPresent(activityInfo, "exported", Boolean.TRUE);
+        if (pkg.label != null && !pkg.label.isEmpty())
+            setFieldIfPresent(activityInfo, "nonLocalizedLabel", pkg.label);
+
+        Class<?> incrementalType =
+            Class.forName("android.content.pm.IncrementalStatesInfo");
+        Constructor<?> incrementalCtor = incrementalType.getConstructor(
+            Boolean.TYPE, Float.TYPE, Long.TYPE);
+        Object incremental = incrementalCtor.newInstance(
+            Boolean.FALSE, Float.valueOf(1.0f), Long.valueOf(0L));
+
+        Object user = buildUserHandle(0);
+
+        Class<?> internalType =
+            Class.forName("android.content.pm.LauncherActivityInfoInternal");
+        Constructor<?> ctor = internalType.getConstructor(
+            activityInfoType, incrementalType,
+            Class.forName("android.os.UserHandle"), Boolean.TYPE);
+        return ctor.newInstance(activityInfo, incremental, user,
+            Boolean.FALSE);
     }
 
     private static Object createDisplayInfo() throws Exception {

@@ -38,6 +38,7 @@
 #include "linux_aarch64_runtime.h"
 #include "linux_x86_64_runtime.h"
 #include "platform_runtime.h"
+#include "guest_runner.h"
 #include "prefix.h"
 
 extern "C" {
@@ -167,6 +168,32 @@ static int run_script(const std::filesystem::path &script,
     if (WIFSIGNALED(status))
         return 128 + WTERMSIG(status);
     return 127;
+}
+
+// Blocks preemption/doorbell signals and starts elfuse's dedicated consumer
+// thread for them, right before actually launching a guest -- not at process
+// bring-up. run_script()'s fork()+execv() helper above also runs on
+// non-guest subcommands (e.g. `prefix create --kind android`'s sysroot setup
+// script); forking after this thread exists risks the classic post-fork
+// malloc deadlock, since the fork child allocates (std::vector, std::string)
+// before exec while the vanished thread could have been holding an
+// allocator lock. Idempotent -- elfuse guards it with a plain bool -- so
+// it's safe to call from every guest-launch site rather than once at the
+// top of main().
+static void ensure_preempt_or_disable_timeout(
+    muplar::runtime::PlatformLaunchConfig &cfg)
+{
+    bool preempt_ok = true;
+#ifndef _WIN32
+    preempt_ok = muplar::runtime::elf::ensure_preempt_initialized();
+#endif
+    if (!preempt_ok && cfg.timeout_sec > 0) {
+        std::cerr << "[Muplar] preemption thread failed to start; "
+                     "disabling --timeout-sec (was "
+                  << cfg.timeout_sec
+                  << ") since it can no longer be enforced\n";
+        cfg.timeout_sec = 0;
+    }
 }
 
 static std::filesystem::path default_android_art_sysroot()
@@ -428,6 +455,7 @@ static int handle_rosettad_translate_command(int argc, char **argv)
     launch_cfg.guest_args.push_back(argv[4]);
 
     try {
+        ensure_preempt_or_disable_timeout(launch_cfg);
         muplar::runtime::android::AndroidAarch64Runtime runtime;
         return runtime.run(launch_cfg);
     } catch (const std::exception &e) {
@@ -792,10 +820,22 @@ static int handle_prefix_command(int argc, char **argv)
     }
 }
 
+// Blocks preemption/doorbell signals and starts elfuse's dedicated consumer
+// thread for them, right before actually launching a guest -- not at process
+// bring-up. run_script()'s fork()+execv() helper also runs on non-guest
+// subcommands (e.g. `prefix create --kind android`'s sysroot setup script);
+// forking after this thread exists risks the classic post-fork malloc
+// deadlock, since the fork child allocates (std::vector, std::string) before
+// exec while the vanished thread could have been holding an allocator lock.
+// Idempotent -- elfuse guards it with a plain bool -- so it's safe to call
+// from every guest-launch site below rather than once at the top of main().
 static int run_platform_runtime(
-    const muplar::runtime::PlatformLaunchConfig &cfg)
+    const muplar::runtime::PlatformLaunchConfig &cfg_in)
 {
     namespace prefix = muplar::runtime::prefix;
+
+    muplar::runtime::PlatformLaunchConfig cfg = cfg_in;
+    ensure_preempt_or_disable_timeout(cfg);
 
     proc_set_fakeroot_enabled(cfg.fakeroot);
 
@@ -1065,6 +1105,7 @@ static int handle_instance_command(int argc, char **argv)
             opts.daemon = daemon_mode;
 
             if (layout.kind == prefix::PrefixKind::Wine) {
+                ensure_preempt_or_disable_timeout(cfg);
                 muplar::runtime::wine::WineRuntime runtime(opts);
                 return runtime.run(cfg);
             }
@@ -1102,16 +1143,6 @@ static int handle_instance_command(int argc, char **argv)
 
 int main(int argc, char **argv)
 {
-#ifndef _WIN32
-    // Block preemption/doorbell signals early so all spawned threads (including
-    // OS/system helper threads) inherit the block and don't default-terminate.
-    sigset_t early_block;
-    sigemptyset(&early_block);
-    sigaddset(&early_block, SIGUSR2);
-    sigaddset(&early_block, SIGALRM);
-    pthread_sigmask(SIG_BLOCK, &early_block, NULL);
-#endif
-
     // Check if we are running as a fork-child helper process
     int fork_child_fd = -1;
     int vfork_notify_fd = -1;
@@ -1215,6 +1246,9 @@ int main(int argc, char **argv)
         } else if (flag == "--quiet" || flag == "-q") {
             launch_cfg.quiet = true;
             ++arg_start;
+        } else if ((flag == "--timeout-sec") && arg_start + 1 < argc) {
+            launch_cfg.timeout_sec = std::atoi(argv[arg_start + 1]);
+            arg_start += 2;
         } else if (flag == "--apk") {
             launch_cfg.apk_mode = true;
             ++arg_start;
