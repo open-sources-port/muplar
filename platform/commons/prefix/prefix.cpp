@@ -14,6 +14,10 @@
 #include <sys/wait.h>
 #include <sys/types.h>
 #include <signal.h>
+
+extern "C" {
+#include "debug/log.h"
+}
 #include <unistd.h>
 
 namespace muplar::runtime::prefix
@@ -46,15 +50,13 @@ static void ensure_wine_tmp_dir_private()
     std::error_code ec;
     std::filesystem::create_directories(sock_dir, ec);
     if (ec) {
-        std::fprintf(stderr,
-                     "[Muplar Windows Compatibility] failed to create %s: %s\n",
-                     sock_dir.c_str(), ec.message().c_str());
+        log_error("[Muplar Windows Compatibility] failed to create %s: %s",
+                  sock_dir.c_str(), ec.message().c_str());
         return;
     }
     if (chmod(sock_dir.c_str(), 0700) != 0) {
-        std::fprintf(
-            stderr, "[Muplar Windows Compatibility] chmod 0700 %s failed: %s\n",
-            sock_dir.c_str(), std::strerror(errno));
+        log_warn("[Muplar Windows Compatibility] chmod 0700 %s failed: %s",
+                 sock_dir.c_str(), std::strerror(errno));
     }
 }
 
@@ -134,8 +136,8 @@ static bool auto_download_bootstrap(const std::string &distro,
     std::error_code ec;
     std::filesystem::create_directories(dest.parent_path(), ec);
 
-    std::fprintf(stderr, "[linux] Auto-downloading '%s' bootstrap for %s...\n",
-                 normalized_distro.c_str(), arch_str.c_str());
+    log_info("[linux] Auto-downloading '%s' bootstrap for %s...",
+             normalized_distro.c_str(), arch_str.c_str());
 
     std::string url;
     if (normalized_distro == "ubuntu") {
@@ -239,7 +241,7 @@ static bool auto_download_bootstrap(const std::string &distro,
     if (!url.empty()) {
         std::string cmd =
             "curl -L -f -s -S -o \"" + dest.string() + "\" \"" + url + "\"";
-        std::fprintf(stderr, "[linux] Downloading %s...\n", url.c_str());
+        log_info("[linux] Downloading %s...", url.c_str());
         int rc = std::system(cmd.c_str());
         return rc == 0;
     }
@@ -381,13 +383,12 @@ static void print_distro_download_suggestion(const std::string &distro,
         url = "https://cdimage.ubuntu.com/ubuntu-base/releases/";
     }
 
-    std::fprintf(
-        stderr,
+    log_error(
         "[linux] ERROR: Distro bootstrap rootfs not found for '%s' (%s).\n"
         "[linux] Please download a minimal rootfs tarball manually from:\n"
         "[linux]   %s\n"
         "[linux] and save it to:\n"
-        "[linux]   %s\n",
+        "[linux]   %s",
         distro.c_str(), arch_str.c_str(), url.c_str(), dest.c_str());
 }
 
@@ -400,8 +401,8 @@ static bool extract_bootstrap_rootfs(const std::filesystem::path &tarball,
     bool skip_case_variant_terminfo =
         distro == "arch" && is_case_insensitive_directory(rootfs_dir);
 
-    std::fprintf(stderr, "[linux] Extracting bootstrap rootfs: %s\n",
-                 tarball.filename().c_str());
+    log_info("[linux] Extracting bootstrap rootfs: %s",
+             tarball.filename().c_str());
 
     pid_t pid = fork();
     if (pid < 0)
@@ -436,8 +437,7 @@ static bool extract_bootstrap_rootfs(const std::filesystem::path &tarball,
     while (waitpid(pid, &status, 0) < 0) {
         if (errno == EINTR)
             continue;
-        std::fprintf(stderr, "[linux] waitpid failed for tar: %s\n",
-                     std::strerror(errno));
+        log_error("[linux] waitpid failed for tar: %s", std::strerror(errno));
         return false;
     }
 
@@ -446,16 +446,15 @@ static bool extract_bootstrap_rootfs(const std::filesystem::path &tarball,
         std::error_code chmod_ec;
         if (std::filesystem::is_directory(home_dir, chmod_ec) &&
             chmod(home_dir.c_str(), 0755) != 0) {
-            std::fprintf(stderr, "[linux] chmod 0755 %s failed: %s\n",
-                         home_dir.c_str(), std::strerror(errno));
+            log_warn("[linux] chmod 0755 %s failed: %s", home_dir.c_str(),
+                     std::strerror(errno));
         }
-        std::fprintf(stderr,
-                     "[linux] Bootstrap rootfs extracted successfully\n");
+        log_info("[linux] Bootstrap rootfs extracted successfully");
         return true;
     }
 
-    std::fprintf(stderr, "[linux] tar extraction failed (exit %d)\n",
-                 WIFEXITED(status) ? WEXITSTATUS(status) : -1);
+    log_error("[linux] tar extraction failed (exit %d)",
+              WIFEXITED(status) ? WEXITSTATUS(status) : -1);
     return false;
 }
 
@@ -1704,19 +1703,16 @@ static int wait_for_child(pid_t pid, const char *label)
     while (waitpid(pid, &status, 0) < 0) {
         if (errno == EINTR)
             continue;
-        std::fprintf(
-            stderr,
-            "[Muplar Windows Compatibility] waitpid failed for %s: %s\n", label,
-            std::strerror(errno));
+        log_error("[Muplar Windows Compatibility] waitpid failed for %s: %s",
+                  label, std::strerror(errno));
         return 1;
     }
 
     if (WIFEXITED(status))
         return WEXITSTATUS(status);
     if (WIFSIGNALED(status)) {
-        std::fprintf(stderr,
-                     "[Muplar Windows Compatibility] %s killed by signal %d\n",
-                     label, WTERMSIG(status));
+        log_warn("[Muplar Windows Compatibility] %s killed by signal %d", label,
+                 WTERMSIG(status));
         return 128 + WTERMSIG(status);
     }
     return 1;
@@ -1740,10 +1736,10 @@ static std::filesystem::path ensure_wine_mono_msi_cached()
 
     std::filesystem::create_directories(cache_dir, ec);
     if (ec) {
-        std::fprintf(stderr,
-                     "[Muplar Windows Compatibility] cannot create managed "
-                     "runtime cache dir %s: %s\n",
-                     cache_dir.c_str(), ec.message().c_str());
+        log_error(
+            "[Muplar Windows Compatibility] cannot create managed "
+            "runtime cache dir %s: %s",
+            cache_dir.c_str(), ec.message().c_str());
         return {};
     }
 
@@ -1751,9 +1747,9 @@ static std::filesystem::path ensure_wine_mono_msi_cached()
     if (curl.empty())
         curl = "/usr/bin/curl";
     if (!std::filesystem::exists(curl, ec)) {
-        std::fprintf(stderr,
-                     "[Muplar Windows Compatibility] curl not found, skipping "
-                     "managed runtime download\n");
+        log_warn(
+            "[Muplar Windows Compatibility] curl not found, skipping "
+            "managed runtime download");
         return {};
     }
 
@@ -1765,10 +1761,10 @@ static std::filesystem::path ensure_wine_mono_msi_cached()
 
     pid_t pid = fork();
     if (pid < 0) {
-        std::fprintf(stderr,
-                     "[Muplar Windows Compatibility] fork() failed for managed "
-                     "runtime download: %s\n",
-                     std::strerror(errno));
+        log_error(
+            "[Muplar Windows Compatibility] fork() failed for managed "
+            "runtime download: %s",
+            std::strerror(errno));
         return {};
     }
     if (pid == 0) {
@@ -1783,28 +1779,27 @@ static std::filesystem::path ensure_wine_mono_msi_cached()
                         const_cast<char *>(url.c_str()),
                         nullptr};
         execve(curl_str.c_str(), argv, environ);
-        std::fprintf(stderr,
-                     "[Muplar Windows Compatibility] execve curl failed: %s\n",
-                     std::strerror(errno));
+        log_error("[Muplar Windows Compatibility] execve curl failed: %s",
+                  std::strerror(errno));
         _exit(127);
     }
 
     int rc = wait_for_child(pid, "managed runtime download");
     if (rc != 0) {
         std::filesystem::remove(tmp, ec);
-        std::fprintf(stderr,
-                     "[Muplar Windows Compatibility] managed runtime download "
-                     "failed with code %d\n",
-                     rc);
+        log_warn(
+            "[Muplar Windows Compatibility] managed runtime download "
+            "failed with code %d",
+            rc);
         return {};
     }
 
     std::filesystem::rename(tmp, msi, ec);
     if (ec) {
-        std::fprintf(stderr,
-                     "[Muplar Windows Compatibility] cannot move managed "
-                     "runtime package into cache: %s\n",
-                     ec.message().c_str());
+        log_error(
+            "[Muplar Windows Compatibility] cannot move managed "
+            "runtime package into cache: %s",
+            ec.message().c_str());
         return {};
     }
     return msi;
@@ -1824,18 +1819,18 @@ static void install_wine_mono(const PrefixLayout &layout,
             wine = find_on_path("wine");
     }
     if (wine.empty()) {
-        std::fprintf(stderr,
-                     "[Muplar Windows Compatibility] runtime binary not found, "
-                     "skipping managed runtime install\n");
+        log_warn(
+            "[Muplar Windows Compatibility] runtime binary not found, "
+            "skipping managed runtime install");
         return;
     }
 
     pid_t pid = fork();
     if (pid < 0) {
-        std::fprintf(stderr,
-                     "[Muplar Windows Compatibility] fork() failed for managed "
-                     "runtime install: %s\n",
-                     std::strerror(errno));
+        log_error(
+            "[Muplar Windows Compatibility] fork() failed for managed "
+            "runtime install: %s",
+            std::strerror(errno));
         return;
     }
 
@@ -1852,19 +1847,17 @@ static void install_wine_mono(const PrefixLayout &layout,
                         const_cast<char *>("/quiet"),
                         nullptr};
         execve(wine_str.c_str(), argv, environ);
-        std::fprintf(
-            stderr,
-            "[Muplar Windows Compatibility] execve msiexec failed: %s\n",
-            std::strerror(errno));
+        log_error("[Muplar Windows Compatibility] execve msiexec failed: %s",
+                  std::strerror(errno));
         _exit(127);
     }
 
     int rc = wait_for_child(pid, "managed runtime install");
     if (rc != 0) {
-        std::fprintf(stderr,
-                     "[Muplar Windows Compatibility] managed runtime install "
-                     "exited with code %d\n",
-                     rc);
+        log_warn(
+            "[Muplar Windows Compatibility] managed runtime install "
+            "exited with code %d",
+            rc);
     }
 }
 
@@ -1883,17 +1876,16 @@ static void import_windows_font_registry(
             runtime = find_on_path("wine");
     }
     if (runtime.empty()) {
-        std::fprintf(stderr,
-                     "[Muplar Windows Compatibility] runtime binary not found, "
-                     "skipping font setup\n");
+        log_warn(
+            "[Muplar Windows Compatibility] runtime binary not found, "
+            "skipping font setup");
         return;
     }
 
     pid_t pid = fork();
     if (pid < 0) {
-        std::fprintf(
-            stderr,
-            "[Muplar Windows Compatibility] fork() failed for font setup: %s\n",
+        log_error(
+            "[Muplar Windows Compatibility] fork() failed for font setup: %s",
             std::strerror(errno));
         return;
     }
@@ -1908,18 +1900,15 @@ static void import_windows_font_registry(
                         const_cast<char *>("regedit"), const_cast<char *>("/S"),
                         const_cast<char *>(reg_file_str.c_str()), nullptr};
         execve(runtime_str.c_str(), argv, environ);
-        std::fprintf(
-            stderr,
-            "[Muplar Windows Compatibility] execve font setup failed: %s\n",
-            std::strerror(errno));
+        log_error("[Muplar Windows Compatibility] execve font setup failed: %s",
+                  std::strerror(errno));
         _exit(127);
     }
 
     int rc = wait_for_child(pid, "font setup");
     if (rc != 0) {
-        std::fprintf(
-            stderr,
-            "[Muplar Windows Compatibility] font setup exited with code %d\n",
+        log_warn(
+            "[Muplar Windows Compatibility] font setup exited with code %d",
             rc);
     }
 }
@@ -1928,9 +1917,9 @@ static void run_wineboot_init(const PrefixLayout &layout)
 {
     std::filesystem::path wineboot = resolve_wineboot(layout);
     if (wineboot.empty()) {
-        std::fprintf(stderr,
-                     "[Muplar Windows Compatibility] setup binary not found, "
-                     "skipping auto-init\n");
+        log_warn(
+            "[Muplar Windows Compatibility] setup binary not found, "
+            "skipping auto-init");
         return;
     }
 
@@ -1938,9 +1927,8 @@ static void run_wineboot_init(const PrefixLayout &layout)
 
     pid_t pid = fork();
     if (pid < 0) {
-        std::fprintf(
-            stderr,
-            "[Muplar Windows Compatibility] fork() failed for setup init: %s\n",
+        log_error(
+            "[Muplar Windows Compatibility] fork() failed for setup init: %s",
             std::strerror(errno));
         return;
     }
@@ -1954,17 +1942,15 @@ static void run_wineboot_init(const PrefixLayout &layout)
                         const_cast<char *>("--init"), nullptr};
 
         execve(wineboot_str.c_str(), argv, environ);
-        std::fprintf(stderr,
-                     "[Muplar Windows Compatibility] execve setup failed: %s\n",
-                     std::strerror(errno));
+        log_error("[Muplar Windows Compatibility] execve setup failed: %s",
+                  std::strerror(errno));
         _exit(127);
     }
 
     int rc = wait_for_child(pid, "Windows compatibility setup");
     if (rc != 0) {
-        std::fprintf(
-            stderr,
-            "[Muplar Windows Compatibility] setup exited with code %d\n", rc);
+        log_warn("[Muplar Windows Compatibility] setup exited with code %d",
+                 rc);
         return;
     }
 

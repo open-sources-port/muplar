@@ -32,6 +32,7 @@
 #include <unistd.h>
 #ifdef __APPLE__
 #include <libproc.h>
+#include <sys/event.h>
 #endif
 
 #include "android_aarch64_runtime.h"
@@ -42,6 +43,7 @@
 #include "prefix.h"
 
 extern "C" {
+#include "debug/log.h"
 #include "runtime/forkipc.h"
 void proc_set_fakeroot_enabled(bool enabled);
 }
@@ -1141,6 +1143,52 @@ static int handle_instance_command(int argc, char **argv)
     return 2;
 }
 
+// A guest fork() is emulated by re-executing this binary as --fork-child, wired
+// back to the process that forked it over an IPC socket. That socket is the
+// child's only reason to exist, but nothing ties its lifetime to the parent's:
+// when the parent goes away without an orderly teardown -- a crash, or a KILL
+// aimed at the session -- the child is reparented to launchd and keeps running
+// its vCPU loop at full tilt with no peer left to serve. Observed in practice
+// as several orphans pinning a core each, indefinitely.
+//
+// Watch the parent and follow it down. Darwin has no PR_SET_PDEATHSIG, so use
+// kqueue's process filter, which delivers NOTE_EXIT without polling.
+static void exit_when_parent_dies()
+{
+#ifdef __APPLE__
+    const pid_t parent = getppid();
+    // Already orphaned before we got here: launchd (1) is never a real parent
+    // for a fork-child, so there is nobody left to serve.
+    if (parent <= 1)
+        _exit(0);
+
+    std::thread([parent]() {
+        const int kq = kqueue();
+        if (kq < 0)
+            return;
+
+        struct kevent change;
+        EV_SET(&change, parent, EVFILT_PROC, EV_ADD | EV_ENABLE, NOTE_EXIT, 0,
+               nullptr);
+        if (kevent(kq, &change, 1, nullptr, 0, nullptr) < 0) {
+            const int err = errno;
+            close(kq);
+            // ESRCH means the parent exited between getppid() and the
+            // registration above, so the death we are waiting for already
+            // happened.
+            if (err == ESRCH)
+                _exit(0);
+            return;
+        }
+
+        struct kevent event;
+        if (kevent(kq, nullptr, 0, &event, 1, nullptr) > 0)
+            _exit(0);
+        close(kq);
+    }).detach();
+#endif
+}
+
 int main(int argc, char **argv)
 {
     // Check if we are running as a fork-child helper process
@@ -1167,6 +1215,7 @@ int main(int argc, char **argv)
     }
 
     if (fork_child_fd >= 0) {
+        exit_when_parent_dies();
         return fork_child_main(fork_child_fd, vfork_notify_fd, verbose,
                                timeout_sec);
     }
@@ -1219,6 +1268,19 @@ int main(int argc, char **argv)
             i += 3;
         }
     }
+
+    // Every mup subcommand (not just guest launches) can now log through
+    // elfuse's leveled logger, so the level needs to be set here rather
+    // than only inside GuestRunner::run() -- otherwise commands like
+    // `prefix create` would run at elfuse's own library default (WARN),
+    // silently hiding their own log_info progress output.
+    log_init();
+    if (verbose)
+        log_set_level(LOG_DEBUG);
+    else if (quiet_requested)
+        log_set_level(LOG_WARN);
+    else
+        log_set_level(LOG_INFO);
 
     if (!quiet_requested)
         std::cout << "Muplar CLI (mup)\n";

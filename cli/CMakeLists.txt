@@ -39,6 +39,7 @@ target_include_directories(mup PUBLIC
     ${CMAKE_SOURCE_DIR}/platform/linux-x64
     ${CMAKE_SOURCE_DIR}/third_party/angle-include
     ${CMAKE_SOURCE_DIR}/platform/windows-x64
+    ${CMAKE_SOURCE_DIR}/third_party/elfuse/src
 )
 
 add_custom_command(TARGET mup POST_BUILD

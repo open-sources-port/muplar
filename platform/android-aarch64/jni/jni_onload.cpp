@@ -20,6 +20,7 @@ extern "C" {
 
 extern "C" {
 #include "core/guest.h"
+#include "debug/log.h"
 }
 
 #include <Hypervisor/Hypervisor.h>
@@ -53,8 +54,8 @@ JniOnLoad::JniOnLoad(guest_t *guest,
 void JniOnLoad::write_u64(uint64_t gpa, uint64_t value)
 {
     if (guest_write(guest_, gpa, &value, sizeof(value)) != 0) {
-        std::fprintf(stderr, "[JNI_OnLoad] write_u64 failed at GPA 0x%llx\n",
-                     (unsigned long long) gpa);
+        log_error("[JNI_OnLoad] write_u64 failed at GPA 0x%llx",
+                  (unsigned long long) gpa);
     }
 }
 
@@ -133,9 +134,8 @@ void JniOnLoad::install()
     // ── jni_env_ptr points to the JNIEnv table installed by JniBridge ─────
     write_u64(jni_env_ptr_gpa_, env_->jni_interface_gpa());
 
-    std::fprintf(
-        stderr,
-        "[JNI_OnLoad] install: vm_table=0x%llx vm_ptr=0x%llx env_ptr=0x%llx\n",
+    log_info(
+        "[JNI_OnLoad] install: vm_table=0x%llx vm_ptr=0x%llx env_ptr=0x%llx",
         (unsigned long long) java_vm_table_gpa_,
         (unsigned long long) java_vm_ptr_gpa_,
         (unsigned long long) jni_env_ptr_gpa_);
@@ -159,7 +159,7 @@ uint64_t JniOnLoad::find_symbol(uint64_t so_load_base,
     FILE *f = std::fopen(so_path.c_str(), "rb");
     if (!f) {
         if (!quiet)
-            std::fprintf(stderr, "[JNI] cannot open %s\n", so_path.c_str());
+            log_error("[JNI] cannot open %s", so_path.c_str());
         return 0;
     }
 
@@ -172,8 +172,7 @@ uint64_t JniOnLoad::find_symbol(uint64_t so_load_base,
     if (std::memcmp(ehdr.e_ident, ELFMAG, SELFMAG) != 0 ||
         ehdr.e_ident[EI_CLASS] != ELFCLASS64 || ehdr.e_machine != EM_AARCH64) {
         if (!quiet)
-            std::fprintf(stderr, "[JNI] %s is not AArch64 ELF64\n",
-                         so_path.c_str());
+            log_error("[JNI] %s is not AArch64 ELF64", so_path.c_str());
         std::fclose(f);
         return 0;
     }
@@ -207,7 +206,7 @@ uint64_t JniOnLoad::find_symbol(uint64_t so_load_base,
 
     if (!dynsym_off || !dynstr_off) {
         if (!quiet)
-            std::fprintf(stderr, "[JNI] no DYNSYM in %s\n", so_path.c_str());
+            log_warn("[JNI] no DYNSYM in %s", so_path.c_str());
         std::fclose(f);
         return 0;
     }
@@ -234,18 +233,17 @@ uint64_t JniOnLoad::find_symbol(uint64_t so_load_base,
             std::fclose(f);
             uint64_t gpa = so_load_base + sym.st_value;
             if (!quiet)
-                std::fprintf(
-                    stderr,
-                    "[JNI] found export %s: st_value=0x%llx → GPA=0x%llx\n",
-                    symbol_name.c_str(), (unsigned long long) sym.st_value,
-                    (unsigned long long) gpa);
+                log_debug("[JNI] found export %s: st_value=0x%llx → GPA=0x%llx",
+                          symbol_name.c_str(),
+                          (unsigned long long) sym.st_value,
+                          (unsigned long long) gpa);
             return gpa;
         }
     }
 
     if (!quiet)
-        std::fprintf(stderr, "[JNI] export %s not found in %s\n",
-                     symbol_name.c_str(), so_path.c_str());
+        log_warn("[JNI] export %s not found in %s", symbol_name.c_str(),
+                 so_path.c_str());
     std::fclose(f);
     return 0;
 }
@@ -255,11 +253,10 @@ uint64_t JniOnLoad::find_jni_onload(uint64_t so_load_base,
 {
     uint64_t gpa = find_symbol(so_load_base, so_path, "JNI_OnLoad", true);
     if (gpa) {
-        std::fprintf(stderr, "[JNI_OnLoad] found JNI_OnLoad: GPA=0x%llx\n",
-                     (unsigned long long) gpa);
+        log_info("[JNI_OnLoad] found JNI_OnLoad: GPA=0x%llx",
+                 (unsigned long long) gpa);
     } else {
-        std::fprintf(stderr, "[JNI_OnLoad] JNI_OnLoad not found in %s\n",
-                     so_path.c_str());
+        log_warn("[JNI_OnLoad] JNI_OnLoad not found in %s", so_path.c_str());
     }
     return gpa;
 }
@@ -305,11 +302,9 @@ int JniOnLoad::call_jni_onload(
     // ── Set PC = JNI_OnLoad entry ──────────────────────────────────────────
     hv_vcpu_set_reg(vcpu, HV_REG_PC, jni_onload_gpa);
 
-    std::fprintf(
-        stderr,
-        "[JNI_OnLoad] calling JNI_OnLoad at GPA 0x%llx (JavaVM*=0x%llx)\n",
-        (unsigned long long) jni_onload_gpa,
-        (unsigned long long) java_vm_ptr_gpa_);
+    log_info("[JNI_OnLoad] calling JNI_OnLoad at GPA 0x%llx (JavaVM*=0x%llx)",
+             (unsigned long long) jni_onload_gpa,
+             (unsigned long long) java_vm_ptr_gpa_);
 
     onload_returned_ = false;
     onload_retval_ = 0;
@@ -326,7 +321,7 @@ int JniOnLoad::call_jni_onload(
     hv_vcpu_set_sys_reg(vcpu, HV_SYS_REG_SCTLR_EL1, saved_sctlr);
 
     int ret = static_cast<int>(onload_retval_);
-    std::fprintf(stderr, "[JNI_OnLoad] JNI_OnLoad returned %d\n", ret);
+    log_info("[JNI_OnLoad] JNI_OnLoad returned %d", ret);
     return ret;
 }
 
@@ -377,9 +372,8 @@ int64_t JniOnLoad::call_guest_function(
 
     size_t n = args.size();
     if (n > 8) {
-        std::fprintf(
-            stderr,
-            "[JNI] raw guest call has %zu args; only first 8 fit X0..X7\n", n);
+        log_warn("[JNI] raw guest call has %zu args; only first 8 fit X0..X7",
+                 n);
         n = 8;
     }
     for (size_t i = 0; i < n; ++i) {
@@ -389,9 +383,8 @@ int64_t JniOnLoad::call_guest_function(
     hv_vcpu_set_reg(vcpu, HV_REG_LR, sentinel_stub_gpa_);
     hv_vcpu_set_reg(vcpu, HV_REG_PC, entry_gpa);
 
-    std::fprintf(stderr,
-                 "[JNI] calling guest function at GPA 0x%llx args=%zu\n",
-                 (unsigned long long) entry_gpa, args.size());
+    log_debug("[JNI] calling guest function at GPA 0x%llx args=%zu",
+              (unsigned long long) entry_gpa, args.size());
 
     onload_returned_ = false;
     onload_retval_ = 0;
@@ -411,8 +404,7 @@ int64_t JniOnLoad::call_guest_function(
     hv_vcpu_set_sys_reg(vcpu, HV_SYS_REG_SCTLR_EL1, saved_sctlr);
 
     int64_t ret = static_cast<int64_t>(onload_retval_);
-    std::fprintf(stderr, "[JNI] guest function returned %lld\n",
-                 (long long) ret);
+    log_debug("[JNI] guest function returned %lld", (long long) ret);
     return ret;
 }
 
@@ -445,17 +437,16 @@ int64_t JniOnLoad::call_native(
     raw_args.push_back(thiz);
 
     if (args.size() > 6)
-        std::fprintf(
-            stderr, "[JNI] native call has %zu args; only first 6 fit X2..X7\n",
-            args.size());
+        log_warn("[JNI] native call has %zu args; only first 6 fit X2..X7",
+                 args.size());
     for (size_t i = 0; i < args.size() && i < 6; ++i)
         raw_args.push_back(static_cast<uint64_t>(args[i]));
 
-    std::fprintf(stderr, "[JNI] calling native at GPA 0x%llx args=%zu\n",
-                 (unsigned long long) native_gpa, args.size());
+    log_debug("[JNI] calling native at GPA 0x%llx args=%zu",
+              (unsigned long long) native_gpa, args.size());
     int64_t ret = call_guest_function(native_gpa, raw_args, vcpu, vexit,
                                       std::move(run_loop_cb));
-    std::fprintf(stderr, "[JNI] native returned %lld\n", (long long) ret);
+    log_debug("[JNI] native returned %lld", (long long) ret);
     return ret;
 }
 

@@ -53,6 +53,7 @@ set(WAWONA_DIR "${CMAKE_SOURCE_DIR}/third_party/muplar-wayland")
 add_executable(muplar_prefix_manager MACOSX_BUNDLE
     AndroidDeviceShell.mm
     PrefixManagerApp.mm
+    ${CMAKE_SOURCE_DIR}/third_party/elfuse/src/debug/log.c
 )
 
 set_target_properties(muplar_prefix_manager PROPERTIES
@@ -78,6 +79,7 @@ target_include_directories(muplar_prefix_manager
         ${CMAKE_SOURCE_DIR}/platform/commons/supervisor
         ${CMAKE_SOURCE_DIR}/platform/android-aarch64/apk
         ${CMAKE_SOURCE_DIR}/platform/android-aarch64/services
+        ${CMAKE_SOURCE_DIR}/third_party/elfuse/src
 )
 
 target_compile_definitions(muplar_prefix_manager PRIVATE

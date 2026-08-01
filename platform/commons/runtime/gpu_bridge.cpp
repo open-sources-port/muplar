@@ -7,6 +7,10 @@
 #include <dlfcn.h>
 #include <stdexcept>
 
+extern "C" {
+#include "debug/log.h"
+}
+
 namespace muplar::runtime
 {
 
@@ -45,10 +49,9 @@ void GpuBridge::install()
     guest_extend_page_tables(guest_, heap_base_, heap_base_ + HEAP_SIZE,
                              MEM_PERM_RW);
 
-    std::fprintf(stderr,
-                 "[GpuBridge] mapped 8MB GLES heap at [0x%llx,0x%llx)\n",
-                 (unsigned long long) heap_base_,
-                 (unsigned long long) (heap_base_ + HEAP_SIZE));
+    log_info("[GpuBridge] mapped 8MB GLES heap at [0x%llx,0x%llx)",
+             (unsigned long long) heap_base_,
+             (unsigned long long) (heap_base_ + HEAP_SIZE));
 
     // Initialize next_stub_gpa_
     next_stub_gpa_ = arena_gpa_;
@@ -77,11 +80,11 @@ bool GpuBridge::load_angle()
         angle_gles_lib_ = ::dlopen(gles_paths[i], RTLD_NOW | RTLD_LOCAL);
 
     if (!angle_egl_lib_ || !angle_gles_lib_) {
-        std::fprintf(stderr, "[ANGLE] failed to load: egl=%p gles=%p — %s\n",
-                     angle_egl_lib_, angle_gles_lib_, ::dlerror());
+        log_error("[ANGLE] failed to load: egl=%p gles=%p — %s", angle_egl_lib_,
+                  angle_gles_lib_, ::dlerror());
         return false;
     }
-    std::fprintf(stderr, "[ANGLE] loaded libEGL + libGLESv2 ✓\n");
+    log_info("[ANGLE] loaded libEGL + libGLESv2 ✓");
     return true;
 }
 
@@ -108,7 +111,7 @@ void GpuBridge::run_host_window_after_guest(int linger_ms)
     if (linger_ms >= 0) {
         host_window_->run_for_ms(linger_ms);
     } else {
-        std::fprintf(stderr, "[HostWindow] close the Muplar window to exit\n");
+        log_info("[HostWindow] close the Muplar window to exit");
         host_window_->run_until_closed();
     }
 }
@@ -132,7 +135,7 @@ void GpuBridge::ensure_host_window()
     host_window_ = std::make_unique<HostWindow>(native_window_.width,
                                                 native_window_.height);
     if (!host_window_->valid()) {
-        std::fprintf(stderr, "[HostWindow] unavailable on this host/thread\n");
+        log_warn("[HostWindow] unavailable on this host/thread");
         host_window_.reset();
     }
 }
@@ -238,9 +241,8 @@ uint64_t GpuBridge::unsupported_import_stub(const std::string &soname,
         return it->second;
 
     if (next_unsupported_import_hvc_ >= HVC_UNSUPPORTED_IMPORT_LIMIT) {
-        std::fprintf(
-            stderr,
-            "[GpuBridge] warning: unsupported import stub arena exhausted\n");
+        log_warn(
+            "[GpuBridge] warning: unsupported import stub arena exhausted");
         return 0;
     }
 
@@ -248,9 +250,8 @@ uint64_t GpuBridge::unsupported_import_stub(const std::string &soname,
     uint64_t gpa = write_stub(hvc_nr);
 
     handlers_[hvc_nr] = [key](guest_t *, const uint64_t[8]) -> uint64_t {
-        std::fprintf(stderr,
-                     "[GpuBridge] FATAL: guest called unsupported import: %s\n",
-                     key.c_str());
+        log_error("[GpuBridge] FATAL: guest called unsupported import: %s",
+                  key.c_str());
         std::abort();
         return 0;
     };
@@ -314,8 +315,7 @@ void GpuBridge::register_libegl_stubs()
         [this](guest_t *, const uint64_t[8]) -> uint64_t {
             if (egl_display_ == EGL_NO_DISPLAY) {
                 egl_display_ = eglGetDisplay(EGL_DEFAULT_DISPLAY);
-                std::fprintf(stderr, "[EGL] eglGetDisplay → %p\n",
-                             egl_display_);
+                log_debug("[EGL] eglGetDisplay → %p", egl_display_);
             }
             return (egl_display_ != EGL_NO_DISPLAY) ? GUEST_EGL_DISPLAY : 0;
         });
@@ -327,8 +327,7 @@ void GpuBridge::register_libegl_stubs()
                 return 0;
             EGLint major = 0, minor = 0;
             EGLBoolean ok = eglInitialize(egl_display_, &major, &minor);
-            std::fprintf(stderr, "[EGL] eglInitialize → %d (v%d.%d)\n", ok,
-                         major, minor);
+            log_debug("[EGL] eglInitialize → %d (v%d.%d)", ok, major, minor);
             if (a[1])
                 guest_write_u32(g, a[1], (uint32_t) major);
             if (a[2])
@@ -340,8 +339,7 @@ void GpuBridge::register_libegl_stubs()
     add("libEGL.so", "eglBindAPI", HVC_EGL_BIND_API,
         [](guest_t *, const uint64_t a[8]) -> uint64_t {
             EGLBoolean ok = eglBindAPI((EGLenum) a[0]);
-            std::fprintf(stderr, "[EGL] eglBindAPI(0x%x) → %d\n",
-                         (unsigned) a[0], ok);
+            log_debug("[EGL] eglBindAPI(0x%x) → %d", (unsigned) a[0], ok);
             return ok ? 1 : 0;
         });
 
@@ -375,8 +373,7 @@ void GpuBridge::register_libegl_stubs()
             EGLint num = 0;
             EGLBoolean ok = eglChooseConfig(egl_display_, attribs.data(),
                                             &egl_config_, 1, &num);
-            std::fprintf(stderr, "[EGL] eglChooseConfig → %d (num=%d)\n", ok,
-                         num);
+            log_debug("[EGL] eglChooseConfig → %d (num=%d)", ok, num);
 
             // Write guest config handle
             if (a[2] && ok && num > 0)
@@ -408,7 +405,7 @@ void GpuBridge::register_libegl_stubs()
 
             egl_context_ = eglCreateContext(egl_display_, egl_config_,
                                             EGL_NO_CONTEXT, attribs.data());
-            std::fprintf(stderr, "[EGL] eglCreateContext → %p\n", egl_context_);
+            log_debug("[EGL] eglCreateContext → %p", egl_context_);
             return (egl_context_ != EGL_NO_CONTEXT) ? GUEST_EGL_CONTEXT : 0;
         });
 
@@ -419,10 +416,10 @@ void GpuBridge::register_libegl_stubs()
             if (a[0] != GUEST_EGL_DISPLAY || egl_display_ == EGL_NO_DISPLAY)
                 return 0;
             if (a[2] != GUEST_NATIVE_WINDOW) {
-                std::fprintf(stderr,
-                             "[EGL] eglCreateWindowSurface: unknown native "
-                             "window 0x%llx\n",
-                             (unsigned long long) a[2]);
+                log_warn(
+                    "[EGL] eglCreateWindowSurface: unknown native "
+                    "window 0x%llx",
+                    (unsigned long long) a[2]);
                 return 0;
             }
             if (egl_surface_ == EGL_NO_SURFACE) {
@@ -431,10 +428,9 @@ void GpuBridge::register_libegl_stubs()
                                          EGL_NONE};
                 egl_surface_ = eglCreatePbufferSurface(
                     egl_display_, egl_config_, pbuf_attribs);
-                std::fprintf(
-                    stderr,
-                    "[EGL] eglCreateWindowSurface → pbuffer %p (%dx%d)\n",
-                    egl_surface_, native_window_.width, native_window_.height);
+                log_debug("[EGL] eglCreateWindowSurface → pbuffer %p (%dx%d)",
+                          egl_surface_, native_window_.width,
+                          native_window_.height);
             }
             return (egl_surface_ != EGL_NO_SURFACE) ? GUEST_EGL_SURFACE : 0;
         });
@@ -458,8 +454,7 @@ void GpuBridge::register_libegl_stubs()
             }
             egl_surface_ = eglCreatePbufferSurface(egl_display_, egl_config_,
                                                    attribs.data());
-            std::fprintf(stderr, "[EGL] eglCreatePbufferSurface → %p\n",
-                         egl_surface_);
+            log_debug("[EGL] eglCreatePbufferSurface → %p", egl_surface_);
             return (egl_surface_ != EGL_NO_SURFACE) ? GUEST_EGL_SURFACE : 0;
         });
 
@@ -475,7 +470,7 @@ void GpuBridge::register_libegl_stubs()
             EGLContext ctx =
                 (a[3] == GUEST_EGL_CONTEXT) ? egl_context_ : EGL_NO_CONTEXT;
             EGLBoolean ok = eglMakeCurrent(egl_display_, draw, read, ctx);
-            std::fprintf(stderr, "[EGL] eglMakeCurrent → %d\n", ok);
+            log_debug("[EGL] eglMakeCurrent → %d", ok);
             return ok ? 1 : 0;
         });
 
@@ -486,7 +481,7 @@ void GpuBridge::register_libegl_stubs()
                 egl_surface_ == EGL_NO_SURFACE)
                 return 0;
             EGLBoolean ok = eglSwapBuffers(egl_display_, egl_surface_);
-            std::fprintf(stderr, "[EGL] eglSwapBuffers → %d\n", ok);
+            log_debug("[EGL] eglSwapBuffers → %d", ok);
             if (ok)
                 present_egl_surface();
             return ok ? 1 : 0;
@@ -600,17 +595,16 @@ void GpuBridge::register_libegl_stubs()
             }
 
             if (!host_fn) {
-                std::fprintf(stderr,
-                             "[EGL] eglGetProcAddress(%s) → NOT FOUND\n",
-                             name.c_str());
+                log_warn("[EGL] eglGetProcAddress(%s) → NOT FOUND",
+                         name.c_str());
                 return 0;
             }
 
             if (next_proc_hvc_ >= HVC_GL_PROC_LIMIT) {
-                std::fprintf(stderr,
-                             "[EGL] eglGetProcAddress(%s) → procaddr stub "
-                             "arena exhausted\n",
-                             name.c_str());
+                log_debug(
+                    "[EGL] eglGetProcAddress(%s) → procaddr stub "
+                    "arena exhausted",
+                    name.c_str());
                 return 0;
             }
 
@@ -627,8 +621,7 @@ void GpuBridge::register_libegl_stubs()
                 // C function pointer via a generic handler. Log it for now.
                 // TODO Phase 5: emit a real trampoline stub that forwards
                 // X0..X7
-                std::fprintf(stderr, "[GL] %s() called via procaddr stub\n",
-                             name.c_str());
+                log_debug("[GL] %s() called via procaddr stub", name.c_str());
                 (void) captured_fn;
                 return 0;
             };
@@ -637,9 +630,8 @@ void GpuBridge::register_libegl_stubs()
             sym_tables_["__procaddr__"][name] = gpa;
             proc_addr_handlers_[nr] = host_fn;
 
-            std::fprintf(stderr,
-                         "[EGL] eglGetProcAddress(%s) → stub GPA 0x%llx\n",
-                         name.c_str(), (unsigned long long) gpa);
+            log_debug("[EGL] eglGetProcAddress(%s) → stub GPA 0x%llx",
+                      name.c_str(), (unsigned long long) gpa);
             return gpa;
         });
 
@@ -697,9 +689,8 @@ void GpuBridge::register_libegl_stubs()
         [](guest_t *, const uint64_t[8]) -> uint64_t {
             // Stub: eglCreateImage requires KHR extension on ANGLE
             // Callers must use eglGetProcAddress("eglCreateImageKHR")
-            std::fprintf(
-                stderr,
-                "[EGL] eglCreateImage called (stub returns EGL_NO_IMAGE)\n");
+            log_debug(
+                "[EGL] eglCreateImage called (stub returns EGL_NO_IMAGE)");
             return 0;  // EGL_NO_IMAGE
         });
 

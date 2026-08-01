@@ -6,6 +6,10 @@
 #include <stdexcept>
 #include <utility>
 
+extern "C" {
+#include "debug/log.h"
+}
+
 namespace muplar::runtime::jni
 {
 
@@ -171,7 +175,7 @@ uint64_t JniEnv::dispatch(uint32_t call_nr, const uint64_t args[8])
     case JNI_SetFloatArrayRegion:
         return jni_SetFloatArrayRegion(args);
     default:
-        std::fprintf(stderr, "[JNI] Unknown call 0x%X\n", call_nr);
+        log_warn("[JNI] Unknown call 0x%X", call_nr);
         return static_cast<uint64_t>(-1);
     }
 }
@@ -252,9 +256,9 @@ void JniEnv::install_table(uint64_t table_gpa, uint64_t stub_base_gpa)
     // The caller (JniBridge / GuestRunner) is responsible for writing
     // install_entries() into guest memory.  See jni_bridge.cpp.
     (void) stub;  // used by install_entries() below — declared here for docs
-    std::fprintf(
-        stderr, "[JNI] install_table: table_gpa=0x%llx stub_base=0x%llx\n",
-        (unsigned long long) table_gpa, (unsigned long long) stub_base_gpa);
+    log_info("[JNI] install_table: table_gpa=0x%llx stub_base=0x%llx",
+             (unsigned long long) table_gpa,
+             (unsigned long long) stub_base_gpa);
 }
 
 // Return a flat vector of (slot_index, stub_gpa) pairs — the bridge writes
@@ -470,8 +474,8 @@ uint64_t JniEnv::jni_FindClass(const uint64_t *a)
         register_class(sit->second);
         return class_by_desc_[sit->second];
     }
-    std::fprintf(stderr, "[JNI] FindClass: unresolved GPA 0x%llx\n",
-                 (unsigned long long) str_gpa);
+    log_warn("[JNI] FindClass: unresolved GPA 0x%llx",
+             (unsigned long long) str_gpa);
     pending_exception_ = true;
     return JNI_NULL;
 }
@@ -485,8 +489,8 @@ uint64_t JniEnv::jni_GetMethodID(const uint64_t *a)
 
     auto cit = classes_.find(cls_h);
     if (cit == classes_.end()) {
-        std::fprintf(stderr, "[JNI] GetMethodID: unknown class 0x%llx\n",
-                     (unsigned long long) cls_h);
+        log_warn("[JNI] GetMethodID: unknown class 0x%llx",
+                 (unsigned long long) cls_h);
         pending_exception_ = true;
         return JNI_NULL;
     }
@@ -509,8 +513,8 @@ uint64_t JniEnv::jni_GetMethodID(const uint64_t *a)
     // Allocate a new method handle
     uint64_t mh = alloc_handle();
     methods_[mh] = {cls_h, name, sig};
-    std::fprintf(stderr, "[JNI] GetMethodID: %s%s → 0x%llx\n", name.c_str(),
-                 sig.c_str(), (unsigned long long) mh);
+    log_debug("[JNI] GetMethodID: %s%s → 0x%llx", name.c_str(), sig.c_str(),
+              (unsigned long long) mh);
     return mh;
 }
 
@@ -523,8 +527,8 @@ uint64_t JniEnv::jni_GetFieldID(const uint64_t *a)
 
     auto cit = classes_.find(cls_h);
     if (cit == classes_.end()) {
-        std::fprintf(stderr, "[JNI] GetFieldID: unknown class 0x%llx\n",
-                     (unsigned long long) cls_h);
+        log_warn("[JNI] GetFieldID: unknown class 0x%llx",
+                 (unsigned long long) cls_h);
         pending_exception_ = true;
         return JNI_NULL;
     }
@@ -544,9 +548,9 @@ uint64_t JniEnv::jni_GetFieldID(const uint64_t *a)
 
     uint64_t fh = alloc_handle();
     fields_[fh] = {cls_h, name, sig};
-    std::fprintf(stderr, "[JNI] GetFieldID: %s.%s%s -> 0x%llx\n",
-                 cit->second.descriptor.c_str(), name.c_str(), sig.c_str(),
-                 (unsigned long long) fh);
+    log_debug("[JNI] GetFieldID: %s.%s%s -> 0x%llx",
+              cit->second.descriptor.c_str(), name.c_str(), sig.c_str(),
+              (unsigned long long) fh);
     return fh;
 }
 
@@ -557,10 +561,10 @@ uint64_t JniEnv::jni_RegisterNatives(const uint64_t *a)
     // args[2] and args[3]: the bridge must walk the guest JNINativeMethod[]
     // array and call register_native() for each entry.  We record the count.
     uint64_t count = a[3];
-    std::fprintf(stderr,
-                 "[JNI] RegisterNatives: class=0x%llx count=%llu (bridge must "
-                 "resolve)\n",
-                 (unsigned long long) cls_h, (unsigned long long) count);
+    log_debug(
+        "[JNI] RegisterNatives: class=0x%llx count=%llu (bridge must "
+        "resolve)",
+        (unsigned long long) cls_h, (unsigned long long) count);
     // Return JNI_OK; actual registration happens via register_native().
     return static_cast<uint64_t>(JNI_OK);
 }
@@ -572,7 +576,7 @@ void JniEnv::register_native(uint64_t class_handle,
 {
     auto cit = classes_.find(class_handle);
     if (cit == classes_.end()) {
-        std::fprintf(stderr, "[JNI] register_native: unknown class\n");
+        log_warn("[JNI] register_native: unknown class");
         return;
     }
     // Replace existing or add
@@ -583,9 +587,9 @@ void JniEnv::register_native(uint64_t class_handle,
         }
     }
     cit->second.methods.push_back({name, sig, fnptr_guest});
-    std::fprintf(stderr, "[JNI] RegisterNative: %s.%s%s → GPA 0x%llx\n",
-                 cit->second.descriptor.c_str(), name.c_str(), sig.c_str(),
-                 (unsigned long long) fnptr_guest);
+    log_debug("[JNI] RegisterNative: %s.%s%s → GPA 0x%llx",
+              cit->second.descriptor.c_str(), name.c_str(), sig.c_str(),
+              (unsigned long long) fnptr_guest);
 }
 
 uint64_t JniEnv::find_native(uint64_t class_handle,
@@ -608,12 +612,12 @@ uint64_t JniEnv::jni_CallVoidMethod(const uint64_t *a)
     uint64_t mid = a[2];
     auto mit = methods_.find(mid);
     if (mit == methods_.end()) {
-        std::fprintf(stderr, "[JNI] CallVoidMethod: unknown methodID\n");
+        log_warn("[JNI] CallVoidMethod: unknown methodID");
         pending_exception_ = true;
         return 0;
     }
-    std::fprintf(stderr, "[JNI] CallVoidMethod: %s (GPA dispatch TBD)\n",
-                 mit->second.name.c_str());
+    log_warn("[JNI] CallVoidMethod: %s (GPA dispatch TBD)",
+             mit->second.name.c_str());
     // TODO: push a call frame onto the guest vCPU via the bridge callback.
     return 0;
 }
@@ -623,12 +627,12 @@ uint64_t JniEnv::jni_CallIntMethod(const uint64_t *a)
     uint64_t mid = a[2];
     auto mit = methods_.find(mid);
     if (mit == methods_.end()) {
-        std::fprintf(stderr, "[JNI] CallIntMethod: unknown methodID\n");
+        log_warn("[JNI] CallIntMethod: unknown methodID");
         pending_exception_ = true;
         return static_cast<uint64_t>(-1);
     }
-    std::fprintf(stderr, "[JNI] CallIntMethod: %s (GPA dispatch TBD)\n",
-                 mit->second.name.c_str());
+    log_warn("[JNI] CallIntMethod: %s (GPA dispatch TBD)",
+             mit->second.name.c_str());
     return 0;
 }
 
@@ -641,8 +645,8 @@ uint64_t JniEnv::jni_GetObjectClass(const uint64_t *a)
         return find_class("java/lang/Class");
     }
     if (oit == objects_.end()) {
-        std::fprintf(stderr, "[JNI] GetObjectClass: unknown object 0x%llx\n",
-                     (unsigned long long) obj);
+        log_warn("[JNI] GetObjectClass: unknown object 0x%llx",
+                 (unsigned long long) obj);
         pending_exception_ = true;
         return JNI_NULL;
     }
@@ -654,7 +658,7 @@ uint64_t JniEnv::jni_CallObjectMethod(const uint64_t *a)
     uint64_t mid = a[2];
     auto mit = methods_.find(mid);
     if (mit == methods_.end()) {
-        std::fprintf(stderr, "[JNI] CallObjectMethod: unknown methodID\n");
+        log_warn("[JNI] CallObjectMethod: unknown methodID");
         pending_exception_ = true;
         return JNI_NULL;
     }
@@ -670,8 +674,8 @@ uint64_t JniEnv::jni_CallObjectMethod(const uint64_t *a)
         return make_string(package_code_path_);
     }
 
-    std::fprintf(stderr, "[JNI] CallObjectMethod: unsupported %s%s\n",
-                 method.name.c_str(), method.sig.c_str());
+    log_warn("[JNI] CallObjectMethod: unsupported %s%s", method.name.c_str(),
+             method.sig.c_str());
     pending_exception_ = true;
     return JNI_NULL;
 }
@@ -700,13 +704,12 @@ uint64_t JniEnv::jni_GetStringUTFChars(const uint64_t *a)
     uint64_t jstr = a[1];
     auto it = strings_.find(jstr);
     if (it == strings_.end()) {
-        std::fprintf(stderr, "[JNI] GetStringUTFChars: unknown jstring\n");
+        log_warn("[JNI] GetStringUTFChars: unknown jstring");
         return JNI_NULL;
     }
     // Return the jstring handle itself; the bridge maps it to a host buffer
     // GPA.
-    std::fprintf(stderr, "[JNI] GetStringUTFChars: \"%s\"\n",
-                 it->second.c_str());
+    log_debug("[JNI] GetStringUTFChars: \"%s\"", it->second.c_str());
     return jstr;  // bridge resolves to a guest-readable GPA
 }
 
@@ -785,21 +788,20 @@ uint64_t JniEnv::jni_SetByteArrayRegion(const uint64_t *a)
     // args[4] is a guest pointer; the bridge must copy the bytes first.
     auto it = byte_arrays_.find(h);
     if (it == byte_arrays_.end()) {
-        std::fprintf(stderr, "[JNI] SetByteArrayRegion: unknown array\n");
+        log_warn("[JNI] SetByteArrayRegion: unknown array");
         pending_exception_ = true;
         return 1;  // non-zero = error
     }
     if (start + len > it->second.size()) {
-        std::fprintf(stderr, "[JNI] SetByteArrayRegion: out of bounds\n");
+        log_warn("[JNI] SetByteArrayRegion: out of bounds");
         pending_exception_ = true;
         return 1;
     }
     // The bridge fills the buffer via set_byte_array_region(); we just
     // validate.
-    std::fprintf(
-        stderr, "[JNI] SetByteArrayRegion: handle=0x%llx start=%llu len=%llu\n",
-        (unsigned long long) h, (unsigned long long) start,
-        (unsigned long long) len);
+    log_debug("[JNI] SetByteArrayRegion: handle=0x%llx start=%llu len=%llu",
+              (unsigned long long) h, (unsigned long long) start,
+              (unsigned long long) len);
     return 0;
 }
 
@@ -1014,7 +1016,7 @@ uint64_t JniEnv::jni_ExceptionOccurred(const uint64_t * /*a*/)
 uint64_t JniEnv::jni_ExceptionDescribe(const uint64_t * /*a*/)
 {
     if (pending_exception_)
-        std::fprintf(stderr, "[JNI] ExceptionDescribe: pending exception\n");
+        log_warn("[JNI] ExceptionDescribe: pending exception");
     return 0;
 }
 

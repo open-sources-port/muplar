@@ -18,6 +18,10 @@
 #include <unistd.h>
 
 #include "prefix.h"
+
+extern "C" {
+#include "debug/log.h"
+}
 #include "distro_profile.h"
 #include "muplard_client.h"
 #include "supervisor_service.h"
@@ -5402,6 +5406,13 @@ int main(int argc, char* argv[])
         const char* logPathStr = [logPath UTF8String];
         std::freopen(logPathStr, "a", stdout);
         std::freopen(logPathStr, "a", stderr);
+
+        // Without this, SupervisorService/prefix log_* calls default to
+        // elfuse's own library-level LOG_WARN threshold and never appear in
+        // this log file at all -- there's no --verbose/--quiet flag for a
+        // GUI app, so just match the CLI's own default.
+        log_init();
+        log_set_level(LOG_INFO);
 
         NSDateFormatter* formatter = [[NSDateFormatter alloc] init];
         formatter.dateFormat = @"yyyy-MM-dd HH:mm:ss";

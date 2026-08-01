@@ -684,12 +684,19 @@ public final class ArtApkMain {
                                      String apkPath,
                                      ClassLoader loader) {
         try {
-            Object context = new MuplarContext(packageName, apkPath, loader);
-            Object window = MuplarWindow.create(
-                (android.content.Context) context);
+            // Must be activityObj itself, not a fresh/separate MuplarContext:
+            // AOSP code (e.g. WindowOnBackInvokedDispatcher.
+            // isOnBackInvokedCallbackEnabled) walks a window/view's context
+            // up through ContextWrapper.getBaseContext() looking for the
+            // enclosing Activity, and stops there. A standalone MuplarContext
+            // is never that Activity, and its own getBaseContext() returns
+            // null (built via super(null)), so the walk falls off the end
+            // and NPEs calling getApplicationInfo() on null.
+            android.content.Context context =
+                (android.content.Context) activityObj;
+            Object window = MuplarWindow.create(context);
             Object windowManager =
-                ((android.content.Context) context).getSystemService(
-                    android.content.Context.WINDOW_SERVICE);
+                context.getSystemService(android.content.Context.WINDOW_SERVICE);
             if (windowManager != null) {
                 java.lang.reflect.Method setWindowManager =
                     Class.forName("android.view.Window").getMethod(

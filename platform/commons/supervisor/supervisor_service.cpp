@@ -23,6 +23,10 @@
 #include <fcntl.h>
 #include <signal.h>
 #include <sys/event.h>  // kqueue, kevent, EVFILT_PROC, NOTE_EXIT
+
+extern "C" {
+#include "debug/log.h"
+}
 #include <sys/socket.h>
 #include <sys/stat.h>
 #include <sys/types.h>
@@ -87,15 +91,13 @@ static void ensure_wine_tmp_dir_private()
     std::error_code ec;
     fs::create_directories(sock_dir, ec);
     if (ec) {
-        std::fprintf(stderr,
-                     "[Muplar Windows Compatibility] failed to create %s: %s\n",
-                     sock_dir.c_str(), ec.message().c_str());
+        log_error("[Muplar Windows Compatibility] failed to create %s: %s",
+                  sock_dir.c_str(), ec.message().c_str());
         return;
     }
     if (chmod(sock_dir.c_str(), 0700) != 0) {
-        std::fprintf(
-            stderr, "[Muplar Windows Compatibility] chmod 0700 %s failed: %s\n",
-            sock_dir.c_str(), std::strerror(errno));
+        log_warn("[Muplar Windows Compatibility] chmod 0700 %s failed: %s",
+                 sock_dir.c_str(), std::strerror(errno));
     }
 }
 
@@ -147,8 +149,7 @@ static int kqueue_wait_pid(pid_t pid, int stop_fd)
 {
     int kq = kqueue();
     if (kq < 0) {
-        std::fprintf(stderr, "[Supervisor] kqueue() failed: %s\n",
-                     strerror(errno));
+        log_error("[Supervisor] kqueue() failed: %s", strerror(errno));
         // Fall back to polling
         while (true) {
             int status = 0;
@@ -313,7 +314,7 @@ pid_t WawonaGuard::spawn()
 {
     fs::path wawona = resolve_wawona_bin();
     if (wawona.empty()) {
-        std::fprintf(stderr, "[WawonaGuard] wawona binary not found\n");
+        log_error("[WawonaGuard] wawona binary not found");
         return -1;
     }
 
@@ -329,8 +330,7 @@ pid_t WawonaGuard::spawn()
 
     pid_t pid = fork();
     if (pid < 0) {
-        std::fprintf(stderr, "[WawonaGuard] fork() failed: %s\n",
-                     strerror(errno));
+        log_error("[WawonaGuard] fork() failed: %s", strerror(errno));
         return -1;
     }
     if (pid == 0) {
@@ -343,12 +343,10 @@ pid_t WawonaGuard::spawn()
         std::string wawona_str = wawona.string();
         char *argv[] = {const_cast<char *>(wawona_str.c_str()), nullptr};
         execve(wawona_str.c_str(), argv, get_environ());
-        std::fprintf(stderr, "[WawonaGuard] execve failed: %s\n",
-                     strerror(errno));
+        log_error("[WawonaGuard] execve failed: %s", strerror(errno));
         _exit(127);
     }
-    std::fprintf(stderr, "[WawonaGuard] started pid=%d path=%s\n", (int) pid,
-                 wawona.c_str());
+    log_info("[WawonaGuard] started pid=%d path=%s", (int) pid, wawona.c_str());
     return pid;
 }
 
@@ -375,8 +373,7 @@ void WawonaGuard::stop()
                 break;
         }
         if (kill(pid, 0) == 0) {
-            std::fprintf(stderr, "[WawonaGuard] escalating to SIGKILL pid=%d\n",
-                         (int) pid);
+            log_warn("[WawonaGuard] escalating to SIGKILL pid=%d", (int) pid);
             kill(pid, SIGKILL);
         }
         waitpid(pid, nullptr, 0);
@@ -421,10 +418,9 @@ void WawonaGuard::monitor_loop()
                 crash_times_.end());
 
             if ((int) crash_times_.size() >= policy_.max_crashes_in_window) {
-                std::fprintf(
-                    stderr,
+                log_warn(
                     "[WawonaGuard] crash rate too high (%zu crashes in %ds), "
-                    "stopping restarts\n",
+                    "stopping restarts",
                     crash_times_.size(), policy_.crash_window_sec);
                 break;
             }
@@ -452,10 +448,9 @@ void WawonaGuard::monitor_loop()
             on_start_(pid);
 
         if (!poll_for_socket(wayland_socket_path(), 5000)) {
-            std::fprintf(
-                stderr,
+            log_warn(
                 "[WawonaGuard] pid=%d did not create Wayland socket %s; "
-                "terminating\n",
+                "terminating",
                 (int) pid, wayland_socket_path().c_str());
             kill(pid, SIGTERM);
             int status = kqueue_wait_pid(pid, stop_pipe[0]);
@@ -478,8 +473,7 @@ void WawonaGuard::monitor_loop()
             break;  // stop requested
 
         int exit_code = WIFEXITED(status) ? WEXITSTATUS(status) : -1;
-        std::fprintf(stderr, "[WawonaGuard] exited (status=%d), will restart\n",
-                     exit_code);
+        log_warn("[WawonaGuard] exited (status=%d), will restart", exit_code);
 
         crash_times_.push_back(steady_clock::now());
         apply_backoff();
@@ -491,7 +485,7 @@ void WawonaGuard::monitor_loop()
         close(stop_pipe[0]);
     if (stop_pipe[1] >= 0)
         close(stop_pipe[1]);
-    std::fprintf(stderr, "[WawonaGuard] monitor thread exiting\n");
+    log_info("[WawonaGuard] monitor thread exiting");
 }
 #endif
 
@@ -582,10 +576,8 @@ pid_t WineServerGuard::spawn()
 {
     fs::path wineserver = resolve_wineserver_bin();
     if (wineserver.empty()) {
-        std::fprintf(
-            stderr,
-            "[WindowsCompatibilityService:%s] service binary not found\n",
-            layout_.name.c_str());
+        log_error("[WindowsCompatibilityService:%s] service binary not found",
+                  layout_.name.c_str());
         return -1;
     }
 
@@ -594,9 +586,8 @@ pid_t WineServerGuard::spawn()
 
     pid_t pid = fork();
     if (pid < 0) {
-        std::fprintf(stderr,
-                     "[WindowsCompatibilityService:%s] fork() failed: %s\n",
-                     layout_.name.c_str(), strerror(errno));
+        log_error("[WindowsCompatibilityService:%s] fork() failed: %s",
+                  layout_.name.c_str(), strerror(errno));
         return -1;
     }
     if (pid == 0) {
@@ -619,15 +610,13 @@ pid_t WineServerGuard::spawn()
         char *argv[] = {const_cast<char *>(ws_str.c_str()),
                         const_cast<char *>("-f"), nullptr};
         execve(ws_str.c_str(), argv, get_environ());
-        std::fprintf(stderr,
-                     "[WindowsCompatibilityService] execve failed: %s\n",
-                     strerror(errno));
+        log_error("[WindowsCompatibilityService] execve failed: %s",
+                  strerror(errno));
         _exit(127);
     }
 
-    std::fprintf(stderr,
-                 "[WindowsCompatibilityService:%s] started service pid=%d\n",
-                 layout_.name.c_str(), (int) pid);
+    log_info("[WindowsCompatibilityService:%s] started service pid=%d",
+             layout_.name.c_str(), (int) pid);
     return pid;
 }
 
@@ -689,10 +678,10 @@ void WineServerGuard::monitor_loop()
                                [&](auto t) { return t < cutoff; }),
                 crash_times_.end());
             if ((int) crash_times_.size() >= policy_.max_crashes_in_window) {
-                std::fprintf(stderr,
-                             "[WindowsCompatibilityService:%s] crash rate too "
-                             "high, stopping\n",
-                             layout_.name.c_str());
+                log_warn(
+                    "[WindowsCompatibilityService:%s] crash rate too "
+                    "high, stopping",
+                    layout_.name.c_str());
                 break;
             }
         }
@@ -719,10 +708,10 @@ void WineServerGuard::monitor_loop()
             break;
 
         int exit_code = WIFEXITED(status) ? WEXITSTATUS(status) : -1;
-        std::fprintf(stderr,
-                     "[WindowsCompatibilityService:%s] service exited "
-                     "(code=%d), restarting\n",
-                     layout_.name.c_str(), exit_code);
+        log_warn(
+            "[WindowsCompatibilityService:%s] service exited "
+            "(code=%d), restarting",
+            layout_.name.c_str(), exit_code);
 
         crash_times_.push_back(steady_clock::now());
         // Backoff: 0 → 1s → 2s → 4s → 8s cap
@@ -740,9 +729,8 @@ void WineServerGuard::monitor_loop()
         close(stop_pipe[0]);
     if (stop_pipe[1] >= 0)
         close(stop_pipe[1]);
-    std::fprintf(stderr,
-                 "[WindowsCompatibilityService:%s] monitor thread exiting\n",
-                 layout_.name.c_str());
+    log_info("[WindowsCompatibilityService:%s] monitor thread exiting",
+             layout_.name.c_str());
 }
 
 // ---------------------------------------------------------------------------
@@ -807,9 +795,8 @@ void SupervisorService::on_prefix_created(const prefix::PrefixLayout &layout)
     auto guard = std::make_unique<WineServerGuard>(layout);
     guard->start();
     wine_guards_[layout.name] = std::move(guard);
-    std::fprintf(
-        stderr,
-        "[SupervisorService] started Windows compatibility service for '%s'\n",
+    log_info(
+        "[SupervisorService] started Windows compatibility service for '%s'",
         layout.name.c_str());
 }
 
@@ -822,9 +809,8 @@ void SupervisorService::on_prefix_deleted(const std::string &prefix_name)
 
     it->second->stop();
     wine_guards_.erase(it);
-    std::fprintf(
-        stderr,
-        "[SupervisorService] stopped Windows compatibility service for '%s'\n",
+    log_info(
+        "[SupervisorService] stopped Windows compatibility service for '%s'",
         prefix_name.c_str());
 }
 
@@ -850,10 +836,10 @@ void SupervisorService::sync_wine_guards()
         auto guard = std::make_unique<WineServerGuard>(p);
         guard->start();
         wine_guards_[p.name] = std::move(guard);
-        std::fprintf(stderr,
-                     "[SupervisorService] started Windows compatibility "
-                     "service for '%s'\n",
-                     p.name.c_str());
+        log_info(
+            "[SupervisorService] started Windows compatibility "
+            "service for '%s'",
+            p.name.c_str());
     }
 
     // Remove guards for deleted prefixes
@@ -869,10 +855,10 @@ void SupervisorService::sync_wine_guards()
     for (const auto &name : to_remove) {
         wine_guards_[name]->stop();
         wine_guards_.erase(name);
-        std::fprintf(stderr,
-                     "[SupervisorService] removed Windows compatibility "
-                     "service for '%s'\n",
-                     name.c_str());
+        log_info(
+            "[SupervisorService] removed Windows compatibility "
+            "service for '%s'",
+            name.c_str());
     }
 }
 

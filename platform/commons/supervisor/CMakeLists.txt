@@ -5,6 +5,8 @@ add_library(muplar_runtime_supervisor
 target_include_directories(muplar_runtime_supervisor PUBLIC
     ${CMAKE_SOURCE_DIR}
     ${CMAKE_SOURCE_DIR}/platform/commons/prefix
+    PRIVATE
+        ${CMAKE_SOURCE_DIR}/third_party/elfuse/src
 )
 
 target_link_libraries(muplar_runtime_supervisor

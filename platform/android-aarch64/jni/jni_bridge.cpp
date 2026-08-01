@@ -7,6 +7,7 @@
 
 extern "C" {
 #include "core/guest.h"
+#include "debug/log.h"
 }
 
 namespace muplar::runtime::jni
@@ -105,10 +106,8 @@ void JniBridge::install()
     // Let JniEnv record the GPA
     env_->install_table(table_gpa_, stub_base_gpa_);
 
-    std::fprintf(
-        stderr,
-        "[JniBridge] JNINativeInterface table installed at GPA 0x%llx\n",
-        (unsigned long long) table_gpa_);
+    log_info("[JniBridge] JNINativeInterface table installed at GPA 0x%llx",
+             (unsigned long long) table_gpa_);
 }
 
 // ────────────────────────────────────────────────────────────────────────────

@@ -319,6 +319,84 @@ install_terminal() {
     return "$rc"
 }
 
+# Rebuild the shared desktop caches that GTK reads at startup.
+#
+# These are normally produced by dpkg triggers, but triggers do not reliably
+# fire under the emulated package run, which leaves the caches missing. GTK
+# treats several of them as fatal rather than degrading: with no
+# /usr/share/mime/mime.cache, gdk-pixbuf cannot content-sniff an SVG whose
+# first bytes are "<?xml" rather than "<svg" -- the loader's own prefix
+# patterns do not match it -- so loading any themed icon fails with
+# "Unrecognized image file format" and gtkiconhelper.c aborts the process.
+# For gnome-terminal that abort happens inside the D-Bus-activated server,
+# which the client only ever sees as "Message recipient disconnected from
+# message bus without replying".
+#
+# Best-effort per tool: a distro that lacks one of these should not fail
+# provisioning over it.
+rebuild_desktop_caches() {
+    echo "[linux-rootfs] Rebuilding desktop caches"
+    run_guest_root '
+        set -e
+        if command -v update-mime-database >/dev/null 2>&1; then
+            update-mime-database /usr/share/mime || true
+        fi
+        if command -v glib-compile-schemas >/dev/null 2>&1 &&
+           [ -d /usr/share/glib-2.0/schemas ]; then
+            glib-compile-schemas /usr/share/glib-2.0/schemas || true
+        fi
+        if command -v gdk-pixbuf-query-loaders >/dev/null 2>&1; then
+            gdk-pixbuf-query-loaders --update-cache || true
+        fi
+        if command -v update-desktop-database >/dev/null 2>&1 &&
+           [ -d /usr/share/applications ]; then
+            update-desktop-database /usr/share/applications || true
+        fi
+        if command -v gtk-update-icon-cache >/dev/null 2>&1; then
+            for theme in /usr/share/icons/*/; do
+                [ -f "$theme/index.theme" ] || continue
+                gtk-update-icon-cache -q -f -t "$theme" || true
+            done
+        fi
+        if command -v fc-cache >/dev/null 2>&1; then
+            fc-cache -f || true
+        fi
+    ' || echo "[linux-rootfs] WARNING: desktop cache rebuild incomplete" >&2
+    return 0
+}
+
+# GTK hands SVG decoding to glycin, which runs each loader in a bubblewrap
+# sandbox. bwrap cannot work here at all: it needs unprivileged user namespaces
+# and /proc/sys/kernel/overflowuid, neither of which the guest has. Glycin is
+# built to cope with that -- its Auto mode probes bwrap and falls back to
+# running unsandboxed -- but the probe spawns bwrap, and that spawn aborts the
+# whole process before the fallback is ever reached, taking down anything that
+# renders an icon.
+#
+# Divert bwrap so the probe fails with a plain "not found" instead. Glycin then
+# takes its unsandboxed path and carries on. dpkg-divert (rather than rm) keeps
+# the decision stable across package upgrades and leaves the binary in place
+# under a suffix, so it stays recoverable if the sandbox ever becomes viable.
+disable_bwrap_sandbox() {
+    case "$DISTRO" in
+        ubuntu | debian) ;;
+        *) return 0 ;;
+    esac
+
+    run_guest_root '
+        set -e
+        [ -x /usr/bin/bwrap ] || exit 0
+        command -v dpkg-divert >/dev/null 2>&1 || exit 0
+        if dpkg-divert --list /usr/bin/bwrap | grep -q bwrap; then
+            exit 0
+        fi
+        dpkg-divert --local --rename --divert /usr/bin/bwrap.muplar-disabled \
+            --add /usr/bin/bwrap
+    ' && echo "[linux-rootfs] Disabled bwrap sandbox (glycin runs unsandboxed)" ||
+        echo "[linux-rootfs] WARNING: could not divert bwrap" >&2
+    return 0
+}
+
 ensure_arch_mirror_config() {
     local root="$1"
     local mirrorlist="$root/etc/pacman.d/mirrorlist"
@@ -747,6 +825,8 @@ if [[ "$PACKAGES_ONLY" == true ]]; then
     package_rc=0
     install_sudo || package_rc=$?
     install_terminal || package_rc=$?
+    disable_bwrap_sandbox
+    rebuild_desktop_caches
     if [[ "$package_rc" -eq 0 ]]; then
         rm -f "$rootfs/etc/muplar-default-packages-pending"
         echo "[linux-rootfs] Default package installation finished"
@@ -1214,6 +1294,8 @@ if [[ "$BASE_ONLY" == true ]]; then
 else
     install_sudo || true
     install_terminal || true
+    disable_bwrap_sandbox
+    rebuild_desktop_caches
     rm -f "$rootfs/etc/muplar-default-packages-pending"
 fi
 

@@ -26,6 +26,7 @@
 
 extern "C" {
 #include "core/guest.h"
+#include "debug/log.h"
 #include "syscall/internal.h"
 #include "syscall/proc.h"
 }
@@ -841,13 +842,13 @@ bool AndroidRuntime::collect_host_input_events()
                                  host_event.source, host_event.device_id,
                                  host_event.key_code, host_event.x,
                                  host_event.y, false, false});
-        std::fprintf(stderr,
-                     "[InputQueue] host event handle=0x%llx type=%d action=%d "
-                     "source=0x%x key=%d x=%.1f y=%.1f\n",
-                     (unsigned long long) handle, host_event.type,
-                     host_event.action, host_event.source, host_event.key_code,
-                     static_cast<double>(host_event.x),
-                     static_cast<double>(host_event.y));
+        log_debug(
+            "[InputQueue] host event handle=0x%llx type=%d action=%d "
+            "source=0x%x key=%d x=%.1f y=%.1f",
+            (unsigned long long) handle, host_event.type, host_event.action,
+            host_event.source, host_event.key_code,
+            static_cast<double>(host_event.x),
+            static_cast<double>(host_event.y));
     }
 
     rearm_looper_fd(INPUT_QUEUE_FD);
@@ -874,12 +875,11 @@ bool AndroidRuntime::queue_ready_looper_callbacks()
             {reg.callback, reg.fd, reg.events, reg.data, reg.ident});
         did_work = true;
 
-        std::fprintf(stderr,
-                     "[ALooper] queued callback fd=%d ident=%d events=0x%x "
-                     "callback=0x%llx data=0x%llx\n",
-                     reg.fd, reg.ident, reg.events,
-                     (unsigned long long) reg.callback,
-                     (unsigned long long) reg.data);
+        log_debug(
+            "[ALooper] queued callback fd=%d ident=%d events=0x%x "
+            "callback=0x%llx data=0x%llx",
+            reg.fd, reg.ident, reg.events, (unsigned long long) reg.callback,
+            (unsigned long long) reg.data);
     }
     return did_work;
 }
@@ -967,10 +967,9 @@ void AndroidRuntime::install()
     register_libcxx_stubs();
     register_libbinder_stubs();
 
-    std::fprintf(
-        stderr,
-        "[ART] installed %zu stub sonames, %zu handlers, arena=0x%llx\n",
-        sym_tables_.size(), handlers_.size(), (unsigned long long) arena_gpa_);
+    log_info("[ART] installed %zu stub sonames, %zu handlers, arena=0x%llx",
+             sym_tables_.size(), handlers_.size(),
+             (unsigned long long) arena_gpa_);
 }
 
 BuiltinSymbols AndroidRuntime::builtin_symbols(const std::string &soname) const
@@ -995,7 +994,7 @@ bool AndroidRuntime::try_dispatch(uint32_t hvc_nr,
 
     auto it = handlers_.find(hvc_nr);
     if (it == handlers_.end()) {
-        std::fprintf(stderr, "[ART] unhandled HVC 0x%X\n", hvc_nr);
+        log_warn("[ART] unhandled HVC 0x%X", hvc_nr);
         *x0_out = 0;
         return true;
     }
@@ -1201,7 +1200,7 @@ void AndroidRuntime::register_libc_stubs()
     add("libc.so", "printf", HVC_PRINTF,
         [](guest_t *g, const uint64_t a[8]) -> uint64_t {
             auto fmt = guest_read_string(g, a[0]);
-            std::fprintf(stderr, "[guest printf] %s\n", fmt.c_str());
+            log_info("[guest printf] %s", fmt.c_str());
             return (uint64_t) fmt.size();
         });
 
@@ -1209,14 +1208,14 @@ void AndroidRuntime::register_libc_stubs()
         [](guest_t *g, const uint64_t a[8]) -> uint64_t {
             auto fmt = guest_read_string(g, a[1]);
             auto msg = format_guest_log(g, fmt, a + 2, 6);
-            std::fprintf(stderr, "[guest fprintf] %s\n", msg.c_str());
+            log_info("[guest fprintf] %s", msg.c_str());
             return static_cast<uint64_t>(msg.size());
         });
 
     add("libc.so", "vfprintf", HVC_VFPRINTF,
         [](guest_t *g, const uint64_t a[8]) -> uint64_t {
             auto fmt = guest_read_string(g, a[1]);
-            std::fprintf(stderr, "[guest vfprintf] %s\n", fmt.c_str());
+            log_info("[guest vfprintf] %s", fmt.c_str());
             return static_cast<uint64_t>(fmt.size());
         });
 
@@ -1811,9 +1810,9 @@ void AndroidRuntime::register_libc_stubs()
 
     add("libc.so", "__open_2", HVC_OPEN_2,
         [](guest_t *g, const uint64_t a[8]) -> uint64_t {
-            std::fprintf(stderr, "[ART] __open_2(%s, flags=0x%llx) -> ENOENT\n",
-                         guest_read_string(g, a[0]).c_str(),
-                         (unsigned long long) a[1]);
+            log_debug("[ART] __open_2(%s, flags=0x%llx) -> ENOENT",
+                      guest_read_string(g, a[0]).c_str(),
+                      (unsigned long long) a[1]);
             return guest_negative_one();
         });
     add("libc.so", "mmap", HVC_MMAP,
@@ -1917,24 +1916,21 @@ void AndroidRuntime::register_libc_stubs()
 
     add("libc.so", "syscall", HVC_SYSCALL,
         [](guest_t *, const uint64_t a[8]) -> uint64_t {
-            std::fprintf(
-                stderr,
-                "[ART] libc syscall(%llu) unsupported via direct import\n",
-                (unsigned long long) a[0]);
+            log_error("[ART] libc syscall(%llu) unsupported via direct import",
+                      (unsigned long long) a[0]);
             return guest_negative_one();
         });
 
     add("libc.so", "openlog", HVC_OPENLOG,
         [](guest_t *g, const uint64_t a[8]) -> uint64_t {
-            std::fprintf(stderr, "[guest openlog] %s\n",
-                         guest_read_string(g, a[0]).c_str());
+            log_info("[guest openlog] %s", guest_read_string(g, a[0]).c_str());
             return 0;
         });
     add("libc.so", "syslog", HVC_SYSLOG,
         [](guest_t *g, const uint64_t a[8]) -> uint64_t {
             auto fmt = guest_read_string(g, a[1]);
             auto msg = format_guest_log(g, fmt, a + 2, 6);
-            std::fprintf(stderr, "[guest syslog] %s\n", msg.c_str());
+            log_info("[guest syslog] %s", msg.c_str());
             return 0;
         });
     add("libc.so", "closelog", HVC_CLOSELOG,
@@ -1942,50 +1938,49 @@ void AndroidRuntime::register_libc_stubs()
 
     add("libc.so", "android_set_abort_message", HVC_ANDROID_ABORT_MESSAGE,
         [](guest_t *g, const uint64_t a[8]) -> uint64_t {
-            std::fprintf(stderr, "[ART] android_set_abort_message(%s)\n",
-                         guest_read_string(g, a[0]).c_str());
+            log_debug("[ART] android_set_abort_message(%s)",
+                      guest_read_string(g, a[0]).c_str());
             return 0;
         });
 
     add("libc.so", "__assert", HVC_ASSERT,
         [](guest_t *g, const uint64_t a[8]) -> uint64_t {
-            std::fprintf(stderr, "[ART] __assert failed: %s:%llu %s\n",
-                         guest_read_string(g, a[0]).c_str(),
-                         (unsigned long long) a[1],
-                         guest_read_string(g, a[2]).c_str());
+            log_error("[ART] __assert failed: %s:%llu %s",
+                      guest_read_string(g, a[0]).c_str(),
+                      (unsigned long long) a[1],
+                      guest_read_string(g, a[2]).c_str());
             ::abort();
             return 0;
         });
 
     add("libc.so", "__assert2", HVC_ASSERT2,
         [](guest_t *g, const uint64_t a[8]) -> uint64_t {
-            std::fprintf(stderr, "[ART] __assert2 failed: %s:%llu %s %s\n",
-                         guest_read_string(g, a[0]).c_str(),
-                         (unsigned long long) a[1],
-                         guest_read_string(g, a[2]).c_str(),
-                         guest_read_string(g, a[3]).c_str());
+            log_error("[ART] __assert2 failed: %s:%llu %s %s",
+                      guest_read_string(g, a[0]).c_str(),
+                      (unsigned long long) a[1],
+                      guest_read_string(g, a[2]).c_str(),
+                      guest_read_string(g, a[3]).c_str());
             ::abort();
             return 0;
         });
 
     add("libc.so", "__stack_chk_fail", HVC_STACK_CHK_FAIL,
         [](guest_t *, const uint64_t[8]) -> uint64_t {
-            std::fprintf(stderr, "[ART] __stack_chk_fail - aborting\n");
+            log_error("[ART] __stack_chk_fail - aborting");
             ::abort();
             return 0;
         });
 
     add("libc.so", "abort", HVC_ABORT,
         [](guest_t *, const uint64_t[8]) -> uint64_t {
-            std::fprintf(stderr, "[ART] guest called abort()\n");
+            log_warn("[ART] guest called abort()");
             ::abort();
             return 0;
         });
 
     add("libc.so", "exit", HVC_EXIT,
         [](guest_t *, const uint64_t a[8]) -> uint64_t {
-            std::fprintf(stderr, "[ART] guest called exit(%lld)\n",
-                         (long long) a[0]);
+            log_info("[ART] guest called exit(%lld)", (long long) a[0]);
             ::exit((int) a[0]);
             return 0;
         });
@@ -2020,13 +2015,12 @@ void AndroidRuntime::register_libc_stubs()
                 guest_write_u64(g, a[0], h);
             threads_[h] = {stack_base, kGuestThreadStackSize};
             pending_pthreads_.push_back({h, a[2], a[3], stack_top});
-            std::fprintf(stderr,
-                         "[ART] pthread_create fn=0x%llx arg=0x%llx "
-                         "handle=0x%llx stack=0x%llx..0x%llx (queued)\n",
-                         (unsigned long long) a[2], (unsigned long long) a[3],
-                         (unsigned long long) h,
-                         (unsigned long long) stack_base,
-                         (unsigned long long) stack_top);
+            log_debug(
+                "[ART] pthread_create fn=0x%llx arg=0x%llx "
+                "handle=0x%llx stack=0x%llx..0x%llx (queued)",
+                (unsigned long long) a[2], (unsigned long long) a[3],
+                (unsigned long long) h, (unsigned long long) stack_base,
+                (unsigned long long) stack_top);
             return 0;
         });
 
@@ -2039,15 +2033,15 @@ void AndroidRuntime::register_libc_stubs()
             } else if (a[1]) {
                 pending_pthread_join_retvals_[a[0]] = a[1];
             }
-            std::fprintf(stderr, "[ART] pthread_join handle=0x%llx\n",
-                         (unsigned long long) a[0]);
+            log_debug("[ART] pthread_join handle=0x%llx",
+                      (unsigned long long) a[0]);
             return 0;
         });
 
     add("libc.so", "pthread_detach", HVC_PTHREAD_DETACH,
         [](guest_t *, const uint64_t a[8]) -> uint64_t {
-            std::fprintf(stderr, "[ART] pthread_detach handle=0x%llx\n",
-                         (unsigned long long) a[0]);
+            log_debug("[ART] pthread_detach handle=0x%llx",
+                      (unsigned long long) a[0]);
             return 0;
         });
 
@@ -2077,9 +2071,9 @@ void AndroidRuntime::register_libc_stubs()
         });
     add("libc.so", "pthread_setname_np", HVC_PTHREAD_SETNAME_NP,
         [](guest_t *g, const uint64_t a[8]) -> uint64_t {
-            std::fprintf(
-                stderr, "[ART] pthread_setname_np thread=0x%llx name=%s\n",
-                (unsigned long long) a[0], guest_read_string(g, a[1]).c_str());
+            log_debug("[ART] pthread_setname_np thread=0x%llx name=%s",
+                      (unsigned long long) a[0],
+                      guest_read_string(g, a[1]).c_str());
             return 0;
         });
     add("libc.so", "pthread_mutex_init", HVC_PTHREAD_MUTEX_INIT,
@@ -2177,8 +2171,7 @@ void AndroidRuntime::register_libc_stubs()
 
         guest_write_u32(g, fds_gpa + 0, static_cast<uint32_t>(pipe.read_fd));
         guest_write_u32(g, fds_gpa + 4, static_cast<uint32_t>(pipe.write_fd));
-        std::fprintf(stderr, "[ART] pipe -> [%d,%d]\n", pipe.read_fd,
-                     pipe.write_fd);
+        log_debug("[ART] pipe -> [%d,%d]", pipe.read_fd, pipe.write_fd);
         return 0;
     };
 
@@ -2235,9 +2228,8 @@ void AndroidRuntime::register_libc_stubs()
             if (!pipe->buffer.empty())
                 rearm_looper_fd(pipe->read_fd);
 
-            std::fprintf(stderr,
-                         "[ART] read pipe fd=%d bytes=%zu remaining=%zu\n", fd,
-                         to_copy, pipe->buffer.size());
+            log_debug("[ART] read pipe fd=%d bytes=%zu remaining=%zu", fd,
+                      to_copy, pipe->buffer.size());
             return static_cast<uint64_t>(to_copy);
         });
     add("libc.so", "write", HVC_WRITE,
@@ -2267,9 +2259,8 @@ void AndroidRuntime::register_libc_stubs()
 
             pipe->buffer.insert(pipe->buffer.end(), bytes.begin(), bytes.end());
             rearm_looper_fd(pipe->read_fd);
-            std::fprintf(stderr,
-                         "[ART] write pipe fd=%d bytes=%zu queued=%zu\n", fd,
-                         count, pipe->buffer.size());
+            log_debug("[ART] write pipe fd=%d bytes=%zu queued=%zu", fd, count,
+                      pipe->buffer.size());
             return static_cast<uint64_t>(count);
         });
     add("libc.so", "close", HVC_CLOSE,
@@ -2284,7 +2275,7 @@ void AndroidRuntime::register_libc_stubs()
                 pipe->write_open = false;
                 rearm_looper_fd(pipe->read_fd);
             }
-            std::fprintf(stderr, "[ART] close fd=%d\n", fd);
+            log_debug("[ART] close fd=%d", fd);
             return 0;
         });
 
@@ -2340,7 +2331,7 @@ void AndroidRuntime::register_liblog_stubs()
             auto tag = guest_read_string(g, a[1]);
             auto fmt = guest_read_string(g, a[2]);
             auto msg = format_guest_log(g, fmt, a + 3, 5);
-            std::fprintf(stderr, "[logcat/%s] %s\n", tag.c_str(), msg.c_str());
+            log_info("[logcat/%s] %s", tag.c_str(), msg.c_str());
             return (uint64_t) msg.size();
         });
 
@@ -2348,7 +2339,7 @@ void AndroidRuntime::register_liblog_stubs()
         [](guest_t *g, const uint64_t a[8]) -> uint64_t {
             auto tag = guest_read_string(g, a[1]);
             auto fmt = guest_read_string(g, a[2]);
-            std::fprintf(stderr, "[logcat/%s] %s\n", tag.c_str(), fmt.c_str());
+            log_info("[logcat/%s] %s", tag.c_str(), fmt.c_str());
             return static_cast<uint64_t>(fmt.size());
         });
 
@@ -2356,7 +2347,7 @@ void AndroidRuntime::register_liblog_stubs()
         [](guest_t *g, const uint64_t a[8]) -> uint64_t {
             auto tag = guest_read_string(g, a[1]);
             auto msg = guest_read_string(g, a[2]);
-            std::fprintf(stderr, "[logcat/%s] %s\n", tag.c_str(), msg.c_str());
+            log_info("[logcat/%s] %s", tag.c_str(), msg.c_str());
             return 0;
         });
 
@@ -2364,7 +2355,7 @@ void AndroidRuntime::register_liblog_stubs()
         [](guest_t *g, const uint64_t a[8]) -> uint64_t {
             auto tag = guest_read_string(g, a[2]);
             auto msg = guest_read_string(g, a[3]);
-            std::fprintf(stderr, "[logcat/%s] %s\n", tag.c_str(), msg.c_str());
+            log_info("[logcat/%s] %s", tag.c_str(), msg.c_str());
             return 0;
         });
 }
@@ -2420,12 +2411,12 @@ void AndroidRuntime::register_libandroid_stubs()
             if (a[3])
                 guest_write_u64(g, a[3], reg.data);
 
-            std::fprintf(stderr,
-                         "[ALooper] poll fd=%d ident=%d events=0x%x "
-                         "callback=0x%llx data=0x%llx\n",
-                         reg.fd, reg.ident, reg.events,
-                         (unsigned long long) reg.callback,
-                         (unsigned long long) reg.data);
+            log_debug(
+                "[ALooper] poll fd=%d ident=%d events=0x%x "
+                "callback=0x%llx data=0x%llx",
+                reg.fd, reg.ident, reg.events,
+                (unsigned long long) reg.callback,
+                (unsigned long long) reg.data);
 
             if (reg.callback) {
                 pending_looper_callbacks_.push_back(
@@ -2468,11 +2459,11 @@ void AndroidRuntime::register_libandroid_stubs()
                 *it = {fd, ident, events, callback, data, false};
             }
 
-            std::fprintf(stderr,
-                         "[ALooper] addFd fd=%d ident=%d events=0x%x "
-                         "callback=0x%llx data=0x%llx\n",
-                         fd, ident, events, (unsigned long long) callback,
-                         (unsigned long long) data);
+            log_debug(
+                "[ALooper] addFd fd=%d ident=%d events=0x%x "
+                "callback=0x%llx data=0x%llx",
+                fd, ident, events, (unsigned long long) callback,
+                (unsigned long long) data);
             return 1;
         });
     add("libandroid.so", "ALooper_removeFd", HVC_ALOOPER_REMOVE_FD,
@@ -2521,11 +2512,10 @@ void AndroidRuntime::register_libandroid_stubs()
 
             uint64_t handle = next_asset_handle_++;
             assets_[handle] = {name, std::move(bytes), 0};
-            std::fprintf(
-                stderr, "[AssetManager] open %s size=%zu mode=%lld -> 0x%llx\n",
-                name.c_str(), assets_[handle].bytes.size(),
-                (long long) static_cast<int64_t>(a[2]),
-                (unsigned long long) handle);
+            log_debug("[AssetManager] open %s size=%zu mode=%lld -> 0x%llx",
+                      name.c_str(), assets_[handle].bytes.size(),
+                      (long long) static_cast<int64_t>(a[2]),
+                      (unsigned long long) handle);
             return handle;
         });
 
@@ -2630,14 +2620,13 @@ void AndroidRuntime::register_libandroid_stubs()
             else
                 *it = reg;
 
-            std::fprintf(stderr,
-                         "[InputQueue] attach looper=0x%llx ident=%d "
-                         "callback=0x%llx data=0x%llx pending=%zu\n",
-                         (unsigned long long) input_queue_.looper,
-                         input_queue_.ident,
-                         (unsigned long long) input_queue_.callback,
-                         (unsigned long long) input_queue_.data,
-                         input_events_.size() - next_input_event_);
+            log_debug(
+                "[InputQueue] attach looper=0x%llx ident=%d "
+                "callback=0x%llx data=0x%llx pending=%zu",
+                (unsigned long long) input_queue_.looper, input_queue_.ident,
+                (unsigned long long) input_queue_.callback,
+                (unsigned long long) input_queue_.data,
+                input_events_.size() - next_input_event_);
             return 0;
         });
 
@@ -2651,7 +2640,7 @@ void AndroidRuntime::register_libandroid_stubs()
                                        return reg.fd == INPUT_QUEUE_FD;
                                    }),
                     looper_regs_.end());
-                std::fprintf(stderr, "[InputQueue] detach\n");
+                log_debug("[InputQueue] detach");
             }
             return 0;
         });
@@ -2674,10 +2663,9 @@ void AndroidRuntime::register_libandroid_stubs()
             current_input_event_ = event.handle;
             guest_write_u64(g, a[1], event.handle);
 
-            std::fprintf(
-                stderr,
-                "[InputQueue] getEvent handle=0x%llx type=%d action=%d\n",
-                (unsigned long long) event.handle, event.type, event.action);
+            log_debug("[InputQueue] getEvent handle=0x%llx type=%d action=%d",
+                      (unsigned long long) event.handle, event.type,
+                      event.action);
             return 0;
         });
 
@@ -2695,12 +2683,12 @@ void AndroidRuntime::register_libandroid_stubs()
             if (event && !event->finished) {
                 event->finished = true;
                 current_input_event_ = 0;
-                std::fprintf(stderr,
-                             "[InputQueue] finishEvent handle=0x%llx "
-                             "handled=%lld remaining=%zu\n",
-                             (unsigned long long) a[1],
-                             (long long) static_cast<int64_t>(a[2]),
-                             input_events_.size() - next_input_event_);
+                log_debug(
+                    "[InputQueue] finishEvent handle=0x%llx "
+                    "handled=%lld remaining=%zu",
+                    (unsigned long long) a[1],
+                    (long long) static_cast<int64_t>(a[2]),
+                    input_events_.size() - next_input_event_);
             }
 
             if (next_input_event_ >= input_events_.size() &&
@@ -2953,10 +2941,9 @@ void AndroidRuntime::register_libandroid_stubs()
                 native_window_.height = MAX_NATIVE_WINDOW_HEIGHT;
             native_window_.stride = native_window_.width;
 
-            std::fprintf(stderr,
-                         "[NativeWindow] setBuffersGeometry %dx%d fmt=%d\n",
-                         native_window_.width, native_window_.height,
-                         native_window_.format);
+            log_debug("[NativeWindow] setBuffersGeometry %dx%d fmt=%d",
+                      native_window_.width, native_window_.height,
+                      native_window_.format);
             return 0;
         });
 
@@ -2987,10 +2974,9 @@ void AndroidRuntime::register_libandroid_stubs()
             }
 
             native_window_.locked = true;
-            std::fprintf(stderr,
-                         "[NativeWindow] lock buffer=%dx%d bits=0x%llx\n",
-                         native_window_.width, native_window_.height,
-                         (unsigned long long) native_window_.bits_gpa);
+            log_debug("[NativeWindow] lock buffer=%dx%d bits=0x%llx",
+                      native_window_.width, native_window_.height,
+                      (unsigned long long) native_window_.bits_gpa);
             return 0;
         });
 
@@ -3000,7 +2986,7 @@ void AndroidRuntime::register_libandroid_stubs()
             if (a[0] != GUEST_NATIVE_WINDOW)
                 return static_cast<uint32_t>(-22);
             native_window_.locked = false;
-            std::fprintf(stderr, "[NativeWindow] unlockAndPost\n");
+            log_debug("[NativeWindow] unlockAndPost");
             present_native_window_buffer();
             return 0;
         });
@@ -3021,12 +3007,11 @@ void AndroidRuntime::register_libandroid_stubs()
         uint64_t frame_time = next_frame_time_nanos_ + delay_ms * 1'000'000ULL;
         next_frame_time_nanos_ = frame_time + 16'666'666ULL;
         pending_frame_callbacks_.push_back({callback, frame_time, data});
-        std::fprintf(stderr,
-                     "[Choreographer] %s callback=0x%llx data=0x%llx "
-                     "frame=%llu delay_ms=%llu\n",
-                     symbol, (unsigned long long) callback,
-                     (unsigned long long) data, (unsigned long long) frame_time,
-                     (unsigned long long) delay_ms);
+        log_debug(
+            "[Choreographer] %s callback=0x%llx data=0x%llx "
+            "frame=%llu delay_ms=%llu",
+            symbol, (unsigned long long) callback, (unsigned long long) data,
+            (unsigned long long) frame_time, (unsigned long long) delay_ms);
         return 0;
     };
 
@@ -3061,9 +3046,8 @@ void AndroidRuntime::register_libandroid_stubs()
             uint8_t nul = 0;
             guest_write(g, a[1] + value.size(), &nul, 1);
         }
-        std::fprintf(stderr, "[ART] __system_property_get(%s) -> %.*s\n",
-                     name.c_str(), static_cast<int>(value.size()),
-                     value.data());
+        log_debug("[ART] __system_property_get(%s) -> %.*s", name.c_str(),
+                  static_cast<int>(value.size()), value.data());
         return value.size();
     };
     add("libc.so", "__system_property_get", HVC_PROP_GET, system_property_get);
@@ -3084,8 +3068,8 @@ void AndroidRuntime::register_libandroid_stubs()
                 uint8_t nul = 0;
                 guest_write(g, a[1] + value.size(), &nul, 1);
             }
-            std::fprintf(stderr, "[ART] property_get(%s) -> %s\n", name.c_str(),
-                         value.c_str());
+            log_debug("[ART] property_get(%s) -> %s", name.c_str(),
+                      value.c_str());
             return value.size();
         });
 }
@@ -3160,7 +3144,7 @@ void AndroidRuntime::register_libdl_stubs()
     add("libdl.so", "dlopen", HVC_DLOPEN,
         [this](guest_t *g, const uint64_t a[8]) -> uint64_t {
             auto path = guest_read_string(g, a[0]);
-            std::fprintf(stderr, "[ART] dlopen(%s)\n", path.c_str());
+            log_debug("[ART] dlopen(%s)", path.c_str());
             uint64_t h = next_dl_handle_++;
             dl_handles_[h] = {path, 0};
             return h;
@@ -3225,17 +3209,17 @@ void AndroidRuntime::register_libdl_stubs()
                 std::string captured_name = sym;
                 handlers_[nr] = [captured, captured_name](
                                     guest_t *, const uint64_t[8]) -> uint64_t {
-                    std::fprintf(stderr, "[GL] dlsym-resolved %s() called\n",
-                                 captured_name.c_str());
+                    log_debug("[GL] dlsym-resolved %s() called",
+                              captured_name.c_str());
                     (void) captured;
                     return 0;
                 };
-                std::fprintf(stderr, "[ART] dlsym(%s) → ANGLE stub 0x%llx\n",
-                             sym.c_str(), (unsigned long long) gpa);
+                log_debug("[ART] dlsym(%s) → ANGLE stub 0x%llx", sym.c_str(),
+                          (unsigned long long) gpa);
                 return gpa;
             }
 
-            std::fprintf(stderr, "[ART] dlsym(%s) → NOT FOUND\n", sym.c_str());
+            log_warn("[ART] dlsym(%s) → NOT FOUND", sym.c_str());
             return 0;
         });
 
@@ -3248,9 +3232,8 @@ void AndroidRuntime::register_libdl_stubs()
         [](guest_t *, const uint64_t[8]) -> uint64_t { return 0; });
     add("libdl.so", "dl_iterate_phdr", HVC_DL_ITERATE_PHDR,
         [](guest_t *, const uint64_t a[8]) -> uint64_t {
-            std::fprintf(
-                stderr, "[ART] dl_iterate_phdr(callback=0x%llx) -> 0 entries\n",
-                (unsigned long long) a[0]);
+            log_debug("[ART] dl_iterate_phdr(callback=0x%llx) -> 0 entries",
+                      (unsigned long long) a[0]);
             return 0;
         });
 
@@ -3285,8 +3268,7 @@ void AndroidRuntime::register_libdl_stubs()
         [this](guest_t *g, const uint64_t a[8]) -> uint64_t {
             auto path = guest_read_string(g, a[0]);
             if (!path.empty())
-                std::fprintf(stderr, "[ART] NativeBridgeLoadLibraryExt(%s)\n",
-                             path.c_str());
+                log_debug("[ART] NativeBridgeLoadLibraryExt(%s)", path.c_str());
             uint64_t h = next_dl_handle_++;
             dl_handles_[h] = {path, 0};
             return h;
@@ -3376,8 +3358,8 @@ void AndroidRuntime::register_libbinder_stubs()
             notify_death_unlinked(link);
         }
         service->death_links.clear();
-        std::fprintf(stderr, "[Binder] service 0x%llx marked dead (%s)\n",
-                     (unsigned long long) handle, reason ? reason : "unknown");
+        log_warn("[Binder] service 0x%llx marked dead (%s)\n",
+                 (unsigned long long) handle, reason ? reason : "unknown");
         return true;
     };
 
@@ -3421,9 +3403,9 @@ void AndroidRuntime::register_libbinder_stubs()
                               bool create_missing) -> uint64_t {
         std::string name = guest_read_string(g, a[0]);
         uint64_t handle = service_handle_for_name(name, create_missing);
-        std::fprintf(stderr, "[Binder] %s(%s) -> 0x%llx\n", op,
-                     name.empty() ? "<empty>" : name.c_str(),
-                     (unsigned long long) handle);
+        log_debug("[Binder] %s(%s) -> 0x%llx\n", op,
+                  name.empty() ? "<empty>" : name.c_str(),
+                  (unsigned long long) handle);
         return handle;
     };
 
@@ -3448,9 +3430,9 @@ void AndroidRuntime::register_libbinder_stubs()
                                     binder_removed_service_names_.end()
                     ? 0
                     : 1;
-            std::fprintf(stderr, "[Binder] isDeclared(%s) -> %llu\n",
-                         name.empty() ? "<empty>" : name.c_str(),
-                         (unsigned long long) declared);
+            log_debug("[Binder] isDeclared(%s) -> %llu\n",
+                      name.empty() ? "<empty>" : name.c_str(),
+                      (unsigned long long) declared);
             return declared;
         });
     add("libbinder_ndk.so", "AServiceManager_addService", HVC_SERVICE_ADD,
@@ -3473,8 +3455,8 @@ void AndroidRuntime::register_libbinder_stubs()
             binder_service_by_name_[name] = handle;
             binder_removed_service_names_.erase(name);
             service->name = name;
-            std::fprintf(stderr, "[Binder] addService(%s, 0x%llx) -> OK\n",
-                         name.c_str(), (unsigned long long) handle);
+            log_debug("[Binder] addService(%s, 0x%llx) -> OK", name.c_str(),
+                      (unsigned long long) handle);
             return STATUS_OK;
         });
 
@@ -3751,9 +3733,8 @@ void AndroidRuntime::register_libbinder_stubs()
                 return 0;
             uint64_t handle = next_binder_death_handle_++;
             binder_death_recipients_[handle] = {a[0], 0};
-            std::fprintf(
-                stderr, "[Binder] DeathRecipient_new -> 0x%llx onDied=0x%llx\n",
-                (unsigned long long) handle, (unsigned long long) a[0]);
+            log_debug("[Binder] DeathRecipient_new -> 0x%llx onDied=0x%llx",
+                      (unsigned long long) handle, (unsigned long long) a[0]);
             return handle;
         });
     add("libbinder_ndk.so", "AIBinder_DeathRecipient_setOnUnlinked",
@@ -3771,8 +3752,8 @@ void AndroidRuntime::register_libbinder_stubs()
                 return 0;
             remove_recipient_links(a[0]);
             binder_death_recipients_.erase(a[0]);
-            std::fprintf(stderr, "[Binder] DeathRecipient_delete 0x%llx\n",
-                         (unsigned long long) a[0]);
+            log_debug("[Binder] DeathRecipient_delete 0x%llx",
+                      (unsigned long long) a[0]);
             return 0;
         });
     add("libbinder_ndk.so", "AIBinder_linkToDeath", HVC_BINDER_LINK_DEATH,
@@ -3807,11 +3788,11 @@ void AndroidRuntime::register_libbinder_stubs()
             }
 
             service->death_links.push_back(link);
-            std::fprintf(stderr,
-                         "[Binder] linkToDeath binder=0x%llx recipient=0x%llx "
-                         "cookie=0x%llx\n",
-                         (unsigned long long) a[0], (unsigned long long) a[1],
-                         (unsigned long long) a[2]);
+            log_debug(
+                "[Binder] linkToDeath binder=0x%llx recipient=0x%llx "
+                "cookie=0x%llx",
+                (unsigned long long) a[0], (unsigned long long) a[1],
+                (unsigned long long) a[2]);
             return STATUS_OK;
         });
     add("libbinder_ndk.so", "AIBinder_unlinkToDeath", HVC_BINDER_UNLINK_DEATH,
@@ -3821,12 +3802,11 @@ void AndroidRuntime::register_libbinder_stubs()
             if (!service || !find_death_recipient(a[1]))
                 return STATUS_BAD_VALUE;
             if (remove_death_link(service, a[1], a[2])) {
-                std::fprintf(stderr,
-                             "[Binder] unlinkToDeath binder=0x%llx "
-                             "recipient=0x%llx cookie=0x%llx\n",
-                             (unsigned long long) a[0],
-                             (unsigned long long) a[1],
-                             (unsigned long long) a[2]);
+                log_debug(
+                    "[Binder] unlinkToDeath binder=0x%llx "
+                    "recipient=0x%llx cookie=0x%llx",
+                    (unsigned long long) a[0], (unsigned long long) a[1],
+                    (unsigned long long) a[2]);
                 return STATUS_OK;
             }
             return STATUS_NAME_NOT_FOUND;
@@ -3855,11 +3835,9 @@ void AndroidRuntime::register_libbinder_stubs()
             clazz.on_destroy = a[2];
             clazz.on_transact = a[3];
             binder_classes_[handle] = std::move(clazz);
-            std::fprintf(
-                stderr,
-                "[Binder] Class_define(%s) -> 0x%llx onTransact=0x%llx\n",
-                descriptor.c_str(), (unsigned long long) handle,
-                (unsigned long long) a[3]);
+            log_debug("[Binder] Class_define(%s) -> 0x%llx onTransact=0x%llx",
+                      descriptor.c_str(), (unsigned long long) handle,
+                      (unsigned long long) a[3]);
             return handle;
         });
     add("libbinder_ndk.so", "AIBinder_Class_setOnDump",
@@ -3943,11 +3921,11 @@ void AndroidRuntime::register_libbinder_stubs()
             uint64_t handle = next_binder_handle_++;
             binder_services_[handle] = make_binder_service(
                 clazz->descriptor, 1, true, false, a[0], user_data);
-            std::fprintf(stderr,
-                         "[Binder] AIBinder_new class=0x%llx -> binder=0x%llx "
-                         "user=0x%llx\n",
-                         (unsigned long long) a[0], (unsigned long long) handle,
-                         (unsigned long long) user_data);
+            log_debug(
+                "[Binder] AIBinder_new class=0x%llx -> binder=0x%llx "
+                "user=0x%llx",
+                (unsigned long long) a[0], (unsigned long long) handle,
+                (unsigned long long) user_data);
             return handle;
         });
     add("libbinder_ndk.so", "AIBinder_associateClass", HVC_BINDER_ASSOC_CLASS,
@@ -3976,9 +3954,8 @@ void AndroidRuntime::register_libbinder_stubs()
                 return 0;
             uint64_t handle = next_binder_weak_handle_++;
             binder_weaks_[handle] = {a[0]};
-            std::fprintf(
-                stderr, "[Binder] Weak_new binder=0x%llx -> weak=0x%llx\n",
-                (unsigned long long) a[0], (unsigned long long) handle);
+            log_debug("[Binder] Weak_new binder=0x%llx -> weak=0x%llx",
+                      (unsigned long long) a[0], (unsigned long long) handle);
             return handle;
         });
     add("libbinder_ndk.so", "AIBinder_Weak_delete", HVC_BINDER_WEAK_DELETE,
@@ -4038,9 +4015,8 @@ void AndroidRuntime::register_libbinder_stubs()
             service->extension_handle = a[1];
             if (old_extension)
                 release_binder_strong(old_extension);
-            std::fprintf(stderr,
-                         "[Binder] setExtension binder=0x%llx ext=0x%llx\n",
-                         (unsigned long long) a[0], (unsigned long long) a[1]);
+            log_debug("[Binder] setExtension binder=0x%llx ext=0x%llx",
+                      (unsigned long long) a[0], (unsigned long long) a[1]);
             return STATUS_OK;
         });
     add("libbinder_ndk.so", "AIBinder_getExtension", HVC_BINDER_GET_EXTENSION,
@@ -4092,10 +4068,8 @@ void AndroidRuntime::register_libbinder_stubs()
                 }
             }
             guest_write_u64(g, a[1], parcel);
-            std::fprintf(
-                stderr,
-                "[Binder] prepareTransaction binder=0x%llx parcel=0x%llx\n",
-                (unsigned long long) a[0], (unsigned long long) parcel);
+            log_debug("[Binder] prepareTransaction binder=0x%llx parcel=0x%llx",
+                      (unsigned long long) a[0], (unsigned long long) parcel);
             return STATUS_OK;
         });
 
@@ -4128,11 +4102,11 @@ void AndroidRuntime::register_libbinder_stubs()
                 consume_input();
                 if (out_gpa)
                     guest_write_u64(g, out_gpa, 0);
-                std::fprintf(stderr,
-                             "[Binder] transact dead binder=0x%llx code=%u "
-                             "in=0x%llx flags=0x%x\n",
-                             (unsigned long long) binder, code,
-                             (unsigned long long) in_handle, flags);
+                log_debug(
+                    "[Binder] transact dead binder=0x%llx code=%u "
+                    "in=0x%llx flags=0x%x",
+                    (unsigned long long) binder, code,
+                    (unsigned long long) in_handle, flags);
                 return STATUS_DEAD_OBJECT;
             }
 
@@ -4155,10 +4129,10 @@ void AndroidRuntime::register_libbinder_stubs()
                         consume_input();
                         if (out_gpa)
                             guest_write_u64(g, out_gpa, 0);
-                        std::fprintf(stderr,
-                                     "[Binder] local transact bad interface "
-                                     "token binder=0x%llx code=%u\n",
-                                     (unsigned long long) binder, code);
+                        log_warn(
+                            "[Binder] local transact bad interface "
+                            "token binder=0x%llx code=%u",
+                            (unsigned long long) binder, code);
                         return STATUS_BAD_TYPE;
                     }
                     in->cursor++;
@@ -4180,13 +4154,13 @@ void AndroidRuntime::register_libbinder_stubs()
 
                 consume_input();
 
-                std::fprintf(stderr,
-                             "[Binder] local transact binder=0x%llx code=%u "
-                             "in=0x%llx out=0x%llx status=%lld\n",
-                             (unsigned long long) binder, code,
-                             (unsigned long long) in_handle,
-                             (unsigned long long) out_handle,
-                             (long long) static_cast<int64_t>(status));
+                log_debug(
+                    "[Binder] local transact binder=0x%llx code=%u "
+                    "in=0x%llx out=0x%llx status=%lld",
+                    (unsigned long long) binder, code,
+                    (unsigned long long) in_handle,
+                    (unsigned long long) out_handle,
+                    (long long) static_cast<int64_t>(status));
                 return status;
             }
 
@@ -4224,9 +4198,8 @@ void AndroidRuntime::register_libbinder_stubs()
                     guest_write_u64(g, out_gpa, 0);
                 }
                 consume_input();
-                std::fprintf(
-                    stderr,
-                    "[Binder] muplard transact service=%s code=%u out=0x%llx\n",
+                log_debug(
+                    "[Binder] muplard transact service=%s code=%u out=0x%llx",
                     service->name.c_str(), code,
                     (unsigned long long) out_handle);
                 return STATUS_OK;
@@ -4268,12 +4241,12 @@ void AndroidRuntime::register_libbinder_stubs()
 
             consume_input();
 
-            std::fprintf(stderr,
-                         "[Binder] transact binder=0x%llx code=%u in=0x%llx "
-                         "out=0x%llx flags=0x%x\n",
-                         (unsigned long long) binder, code,
-                         (unsigned long long) in_handle,
-                         (unsigned long long) out_handle, flags);
+            log_debug(
+                "[Binder] transact binder=0x%llx code=%u in=0x%llx "
+                "out=0x%llx flags=0x%x",
+                (unsigned long long) binder, code,
+                (unsigned long long) in_handle, (unsigned long long) out_handle,
+                flags);
             return STATUS_OK;
         });
 
@@ -4452,11 +4425,9 @@ void AndroidRuntime::register_libbinder_stubs()
                     return STATUS_BAD_VALUE;
             }
 
-            std::fprintf(
-                stderr,
-                "[Binder] readString parcel=0x%llx len=%d buffer=0x%llx\n",
-                (unsigned long long) a[0], length,
-                (unsigned long long) buffer_gpa);
+            log_debug("[Binder] readString parcel=0x%llx len=%d buffer=0x%llx",
+                      (unsigned long long) a[0], length,
+                      (unsigned long long) buffer_gpa);
             return STATUS_OK;
         });
     add("libbinder_ndk.so", "AParcel_writeStringArray",
@@ -4589,9 +4560,8 @@ void AndroidRuntime::register_libbinder_stubs()
                     return STATUS_BAD_VALUE;
             }
 
-            std::fprintf(stderr,
-                         "[Binder] readStringArray parcel=0x%llx len=%d\n",
-                         (unsigned long long) a[0], length);
+            log_debug("[Binder] readStringArray parcel=0x%llx len=%d",
+                      (unsigned long long) a[0], length);
             return STATUS_OK;
         });
     add("libbinder_ndk.so", "AParcel_writeParcelableArray",
@@ -4629,9 +4599,8 @@ void AndroidRuntime::register_libbinder_stubs()
                     return static_cast<uint64_t>(element_status);
             }
 
-            std::fprintf(stderr,
-                         "[Binder] writeParcelableArray parcel=0x%llx len=%d\n",
-                         (unsigned long long) a[0], length);
+            log_debug("[Binder] writeParcelableArray parcel=0x%llx len=%d",
+                      (unsigned long long) a[0], length);
             return STATUS_OK;
         });
     add("libbinder_ndk.so", "AParcel_readParcelableArray",
@@ -4672,9 +4641,8 @@ void AndroidRuntime::register_libbinder_stubs()
                     return static_cast<uint64_t>(element_status);
             }
 
-            std::fprintf(stderr,
-                         "[Binder] readParcelableArray parcel=0x%llx len=%d\n",
-                         (unsigned long long) a[0], length);
+            log_debug("[Binder] readParcelableArray parcel=0x%llx len=%d",
+                      (unsigned long long) a[0], length);
             return STATUS_OK;
         });
 
@@ -4872,9 +4840,8 @@ void AndroidRuntime::register_libbinder_stubs()
                     item);
             }
 
-            std::fprintf(stderr,
-                         "[Binder] readInt32Array parcel=0x%llx len=%d\n",
-                         (unsigned long long) a[0], length);
+            log_debug("[Binder] readInt32Array parcel=0x%llx len=%d",
+                      (unsigned long long) a[0], length);
             return STATUS_OK;
         });
 
@@ -5051,9 +5018,8 @@ void AndroidRuntime::register_libcxx_stubs()
             // a[0]=func a[1]=arg a[2]=dso_handle
             (void) this;
             if (a[0])
-                std::fprintf(
-                    stderr,
-                    "[C++] __cxa_atexit fn=0x%llx arg=0x%llx (registered)\n",
+                log_debug(
+                    "[C++] __cxa_atexit fn=0x%llx arg=0x%llx (registered)",
                     (unsigned long long) a[0], (unsigned long long) a[1]);
             return 0;  // success
         });
@@ -5061,8 +5027,7 @@ void AndroidRuntime::register_libcxx_stubs()
     // __cxa_finalize(void* dso_handle) — run registered destructors
     add("libc++_shared.so", "__cxa_finalize", HVC_CXA_FINALIZE,
         [](guest_t *, const uint64_t[8]) -> uint64_t {
-            std::fprintf(
-                stderr, "[C++] __cxa_finalize (stub — skipping destructors)\n");
+            log_debug("[C++] __cxa_finalize (stub — skipping destructors)");
             return 0;
         });
 
@@ -5070,8 +5035,8 @@ void AndroidRuntime::register_libcxx_stubs()
     // Real C++ exception unwinding needs an unwinder; we stub it to abort.
     add("libc++_shared.so", "__cxa_throw", HVC_CXA_THROW,
         [](guest_t *, const uint64_t a[8]) -> uint64_t {
-            std::fprintf(stderr, "[C++] __cxa_throw obj=0x%llx — aborting\n",
-                         (unsigned long long) a[0]);
+            log_error("[C++] __cxa_throw obj=0x%llx — aborting",
+                      (unsigned long long) a[0]);
             ::abort();
             return 0;
         });
@@ -5087,7 +5052,7 @@ void AndroidRuntime::register_libcxx_stubs()
 
     add("libc++_shared.so", "__cxa_rethrow", HVC_CXA_RETHROW,
         [](guest_t *, const uint64_t[8]) -> uint64_t {
-            std::fprintf(stderr, "[C++] __cxa_rethrow — aborting\n");
+            log_error("[C++] __cxa_rethrow — aborting");
             ::abort();
             return 0;
         });
@@ -5099,15 +5064,14 @@ void AndroidRuntime::register_libcxx_stubs()
     // __gxx_personality_v0 — DWARF-based stack unwinder entry; stub aborts.
     add("libc++_shared.so", "__gxx_personality_v0", HVC_GXX_PERSONALITY,
         [](guest_t *, const uint64_t[8]) -> uint64_t {
-            std::fprintf(stderr,
-                         "[C++] __gxx_personality_v0 called — aborting\n");
+            log_error("[C++] __gxx_personality_v0 called — aborting");
             ::abort();
             return 0;
         });
 
     add("libc++_shared.so", "_Unwind_Resume", HVC_UNWIND_RESUME,
         [](guest_t *, const uint64_t[8]) -> uint64_t {
-            std::fprintf(stderr, "[C++] _Unwind_Resume — aborting\n");
+            log_error("[C++] _Unwind_Resume — aborting");
             ::abort();
             return 0;
         });
@@ -5150,16 +5114,14 @@ void AndroidRuntime::register_libcxx_stubs()
     // ── pure/deleted virtual ───────────────────────────────────────────────
     add("libc++_shared.so", "__cxa_pure_virtual", HVC_CXA_PURE_VIRTUAL,
         [](guest_t *, const uint64_t[8]) -> uint64_t {
-            std::fprintf(stderr,
-                         "[C++] __cxa_pure_virtual called — aborting\n");
+            log_error("[C++] __cxa_pure_virtual called — aborting");
             ::abort();
             return 0;
         });
 
     add("libc++_shared.so", "__cxa_deleted_virtual", HVC_CXA_DELETED_VIRTUAL,
         [](guest_t *, const uint64_t[8]) -> uint64_t {
-            std::fprintf(stderr,
-                         "[C++] __cxa_deleted_virtual called — aborting\n");
+            log_error("[C++] __cxa_deleted_virtual called — aborting");
             ::abort();
             return 0;
         });
@@ -5170,8 +5132,8 @@ void AndroidRuntime::register_libcxx_stubs()
         [this](guest_t *g, const uint64_t a[8]) -> uint64_t {
             uint64_t sz = (a[0] + 15) & ~15ULL;
             if (!a[0] || heap_bump_ + sz > heap_base_ + HEAP_SIZE) {
-                std::fprintf(stderr, "[C++] operator new(%llu) — heap full\n",
-                             (unsigned long long) a[0]);
+                log_warn("[C++] operator new(%llu) — heap full",
+                         (unsigned long long) a[0]);
                 ::abort();
             }
             uint64_t ptr = heap_bump_;
@@ -5218,7 +5180,7 @@ void AndroidRuntime::register_libcxx_stubs()
     // ── std::terminate / std::bad_alloc ───────────────────────────────────
     add("libc++_shared.so", "_ZSt9terminatev", HVC_STD_TERMINATE,
         [](guest_t *, const uint64_t[8]) -> uint64_t {
-            std::fprintf(stderr, "[C++] std::terminate()\n");
+            log_error("[C++] std::terminate()");
             ::abort();
             return 0;
         });
@@ -5312,7 +5274,7 @@ void AndroidRuntime::register_libcxx_stubs()
     // __cxa_bad_cast / __cxa_bad_typeid — just abort
     add("libc++_shared.so", "__cxa_bad_cast", HVC_TYPEINFO_NAME,
         [](guest_t *, const uint64_t[8]) -> uint64_t {
-            std::fprintf(stderr, "[C++] __cxa_bad_cast\n");
+            log_error("[C++] __cxa_bad_cast");
             ::abort();
             return 0;
         });
@@ -5348,8 +5310,8 @@ void AndroidRuntime::register_libcxx_stubs()
     for (auto &[sym, gpa] : sym_tables_["libc++_shared.so"])
         sym_tables_["libc.so"].emplace(sym, gpa);
 
-    std::fprintf(stderr, "[C++] registered %zu C++ runtime stubs\n",
-                 sym_tables_["libc++_shared.so"].size());
+    log_info("[C++] registered %zu C++ runtime stubs\n",
+             sym_tables_["libc++_shared.so"].size());
 }
 
 }  // namespace muplar::runtime::android
