@@ -29,8 +29,6 @@ if(APPLE)
         ${WAWONA_DIR}/src/platform/macos/ui/Settings/WWNSettingsModel.m
         ${WAWONA_DIR}/src/platform/macos/ui/Settings/WWNWaypipeRunner.m
         ${WAWONA_DIR}/src/platform/macos/ui/Settings/WWNSSHClient.m
-        ${WAWONA_DIR}/src/platform/macos/ui/Settings/WWNSettingsSplitViewController.m
-        ${WAWONA_DIR}/src/platform/macos/ui/Settings/WWNSettingsSidebarViewController.m
         ${WAWONA_DIR}/src/platform/macos/WWNWindow.m
         ${WAWONA_DIR}/src/platform/macos/WWNPopupWindow.m
         ${WAWONA_DIR}/src/platform/macos/WWNSettings.c

@@ -17,6 +17,7 @@
 #include <filesystem>
 #include <fstream>
 #include <iomanip>
+#include <limits>
 #include <optional>
 #include <sstream>
 #include <stdexcept>
@@ -79,13 +80,19 @@ static std::string shell_single_quote(const std::string &value)
 }
 
 static bool write_session_command(const std::filesystem::path &fifo,
-                                  const std::string &command)
+                                  const std::string &command,
+                                  int *error_code)
 {
     int fd = open(fifo.c_str(), O_WRONLY | O_NONBLOCK);
-    if (fd < 0)
+    if (fd < 0) {
+        if (error_code)
+            *error_code = errno;
         return false;
+    }
     std::string line = command + "\n";
     ssize_t written = write(fd, line.data(), line.size());
+    if (written != static_cast<ssize_t>(line.size()) && error_code)
+        *error_code = errno ? errno : EIO;
     close(fd);
     return written == static_cast<ssize_t>(line.size());
 }
@@ -340,13 +347,25 @@ static int handle_linux_session_exec(int argc, char **argv)
     }
 
     bool submitted = false;
+    int submit_error = 0;
     for (int i = 0; i < 100 && !submitted; ++i) {
-        submitted = write_session_command(fifo, guest_request);
+        submitted = write_session_command(fifo, guest_request, &submit_error);
         if (!submitted)
             std::this_thread::sleep_for(std::chrono::milliseconds(20));
     }
     if (!submitted) {
-        std::cerr << "Linux session launcher is not accepting requests\n";
+        if (submit_error == ENXIO || submit_error == ENOENT) {
+            std::error_code ec;
+            fs::remove(host_session_dir / "ready", ec);
+            fs::remove(fifo, ec);
+        }
+        std::cerr << "Linux session launcher is not accepting requests";
+        if (submit_error)
+            std::cerr << " (" << std::strerror(submit_error) << ")";
+        std::cerr << "\n";
+        std::cerr << "Session debug log: " << (host_session_dir / "debug.log")
+                  << "\n";
+        std::cerr << "Request log: " << log << "\n";
         return 1;
     }
 
@@ -1144,20 +1163,46 @@ static int handle_instance_command(int argc, char **argv)
 }
 
 // A guest fork() is emulated by re-executing this binary as --fork-child, wired
-// back to the process that forked it over an IPC socket. That socket is the
-// child's only reason to exist, but nothing ties its lifetime to the parent's:
-// when the parent goes away without an orderly teardown -- a crash, or a KILL
-// aimed at the session -- the child is reparented to launchd and keeps running
-// its vCPU loop at full tilt with no peer left to serve. Observed in practice
-// as several orphans pinning a core each, indefinitely.
+// back to the process that forked it over an IPC socket. Nothing ties the
+// child's lifetime to the instance that owns it: when that instance goes away
+// without an orderly teardown -- a crash, or a KILL aimed at the session -- the
+// child is reparented to launchd and keeps running its vCPU loop at full tilt
+// with no peer left to serve. Observed in practice as several orphans pinning a
+// core each, indefinitely.
 //
-// Watch the parent and follow it down. Darwin has no PR_SET_PDEATHSIG, so use
-// kqueue's process filter, which delivers NOTE_EXIT without polling.
-static void exit_when_parent_dies()
+// The anchor is the instance root (the top-level mup that owns the guest), NOT
+// the immediate parent. Guest processes legitimately outlive their parent:
+// daemons double-fork, and D-Bus activation spawns services through a
+// babysitter that exits by design, leaving the service reparented to init.
+// Watching getppid() kills those the moment they are reparented -- a
+// D-Bus-activated service dies mid-call, and the caller sees the bus connection
+// drop.
+//
+// The IPC peer dying is a separate concern the child already handles on its own
+// socket; this is only the whole-instance backstop.
+//
+// Darwin has no PR_SET_PDEATHSIG, so use kqueue's process filter, which
+// delivers NOTE_EXIT without polling.
+static pid_t instance_root_to_watch()
+{
+    if (const char *env = std::getenv("MUPLAR_INSTANCE_ROOT_PID")) {
+        errno = 0;
+        char *end = nullptr;
+        const long value = std::strtol(env, &end, 10);
+        if (errno == 0 && end && *end == '\0' && value > 1 &&
+            value <= std::numeric_limits<pid_t>::max())
+            return static_cast<pid_t>(value);
+    }
+    // No root recorded -- a fork-child invoked directly, outside a guest
+    // instance. Fall back to the parent so the orphan backstop still applies.
+    return getppid();
+}
+
+static void exit_when_instance_root_dies()
 {
 #ifdef __APPLE__
-    const pid_t parent = getppid();
-    // Already orphaned before we got here: launchd (1) is never a real parent
+    const pid_t parent = instance_root_to_watch();
+    // Already orphaned before we got here: launchd (1) is never a real anchor
     // for a fork-child, so there is nobody left to serve.
     if (parent <= 1)
         _exit(0);
@@ -1215,13 +1260,20 @@ int main(int argc, char **argv)
     }
 
     if (fork_child_fd >= 0) {
-        exit_when_parent_dies();
+        exit_when_instance_root_dies();
         return fork_child_main(fork_child_fd, vfork_notify_fd, verbose,
                                timeout_sec);
     }
 
     if (argc >= 2 && std::string(argv[1]) == "linux-session-exec")
         return handle_linux_session_exec(argc, argv);
+
+    // Anything reaching here owns a guest instance: the --fork-child path
+    // returns above, so this is never a child re-exec. Publish our pid as the
+    // instance root that every fork-child in the tree anchors its lifetime to.
+    // Overwrite unconditionally -- a value inherited from an older session
+    // would point at a dead pid and take the whole new instance down with it.
+    setenv("MUPLAR_INSTANCE_ROOT_PID", std::to_string(getpid()).c_str(), 1);
 
     const char *app_process_group = std::getenv("MUPLAR_APP_PROCESS_GROUP");
     if (app_process_group && app_process_group[0] == '1')

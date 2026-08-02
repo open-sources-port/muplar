@@ -291,20 +291,37 @@ pid_t WawonaGuard::spawn()
 void WawonaGuard::start()
 {
     if (!MuplarWawonaIsRunningInProcess()) {
+        log_info("[WawonaGuard] starting in-process compositor socket=%s",
+                 wayland_socket_path().c_str());
         MuplarWawonaStartInProcess("wayland-0");
     }
+    // Confirming the socket takes as long as the compositor takes to bind it,
+    // so waiting here would stall every Linux prefix launch -- start() is
+    // documented non-blocking and runs on the macOS launch path. Report from a
+    // detached thread instead: the result is a diagnostic, and nothing on the
+    // launch path consumes it.
+    std::thread([socket = wayland_socket_path()] {
+        if (!poll_for_socket(socket, 5000)) {
+            log_warn(
+                "[WawonaGuard] in-process compositor did not expose live "
+                "Wayland socket %s",
+                socket.c_str());
+        }
+    }).detach();
 }
 
 void WawonaGuard::stop()
 {
     if (MuplarWawonaIsRunningInProcess()) {
+        log_info("[WawonaGuard] stopping in-process compositor");
         MuplarWawonaStopInProcess();
     }
 }
 
 bool WawonaGuard::is_running() const
 {
-    return MuplarWawonaIsRunningInProcess();
+    return MuplarWawonaIsRunningInProcess() &&
+           socket_is_live(wayland_socket_path());
 }
 
 void WawonaGuard::apply_backoff() {}

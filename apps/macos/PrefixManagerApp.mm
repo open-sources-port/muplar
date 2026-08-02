@@ -2,6 +2,7 @@
 #import <UniformTypeIdentifiers/UniformTypeIdentifiers.h>
 
 #include <algorithm>
+#include <cstring>
 #include <exception>
 #include <filesystem>
 #include <fstream>
@@ -13,8 +14,10 @@
 #include "apk_envelope.h"
 #include <dispatch/dispatch.h>
 #include <signal.h>
+#include <sys/socket.h>
 #include <sys/types.h>
 #include <sys/stat.h>
+#include <sys/un.h>
 #include <unistd.h>
 
 #include "prefix.h"
@@ -90,6 +93,31 @@ static NSString* DefaultWawonaRuntimeDir()
 static NSString* DefaultWawonaDisplayName()
 {
     return @"wayland-0";
+}
+
+static BOOL UnixSocketAcceptsConnection(NSString* path)
+{
+    if (path.length == 0)
+        return NO;
+
+    int fd = socket(AF_UNIX, SOCK_STREAM, 0);
+    if (fd < 0)
+        return NO;
+
+    struct sockaddr_un addr = {};
+    addr.sun_family = AF_UNIX;
+    const char* socketPath = path.fileSystemRepresentation;
+    size_t socketPathLen = strlen(socketPath);
+    if (socketPathLen >= sizeof(addr.sun_path)) {
+        close(fd);
+        return NO;
+    }
+    memcpy(addr.sun_path, socketPath, socketPathLen + 1);
+
+    BOOL ok = connect(fd, reinterpret_cast<struct sockaddr*>(&addr),
+                      sizeof(addr)) == 0;
+    close(fd);
+    return ok;
 }
 
 static NSSet<NSNumber*>* VisibleWawonaWindowNumbers()
@@ -3359,26 +3387,58 @@ static NSString* MapLinuxIconToSFSymbol(NSString* icon)
     NSString* socketPath = [DefaultWawonaRuntimeDir()
         stringByAppendingPathComponent:DefaultWawonaDisplayName()];
     for (int i = 0; i < 20; ++i) {
-        if ([[NSFileManager defaultManager] fileExistsAtPath:socketPath])
+        if (UnixSocketAcceptsConnection(socketPath))
             return YES;
         usleep(100000);
     }
-    return [[NSFileManager defaultManager] fileExistsAtPath:socketPath];
+    return UnixSocketAcceptsConnection(socketPath);
 }
 
 - (BOOL)ensureWawonaForLinuxPrefix:(prefix::PrefixLayout*)selected
                       errorMessage:(NSString**)errorMessage
 {
-    (void)selected;
+    NSString* socketPath = [DefaultWawonaRuntimeDir()
+        stringByAppendingPathComponent:DefaultWawonaDisplayName()];
+    [self appendLaunchLogLineForPrefix:selected
+                                  line:[NSString stringWithFormat:
+                                      @"[Wawona] ensure start socket=%@",
+                                      socketPath]];
     if (!_supervisor)
         _supervisor = std::make_unique<supervisor::SupervisorService>();
-    if (!_supervisor->is_running())
+    if (!_supervisor->is_running()) {
+        [self appendLaunchLogLineForPrefix:selected
+                                      line:@"[Wawona] supervisor not running; starting"];
         _supervisor->start();
+    } else {
+        [self appendLaunchLogLineForPrefix:selected
+                                      line:@"[Wawona] supervisor already running"];
+    }
 
     BOOL wawonaReady = _supervisor->wawona().wait_for_socket(5000);
+    [self appendLaunchLogLineForPrefix:selected
+                                  line:[NSString stringWithFormat:
+                                      @"[Wawona] initial socket ready=%@",
+                                      wawonaReady ? @"yes" : @"no"]];
     if (!wawonaReady) {
-        if (errorMessage)
-            *errorMessage = @"Muplar display compositor did not create a Wayland socket.";
+        log_warn("[Muplar Linux] Wawona socket is not live at %s; restarting "
+                 "compositor",
+                 socketPath.UTF8String);
+        [self appendLaunchLogLineForPrefix:selected
+                                      line:@"[Wawona] restarting compositor"];
+        _supervisor->wawona().stop();
+        _supervisor->wawona().start();
+        wawonaReady = _supervisor->wawona().wait_for_socket(5000);
+        [self appendLaunchLogLineForPrefix:selected
+                                      line:[NSString stringWithFormat:
+                                          @"[Wawona] restart socket ready=%@",
+                                          wawonaReady ? @"yes" : @"no"]];
+    }
+    if (!wawonaReady) {
+        if (errorMessage) {
+            *errorMessage = [NSString stringWithFormat:
+                @"Muplar display compositor did not create a live Wayland socket at %@.",
+                socketPath];
+        }
         return NO;
     }
 
@@ -4114,6 +4174,30 @@ static NSString* MapLinuxIconToSFSymbol(NSString* icon)
     }
 }
 
+- (void)appendLaunchLogLineForPrefix:(prefix::PrefixLayout*)selected
+                                line:(NSString*)line
+{
+    if (!selected || line.length == 0)
+        return;
+
+    NSString* logDir = NSStringFromPath(selected->logs_dir);
+    [[NSFileManager defaultManager] createDirectoryAtPath:logDir
+                              withIntermediateDirectories:YES
+                                               attributes:nil
+                                                    error:nil];
+
+    NSString* logPath =
+        NSStringFromPath(muplar::runtime::prefix::main_log_path(*selected));
+    NSFileHandle* logHandle = OpenRotatingLogForAppend(logPath);
+    if (!logHandle)
+        return;
+
+    NSString* message = [line hasSuffix:@"\n"] ? line
+                                               : [line stringByAppendingString:@"\n"];
+    [logHandle writeData:[message dataUsingEncoding:NSUTF8StringEncoding]];
+    [logHandle closeFile];
+}
+
 - (void)setupLoggingForTask:(NSTask*)task prefix:(prefix::PrefixLayout*)selected appName:(NSString*)appName
 {
     if (!selected || !selected->logging) {
@@ -4294,18 +4378,18 @@ static NSString* MapLinuxIconToSFSymbol(NSString* icon)
         [execLine appendFormat:@" %@", ShellSingleQuote(arg)];
 
     NSString* script = [NSString stringWithFormat:
-        @"if [ -z \"$XDG_RUNTIME_DIR\" ]; then export XDG_RUNTIME_DIR=%@; fi\n"
-        @"if [ -z \"$WAYLAND_DISPLAY\" ]; then export WAYLAND_DISPLAY=%@; fi\n"
-        @"export DISPLAY=${DISPLAY:-:77}\n"
-        @"mkdir -p /tmp/.X11-unix\n"
-        @"if [ ! -S /tmp/.X11-unix/X77 ]; then\n"
-        @"  %@ \"$DISPLAY\" -rootless -terminate -nolisten tcp >/tmp/muplar-xwayland.log 2>&1 &\n"
-        @"  for i in 1 2 3 4 5; do\n"
-        @"    [ -S /tmp/.X11-unix/X77 ] && break\n"
-        @"    sleep 1\n"
-        @"  done\n"
-        @"fi\n"
-        @"%@\n",
+        @"if [ -z \"$XDG_RUNTIME_DIR\" ]; then export XDG_RUNTIME_DIR=%@; fi; "
+        @"if [ -z \"$WAYLAND_DISPLAY\" ]; then export WAYLAND_DISPLAY=%@; fi; "
+        @"export DISPLAY=${DISPLAY:-:77}; "
+        @"mkdir -p /tmp/.X11-unix; "
+        @"if [ ! -S /tmp/.X11-unix/X77 ]; then "
+        @"%@ \"$DISPLAY\" -rootless -terminate -nolisten tcp >/tmp/muplar-xwayland.log 2>&1 & "
+        @"for i in 1 2 3 4 5; do "
+        @"[ -S /tmp/.X11-unix/X77 ] && break; "
+        @"sleep 1; "
+        @"done; "
+        @"fi; "
+        @"%@",
         ShellSingleQuote(DefaultWawonaRuntimeDir()),
         ShellSingleQuote(DefaultWawonaDisplayName()),
         ShellSingleQuote(xwaylandPath),
@@ -4332,11 +4416,12 @@ static NSString* MapLinuxIconToSFSymbol(NSString* icon)
         addCandidate(NSStringFromStdString(path));
 
     NSArray<NSString*>* genericFallbacks = @[
+        @"/usr/bin/qterminal",
+        @"/usr/bin/foot",
+        @"/usr/local/bin/foot",
         @"/usr/bin/xterm",
         @"/bin/xterm",
         @"/usr/bin/uxterm", @"/bin/uxterm",
-        @"/usr/bin/foot",
-        @"/usr/local/bin/foot",
         @"/usr/bin/gnome-terminal",
         @"/usr/bin/kgx",
         @"/usr/bin/alacritty",
@@ -4346,7 +4431,6 @@ static NSString* MapLinuxIconToSFSymbol(NSString* icon)
         @"/usr/bin/konsole",
         @"/usr/bin/xfce4-terminal",
         @"/usr/bin/lxterminal",
-        @"/usr/bin/qterminal",
         @"/usr/bin/mate-terminal",
         @"/usr/bin/weston-terminal"
     ];
@@ -4453,6 +4537,20 @@ static NSString* MapLinuxIconToSFSymbol(NSString* icon)
                                          @"LOGNAME=muplar",
                                          @"LANG=C.UTF-8",
                                          @"LC_ALL=C.UTF-8",
+                                         @"LD_LIBRARY_PATH=",
+                                         [@"XDG_RUNTIME_DIR="
+                                             stringByAppendingString:DefaultWawonaRuntimeDir()],
+                                         [@"WAYLAND_DISPLAY="
+                                             stringByAppendingString:DefaultWawonaDisplayName()],
+                                         @"XDG_SESSION_TYPE=wayland",
+                                         @"GDK_BACKEND=wayland,x11",
+                                         @"QT_QPA_PLATFORM=wayland;xcb",
+                                         @"SDL_VIDEODRIVER=wayland",
+                                         @"CLUTTER_BACKEND=wayland",
+                                         @"EGL_PLATFORM=wayland",
+                                         @"SESSION_MANAGER=",
+                                         @"DESKTOP_AUTOSTART_ID=",
+                                         @"GNOME_DESKTOP_SESSION_ID=",
                                          @"NO_AT_BRIDGE=1",
                                          @"GTK_A11Y=none",
                                          @"GDK_DEBUG=no-portals",
@@ -4586,8 +4684,22 @@ static NSString* MapLinuxIconToSFSymbol(NSString* icon)
     }
 
     if ([self isTerminalShortcut:app]) {
+        // Launch the terminal the user actually picked. The preferred-terminal
+        // lookup is a fallback for shortcuts that do not name a runnable binary
+        // -- isTerminalShortcut also matches on display name, so an entry can
+        // reach here pointing at something that is not an executable. It must
+        // not override a real choice: it returns whichever terminal sorts first
+        // in the distro profile, so clicking "GNOME Terminal" would silently
+        // open qterminal instead.
+        NSString* launchTerminal = guestAppPath;
+        if (![self guestExecutableExists:launchTerminal prefix:selected]) {
+            NSString* preferredTerminal =
+                [self findGuestTerminalEmulatorInPrefix:selected];
+            if (preferredTerminal.length > 0)
+                launchTerminal = preferredTerminal;
+        }
         NSArray<NSString*>* guestArgs =
-            [self guestTerminalArgumentsForTerminal:guestAppPath
+            [self guestTerminalArgumentsForTerminal:launchTerminal
                                               title:app.name
                                               shell:[self guestShellPathForPrefix:selected]];
         [self launchLinuxTaskWithGuestArguments:guestArgs

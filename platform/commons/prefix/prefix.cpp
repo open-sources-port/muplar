@@ -549,6 +549,42 @@ static void write_managed_text_file(const std::filesystem::path &path,
         out << content;
 }
 
+/* Replace one exact line in a file Muplar generated earlier. Used to move a
+ * previously shipped setting forward without rewriting configs wholesale: a
+ * line the user has since edited no longer matches and is left untouched.
+ */
+static void migrate_generated_setting(const std::filesystem::path &path,
+                                      const std::string &from,
+                                      const std::string &to)
+{
+    std::error_code ec;
+    if (!std::filesystem::exists(path, ec))
+        return;
+
+    std::ifstream in(path);
+    if (!in)
+        return;
+    std::vector<std::string> lines;
+    std::string line;
+    bool changed = false;
+    while (std::getline(in, line)) {
+        if (line == from) {
+            line = to;
+            changed = true;
+        }
+        lines.push_back(line);
+    }
+    in.close();
+    if (!changed)
+        return;
+
+    std::ofstream out(path, std::ios::trunc);
+    if (!out)
+        return;
+    for (const std::string &l : lines)
+        out << l << "\n";
+}
+
 static void write_text_file_if_missing_or_empty(
     const std::filesystem::path &path,
     const std::string &content)
@@ -999,12 +1035,106 @@ static void ensure_linux_unprivileged_user(const std::filesystem::path &rootfs)
                     "    <allow own=\"*\"/>\n"
                     "  </policy>\n"
                     "</busconfig>\n";
-    write_text_file_if_missing(rootfs / "usr" / "local" / "share" / "dbus-1" /
-                                   "muplar-services" /
-                                   "org.gnome.Terminal.service",
-                               "[D-BUS Service]\n"
-                               "Name=org.gnome.Terminal\n"
-                               "Exec=/usr/libexec/gnome-terminal-server\n");
+    const std::string gnome_terminal_service =
+        "[D-BUS Service]\n"
+        "Name=org.gnome.Terminal\n"
+        "Exec=/usr/local/libexec/muplar-gnome-terminal-server\n";
+    write_managed_text_file(rootfs / "usr" / "local" / "share" / "dbus-1" /
+                                "muplar-services" /
+                                "org.gnome.Terminal.service",
+                            gnome_terminal_service);
+    write_managed_text_file(rootfs / "usr" / "local" / "share" / "dbus-1" /
+                                "services" / "org.gnome.Terminal.service",
+                            gnome_terminal_service);
+    write_managed_text_file(rootfs / "usr" / "share" / "dbus-1" / "services" /
+                                "org.gnome.Terminal.service",
+                            gnome_terminal_service);
+
+    const auto gnome_terminal_server =
+        rootfs / "usr" / "local" / "libexec" / "muplar-gnome-terminal-server";
+    write_managed_text_file(
+        gnome_terminal_server,
+        "#!/bin/sh\n"
+        "log_dir=/tmp/muplar-session\n"
+        "log_file=$log_dir/gnome-terminal-server.log\n"
+        "mkdir -p \"$log_dir\" 2>/dev/null || true\n"
+        "{\n"
+        "  echo \"=== gnome-terminal-server wrapper $(date) ===\"\n"
+        "  echo \"pid=$$ ppid=$PPID uid=$(id -u 2>/dev/null) gid=$(id -g "
+        "2>/dev/null)\"\n"
+        "  echo \"argv=$*\"\n"
+        "} >>\"$log_file\" 2>&1\n"
+        "export HOME=${HOME:-/home/muplar}\n"
+        "export USER=${USER:-muplar}\n"
+        "export LOGNAME=${LOGNAME:-muplar}\n"
+        "export LANG=${LANG:-C.UTF-8}\n"
+        "export LC_ALL=${LC_ALL:-C.UTF-8}\n"
+        "export XDG_DATA_DIRS=${XDG_DATA_DIRS:-/usr/local/share:/usr/share}\n"
+        "export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/"
+        "bin\n"
+        "if [ -z \"${DBUS_SESSION_BUS_ADDRESS:-}\" ] && "
+        "[ -n \"${DBUS_STARTER_ADDRESS:-}\" ]; then\n"
+        "  DBUS_SESSION_BUS_ADDRESS=$DBUS_STARTER_ADDRESS\n"
+        "  export DBUS_SESSION_BUS_ADDRESS\n"
+        "fi\n"
+        "if [ -z \"${WAYLAND_DISPLAY:-}\" ]; then "
+        "WAYLAND_DISPLAY=wayland-0; fi\n"
+        "if [ -z \"${XDG_RUNTIME_DIR:-}\" ]; then\n"
+        "  for d in /tmp/wawona-*; do\n"
+        "    [ -S \"$d/$WAYLAND_DISPLAY\" ] || continue\n"
+        "    XDG_RUNTIME_DIR=$d\n"
+        "    break\n"
+        "  done\n"
+        "fi\n"
+        "if [ -z \"${XDG_RUNTIME_DIR:-}\" ]; then "
+        "XDG_RUNTIME_DIR=/tmp/wawona-$(id -u); fi\n"
+        "export XDG_RUNTIME_DIR WAYLAND_DISPLAY\n"
+        "export XDG_SESSION_TYPE=${XDG_SESSION_TYPE:-wayland}\n"
+        "export GDK_BACKEND=${GDK_BACKEND:-wayland,x11}\n"
+        "export QT_QPA_PLATFORM=${QT_QPA_PLATFORM:-wayland;xcb}\n"
+        "export SDL_VIDEODRIVER=${SDL_VIDEODRIVER:-wayland}\n"
+        "export CLUTTER_BACKEND=${CLUTTER_BACKEND:-wayland}\n"
+        "export EGL_PLATFORM=${EGL_PLATFORM:-wayland}\n"
+        "export GTK_USE_PORTAL=0\n"
+        "export GDK_DEBUG=no-portals\n"
+        "export NO_AT_BRIDGE=1\n"
+        "export GTK_A11Y=none\n"
+        "export GIO_USE_VFS=local\n"
+        "export G_MESSAGES_DEBUG=${G_MESSAGES_DEBUG:-all}\n"
+        "export G_ENABLE_DIAGNOSTIC=${G_ENABLE_DIAGNOSTIC:-1}\n"
+        "unset SESSION_MANAGER DESKTOP_AUTOSTART_ID "
+        "GNOME_DESKTOP_SESSION_ID\n"
+        "{\n"
+        "  echo \"DBUS_SESSION_BUS_ADDRESS=${DBUS_SESSION_BUS_ADDRESS:-}\"\n"
+        "  echo \"DBUS_STARTER_ADDRESS=${DBUS_STARTER_ADDRESS:-}\"\n"
+        "  echo \"XDG_RUNTIME_DIR=${XDG_RUNTIME_DIR:-}\"\n"
+        "  echo \"WAYLAND_DISPLAY=${WAYLAND_DISPLAY:-}\"\n"
+        "  echo \"XDG_DATA_DIRS=${XDG_DATA_DIRS:-}\"\n"
+        "  echo \"GDK_BACKEND=${GDK_BACKEND:-}\"\n"
+        "  echo \"service files:\"\n"
+        "  for f in /usr/local/share/dbus-1/muplar-services/org.gnome."
+        "Terminal.service /usr/local/share/dbus-1/services/org.gnome."
+        "Terminal.service /usr/share/dbus-1/services/org.gnome.Terminal."
+        "service; do\n"
+        "    [ -f \"$f\" ] || continue\n"
+        "    echo \"--- $f\"\n"
+        "    cat \"$f\"\n"
+        "  done\n"
+        "  echo \"exec /usr/libexec/gnome-terminal-server\"\n"
+        "} >>\"$log_file\" 2>&1\n"
+        "/usr/libexec/gnome-terminal-server \"$@\" >>\"$log_file\" 2>&1\n"
+        "code=$?\n"
+        "echo \"gnome-terminal-server exited code=$code\" >>\"$log_file\" "
+        "2>&1\n"
+        "exit \"$code\"\n");
+    ec.clear();
+    std::filesystem::permissions(gnome_terminal_server,
+                                 std::filesystem::perms::owner_all |
+                                     std::filesystem::perms::group_read |
+                                     std::filesystem::perms::group_exec |
+                                     std::filesystem::perms::others_read |
+                                     std::filesystem::perms::others_exec,
+                                 std::filesystem::perm_options::replace, ec);
 
     const auto session_launcher =
         rootfs / "usr" / "local" / "libexec" / "muplar-session-launcher";
@@ -1013,24 +1143,81 @@ static void ensure_linux_unprivileged_user(const std::filesystem::path &rootfs)
         "#!/bin/sh\n"
         "export "
         "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin\n"
+        "export HOME=${HOME:-/home/muplar}\n"
+        "export USER=${USER:-muplar}\n"
+        "export LOGNAME=${LOGNAME:-muplar}\n"
+        "export LANG=${LANG:-C.UTF-8}\n"
+        "export LC_ALL=${LC_ALL:-C.UTF-8}\n"
+        "export XDG_DATA_DIRS=${XDG_DATA_DIRS:-/usr/local/share:/usr/share}\n"
         "export GTK_USE_PORTAL=0\n"
         "export GDK_DEBUG=no-portals\n"
         "export NO_AT_BRIDGE=1\n"
         "export GTK_A11Y=none\n"
+        "if [ -z \"${WAYLAND_DISPLAY:-}\" ]; then "
+        "WAYLAND_DISPLAY=wayland-0; fi\n"
+        "if [ -z \"${XDG_RUNTIME_DIR:-}\" ]; then\n"
+        "  for d in /tmp/wawona-*; do\n"
+        "    [ -S \"$d/$WAYLAND_DISPLAY\" ] || continue\n"
+        "    XDG_RUNTIME_DIR=$d\n"
+        "    break\n"
+        "  done\n"
+        "fi\n"
+        "if [ -z \"${XDG_RUNTIME_DIR:-}\" ]; then "
+        "XDG_RUNTIME_DIR=/tmp/wawona-$(id -u); fi\n"
+        "if [ -z \"${XDG_SESSION_TYPE:-}\" ]; then "
+        "XDG_SESSION_TYPE=wayland; fi\n"
+        "if [ -z \"${GDK_BACKEND:-}\" ]; then "
+        "GDK_BACKEND=wayland,x11; fi\n"
+        "if [ -z \"${QT_QPA_PLATFORM:-}\" ]; then "
+        "QT_QPA_PLATFORM='wayland;xcb'; fi\n"
+        "if [ -z \"${SDL_VIDEODRIVER:-}\" ]; then "
+        "SDL_VIDEODRIVER=wayland; fi\n"
+        "if [ -z \"${CLUTTER_BACKEND:-}\" ]; then "
+        "CLUTTER_BACKEND=wayland; fi\n"
+        "if [ -z \"${EGL_PLATFORM:-}\" ]; then EGL_PLATFORM=wayland; fi\n"
+        "export XDG_RUNTIME_DIR WAYLAND_DISPLAY XDG_SESSION_TYPE "
+        "GDK_BACKEND QT_QPA_PLATFORM SDL_VIDEODRIVER CLUTTER_BACKEND "
+        "EGL_PLATFORM\n"
+        "unset SESSION_MANAGER DESKTOP_AUTOSTART_ID "
+        "GNOME_DESKTOP_SESSION_ID\n"
         "session_dir=/tmp/muplar-session\n"
         "requests_dir=$session_dir/requests\n"
         "host_pids_dir=$session_dir/host-pids\n"
+        "debug_log=$session_dir/debug.log\n"
         "fifo=$session_dir/commands\n"
         "rm -rf \"$session_dir\"\n"
         "mkdir -p \"$requests_dir\" \"$host_pids_dir\" || exit 1\n"
         "chmod 700 \"$session_dir\" \"$requests_dir\" \"$host_pids_dir\" "
         "2>/dev/null || true\n"
+        "{\n"
+        "  echo \"=== session launcher $(date) ===\"\n"
+        "  echo \"pid=$$ uid=$(id -u 2>/dev/null) gid=$(id -g 2>/dev/null)\"\n"
+        "  echo \"XDG_RUNTIME_DIR=${XDG_RUNTIME_DIR:-}\"\n"
+        "  echo \"WAYLAND_DISPLAY=${WAYLAND_DISPLAY:-}\"\n"
+        "  echo \"XDG_DATA_DIRS=${XDG_DATA_DIRS:-}\"\n"
+        "  echo \"GDK_BACKEND=${GDK_BACKEND:-}\"\n"
+        "  ls -la \"$XDG_RUNTIME_DIR\" 2>&1 || true\n"
+        "} >>\"$debug_log\" 2>&1\n"
         "mkfifo \"$fifo\" || exit 1\n"
+        "exec 7<>\"$fifo\" || exit 1\n"
         "dbus_pid=\n"
         "if command -v dbus-daemon >/dev/null 2>&1 && "
         "[ -f /etc/dbus-1/muplar-session.conf ]; then\n"
         "  address_file=$session_dir/dbus-address\n"
         "  rm -f \"$address_file\"\n"
+        "  {\n"
+        "    echo \"--- /etc/dbus-1/muplar-session.conf\"\n"
+        "    cat /etc/dbus-1/muplar-session.conf\n"
+        "    echo \"--- service files before dbus start\"\n"
+        "    for f in /usr/local/share/dbus-1/muplar-services/org.gnome."
+        "Terminal.service /usr/local/share/dbus-1/services/org.gnome."
+        "Terminal.service /usr/share/dbus-1/services/org.gnome.Terminal."
+        "service; do\n"
+        "      [ -f \"$f\" ] || continue\n"
+        "      echo \"--- $f\"\n"
+        "      cat \"$f\"\n"
+        "    done\n"
+        "  } >>\"$debug_log\" 2>&1\n"
         "  dbus-daemon --nofork --config-file=/etc/dbus-1/muplar-session.conf "
         "--print-address=3 3>\"$address_file\" >\"$session_dir/dbus.log\" 2>&1 "
         "&\n"
@@ -1044,26 +1231,47 @@ static void ensure_linux_unprivileged_user(const std::filesystem::path &rootfs)
         "  if [ -s \"$address_file\" ]; then\n"
         "    DBUS_SESSION_BUS_ADDRESS=$(cat \"$address_file\")\n"
         "    export DBUS_SESSION_BUS_ADDRESS\n"
+        "    echo \"dbus address=$DBUS_SESSION_BUS_ADDRESS\" >>\"$debug_log\" "
+        "2>&1\n"
+        "  else\n"
+        "    echo \"dbus address not ready; dbus_pid=$dbus_pid\" "
+        ">>\"$debug_log\" 2>&1\n"
         "  fi\n"
+        "else\n"
+        "  echo \"dbus-daemon or muplar-session.conf missing\" "
+        ">>\"$debug_log\" 2>&1\n"
         "fi\n"
         "cleanup() {\n"
+        "  code=$?\n"
+        "  echo \"session launcher cleanup code=$code\" >>\"$debug_log\" "
+        "2>&1\n"
+        "  exec 7>&- 7<&- 2>/dev/null || true\n"
         "  rm -f \"$session_dir/ready\" \"$fifo\"\n"
         "  [ -n \"$dbus_pid\" ] && kill \"$dbus_pid\" 2>/dev/null || true\n"
+        "  exit \"$code\"\n"
         "}\n"
         "trap cleanup EXIT INT TERM HUP\n"
         "run_request() {\n"
         "  request=$1\n"
         "  status_file=${request%.request}.status\n"
         "  log_file=${request%.request}.log\n"
+        "  echo \"=== request $request $(date) ===\" >>\"$debug_log\" 2>&1\n"
+        "  cat \"$request\" >>\"$debug_log\" 2>&1\n"
         "  . \"$request\"\n"
+        "  echo \"running: $*\" >>\"$debug_log\" 2>&1\n"
+        // run_request is invoked as a background job, so $$ would name the
+        // launcher shell rather than this request: every concurrent request
+        // would publish the same pid and cancellation would target the wrong
+        // process. Background the command and record $! instead.
         "  \"$@\" >>\"$log_file\" 2>&1 &\n"
         "  child=$!\n"
+        "  echo \"worker=$child log=$log_file\" >>\"$debug_log\" 2>&1\n"
         "  printf '%s\\n' \"$child\" >\"${request%.request}.pid\"\n"
         "  trap 'kill -TERM \"$child\" 2>/dev/null; wait \"$child\" "
-        "2>/dev/null' "
-        "INT TERM HUP\n"
+        "2>/dev/null' INT TERM HUP\n"
         "  wait \"$child\"\n"
         "  code=$?\n"
+        "  echo \"worker=$child exited code=$code\" >>\"$debug_log\" 2>&1\n"
         "  printf '%s\\n' \"$code\" >\"$status_file.tmp\"\n"
         "  mv \"$status_file.tmp\" \"$status_file\"\n"
         "}\n"
@@ -1077,7 +1285,7 @@ static void ensure_linux_unprivileged_user(const std::filesystem::path &rootfs)
         "        fi\n"
         "        ;;\n"
         "    esac\n"
-        "  done <\"$fifo\"\n"
+        "  done <&7\n"
         "done\n");
     ec.clear();
     std::filesystem::permissions(session_launcher,
@@ -1121,23 +1329,27 @@ static void ensure_relative_symlink(const std::filesystem::path &link_path,
     std::filesystem::create_symlink(target, link_path, ec);
 }
 
-static void expose_host_socket_path(const std::filesystem::path &rootfs,
-                                    const std::filesystem::path &host_socket,
-                                    bool allow_missing = false)
+// The compositor's socket lives on the host, outside the sysroot. Provisioning
+// used to bridge it in with a relative symlink, but such a target has to climb
+// out of the sysroot ("../" repeated to the filesystem root) and elfuse clamps
+// ".." at the sysroot root. The link therefore resolves to a path *inside* the
+// rootfs that does not exist, and a guest connect() through it fails with
+// ECONNREFUSED -- clients report it as "no compositor running".
+//
+// With no link in the way the plain path reaches the real socket through
+// elfuse's host-path fallback, so the correct action is to remove any link an
+// older provisioning run left behind rather than to create one. Existing
+// prefixes are repaired in place; no re-provision needed.
+static void clear_host_socket_symlink(const std::filesystem::path &rootfs,
+                                      const std::filesystem::path &host_socket)
 {
     if (!host_socket.is_absolute())
         return;
 
     std::error_code ec;
-    if (!allow_missing && !std::filesystem::exists(host_socket, ec))
-        return;
-
     std::filesystem::path link_path = rootfs / host_socket.relative_path();
-    std::filesystem::path target =
-        std::filesystem::relative(host_socket, link_path.parent_path(), ec);
-    if (ec || target.empty())
-        target = host_socket;
-    ensure_relative_symlink(link_path, target.string().c_str());
+    if (std::filesystem::is_symlink(link_path, ec))
+        std::filesystem::remove(link_path, ec);
 }
 
 static std::filesystem::path default_wawona_runtime_dir()
@@ -1146,28 +1358,31 @@ static std::filesystem::path default_wawona_runtime_dir()
            ("wawona-" + std::to_string(static_cast<unsigned long>(getuid())));
 }
 
-static void expose_host_display_sockets(const std::filesystem::path &rootfs)
+static void clear_host_display_socket_links(const std::filesystem::path &rootfs)
 {
     const char *wayland_display = std::getenv("WAYLAND_DISPLAY");
     if (!wayland_display || !wayland_display[0]) {
-        expose_host_socket_path(
-            rootfs, default_wawona_runtime_dir() / "wayland-0", true);
+        clear_host_socket_symlink(rootfs,
+                                  default_wawona_runtime_dir() / "wayland-0");
         return;
     }
 
     std::filesystem::path wayland_path = wayland_display;
     if (wayland_path.is_absolute()) {
-        expose_host_socket_path(rootfs, wayland_path);
+        clear_host_socket_symlink(rootfs, wayland_path);
         return;
     }
 
+    // Clear the default location too: the guest is pointed at
+    // /tmp/wawona-<uid> regardless of what the host's XDG_RUNTIME_DIR says, so
+    // a link there would still shadow the socket.
+    clear_host_socket_symlink(rootfs,
+                              default_wawona_runtime_dir() / wayland_path);
+
     const char *runtime_dir = std::getenv("XDG_RUNTIME_DIR");
     if (runtime_dir && runtime_dir[0])
-        expose_host_socket_path(
+        clear_host_socket_symlink(
             rootfs, std::filesystem::path(runtime_dir) / wayland_path);
-    else
-        expose_host_socket_path(
-            rootfs, default_wawona_runtime_dir() / wayland_path, true);
 }
 
 static void ensure_guest_x11_socket_dir(const std::filesystem::path &rootfs)
@@ -2096,14 +2311,21 @@ void ensure_layout_dirs(const PrefixLayout &layout)
                 layout.rootfs / "home" / "muplar" / ".config" / "foot";
             std::error_code ec;
             std::filesystem::create_directories(foot_config_dir, ec);
-            write_text_file_if_missing(foot_config_dir / "foot.ini",
+            const std::filesystem::path foot_ini = foot_config_dir / "foot.ini";
+            write_text_file_if_missing(foot_ini,
                                        "[main]\n"
                                        "font=DejaVu Sans Mono:size=11\n"
                                        "shell=/bin/bash\n"
                                        "\n"
                                        "[tweak]\n"
-                                       "max-shm-pool-size-mb=16\n"
+                                       "max-shm-pool-size-mb=4\n"
                                        "font-monospace-warn=no\n");
+            // A prefix created before the cap was lowered keeps the 16MB pool
+            // and still aborts, and the config is only written when absent.
+            // Rewrite the value this file previously shipped -- and only that
+            // value, so a pool size the user chose is left alone.
+            migrate_generated_setting(foot_ini, "max-shm-pool-size-mb=16",
+                                      "max-shm-pool-size-mb=4");
         }
 
         std::filesystem::create_directories(layout.rootfs / "bin");
@@ -2111,7 +2333,7 @@ void ensure_layout_dirs(const PrefixLayout &layout)
         std::filesystem::create_directories(layout.rootfs / "sbin");
         std::filesystem::create_directories(layout.rootfs / "usr" / "sbin");
         ensure_guest_x11_socket_dir(layout.rootfs);
-        expose_host_display_sockets(layout.rootfs);
+        clear_host_display_socket_links(layout.rootfs);
         {
             std::error_code ec;
             auto real_sh = layout.rootfs / "bin" / "sh";
@@ -2843,7 +3065,6 @@ std::vector<std::string> default_linux_guest_environment(
     std::string home_dir = "/home/muplar";
     std::vector<std::string> env = {
         "PATH=/bin:/usr/bin:/sbin:/usr/sbin",
-        "LD_LIBRARY_PATH=/vendor/lib",
         "HOME=" + home_dir,
         "LOGNAME=muplar",
         "PWD=" + home_dir,

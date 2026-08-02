@@ -38,14 +38,15 @@ inline DistroProfile distro_profile(std::string distro)
             "Ubuntu",
             "apt",
             {
+                "/usr/bin/qterminal",
+                "/usr/bin/foot",
                 "/usr/bin/gnome-terminal",
                 "/usr/bin/kgx",
                 "/usr/bin/x-terminal-emulator",
                 "/usr/bin/xterm",
-                "/usr/bin/foot",
                 "/usr/bin/alacritty",
             },
-            {"gnome-terminal", "xterm", "xwayland"},
+            {"qterminal", "foot", "foot-terminfo", "xterm", "xwayland"},
         };
     }
     if (distro == "debian") {
@@ -54,14 +55,15 @@ inline DistroProfile distro_profile(std::string distro)
             "Debian",
             "apt",
             {
+                "/usr/bin/qterminal",
+                "/usr/bin/foot",
                 "/usr/bin/gnome-terminal",
                 "/usr/bin/x-terminal-emulator",
                 "/usr/bin/xterm",
-                "/usr/bin/foot",
                 "/usr/bin/alacritty",
                 "/usr/bin/lxterminal",
             },
-            {"gnome-terminal", "xterm", "xwayland"},
+            {"qterminal", "foot", "foot-terminfo", "xterm", "xwayland"},
         };
     }
     if (distro == "alpine") {
@@ -70,13 +72,13 @@ inline DistroProfile distro_profile(std::string distro)
             "Alpine Linux",
             "apk",
             {
+                "/usr/bin/qterminal",
                 "/usr/bin/foot",
                 "/usr/bin/xterm",
                 "/usr/bin/alacritty",
                 "/usr/bin/lxterminal",
-                "/usr/bin/qterminal",
             },
-            {"foot", "xterm", "xwayland"},
+            {"qterminal", "foot", "xterm", "xwayland"},
         };
     }
     if (distro == "fedora") {
@@ -85,13 +87,14 @@ inline DistroProfile distro_profile(std::string distro)
             "Fedora",
             "dnf",
             {
+                "/usr/bin/qterminal",
+                "/usr/bin/foot",
                 "/usr/bin/gnome-terminal",
                 "/usr/bin/kgx",
                 "/usr/bin/xterm",
-                "/usr/bin/foot",
                 "/usr/bin/alacritty",
             },
-            {"gnome-terminal", "xterm", "xorg-x11-server-Xwayland"},
+            {"qterminal", "foot", "xterm", "xorg-x11-server-Xwayland"},
         };
     }
     if (distro == "arch") {
@@ -100,13 +103,15 @@ inline DistroProfile distro_profile(std::string distro)
             "Arch Linux",
             "pacman",
             {
+                "/usr/bin/qterminal",
                 "/usr/bin/foot",
                 "/usr/bin/alacritty",
                 "/usr/bin/gnome-terminal",
                 "/usr/bin/kitty",
                 "/usr/bin/xterm",
             },
-            {"foot", "foot-terminfo", "ttf-dejavu", "xterm", "xorg-xwayland"},
+            {"qterminal", "foot", "foot-terminfo", "ttf-dejavu", "xterm",
+             "xorg-xwayland"},
         };
     }
     if (distro == "opensuse") {
@@ -115,13 +120,14 @@ inline DistroProfile distro_profile(std::string distro)
             "openSUSE",
             "zypper",
             {
+                "/usr/bin/qterminal",
+                "/usr/bin/foot",
                 "/usr/bin/gnome-terminal",
                 "/usr/bin/konsole",
                 "/usr/bin/xterm",
-                "/usr/bin/foot",
                 "/usr/bin/alacritty",
             },
-            {"gnome-terminal", "xterm", "xwayland"},
+            {"qterminal", "foot", "xterm", "xwayland"},
         };
     }
 
@@ -130,6 +136,7 @@ inline DistroProfile distro_profile(std::string distro)
         "Generic Linux",
         "",
         {
+            "/usr/bin/qterminal",
             "/usr/bin/foot",
             "/usr/bin/xterm",
             "/usr/bin/gnome-terminal",
@@ -139,10 +146,9 @@ inline DistroProfile distro_profile(std::string distro)
             "/usr/bin/konsole",
             "/usr/bin/xfce4-terminal",
             "/usr/bin/lxterminal",
-            "/usr/bin/qterminal",
             "/usr/bin/mate-terminal",
         },
-        {"foot", "xterm", "xwayland"},
+        {"qterminal", "foot", "xterm", "xwayland"},
     };
 }
 
