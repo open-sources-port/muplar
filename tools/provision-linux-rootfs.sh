@@ -336,6 +336,8 @@ install_terminal() {
 # provisioning over it.
 rebuild_desktop_caches() {
     echo "[linux-rootfs] Rebuilding desktop caches"
+    # The body runs inside the guest, so $theme must reach it unexpanded.
+    # shellcheck disable=SC2016
     run_guest_root '
         set -e
         if command -v update-mime-database >/dev/null 2>&1; then
