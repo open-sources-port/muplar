@@ -303,6 +303,12 @@ static int handle_linux_session_exec(int argc, char **argv)
         return 2;
     }
 
+    // Republish the compositor socket into the prefix before handing the
+    // request over: the guest cannot name the host socket, and its inode
+    // changes whenever the compositor rebinds, so every entry point that starts
+    // a client has to refresh the link rather than assume one is current.
+    prefix::publish_display_socket(layout.rootfs);
+
     fs::path host_session_dir = layout.rootfs / "tmp" / "muplar-session";
     fs::path host_requests_dir = host_session_dir / "requests";
     fs::path host_pid_map_dir = host_session_dir / "host-pids";
