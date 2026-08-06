@@ -810,9 +810,24 @@ static void ensure_linux_machine_id(const std::filesystem::path &rootfs)
         out << id;
 }
 
+// The login shell recorded in /etc/passwd and exported as SHELL. Anything that
+// spawns a shell without being told which one -- a new gnome-terminal tab, su,
+// a desktop file with Terminal=true -- reads one of those two, so they have to
+// agree with the bash the app hands its own launches. Falls back to /bin/sh for
+// a prefix that has no bash.
+static std::string default_guest_login_shell(
+    const std::filesystem::path &rootfs)
+{
+    std::error_code ec;
+    if (std::filesystem::exists(rootfs / "bin" / "bash", ec))
+        return "/bin/bash";
+    return "/bin/sh";
+}
+
 static void rename_linux_account_entry(const std::filesystem::path &path,
                                        const std::string &id,
-                                       bool passwd_file)
+                                       bool passwd_file,
+                                       const std::string &login_shell)
 {
     std::ifstream in(path);
     if (!in)
@@ -833,6 +848,10 @@ static void rename_linux_account_entry(const std::filesystem::path &path,
             if (passwd_file) {
                 fields[4] = "Muplar user";
                 fields[5] = "/home/muplar";
+                // Only lift the distro default; a shell someone chose on
+                // purpose stays.
+                if (fields.size() >= 7 && fields[6] == "/bin/sh")
+                    fields[6] = login_shell;
             }
             line.clear();
             for (size_t i = 0; i < fields.size(); ++i) {
@@ -901,8 +920,11 @@ static void ensure_linux_unprivileged_user(const std::filesystem::path &rootfs)
         }
     }
 
-    rename_linux_account_entry(rootfs / "etc" / "passwd", "1000", true);
-    rename_linux_account_entry(rootfs / "etc" / "group", "1000", false);
+    const std::string login_shell = default_guest_login_shell(rootfs);
+    rename_linux_account_entry(rootfs / "etc" / "passwd", "1000", true,
+                               login_shell);
+    rename_linux_account_entry(rootfs / "etc" / "group", "1000", false,
+                               login_shell);
     rename_linux_account_by_name(rootfs / "etc" / "shadow", old_name);
     rename_linux_account_by_name(rootfs / "etc" / "gshadow", old_name);
 
@@ -918,7 +940,8 @@ static void ensure_linux_unprivileged_user(const std::filesystem::path &rootfs)
     };
     if (!has_id(rootfs / "etc" / "passwd", "1000")) {
         std::ofstream passwd(rootfs / "etc" / "passwd", std::ios::app);
-        passwd << "muplar:x:1000:1000:Muplar user:/home/muplar:/bin/sh\n";
+        passwd << "muplar:x:1000:1000:Muplar user:/home/muplar:" << login_shell
+               << "\n";
     }
     if (!has_id(rootfs / "etc" / "group", "1000")) {
         std::ofstream group(rootfs / "etc" / "group", std::ios::app);
@@ -1066,6 +1089,16 @@ static void ensure_linux_unprivileged_user(const std::filesystem::path &rootfs)
         "} >>\"$log_file\" 2>&1\n"
         "export HOME=${HOME:-/home/muplar}\n"
         "export USER=${USER:-muplar}\n"
+        // A new gnome-terminal tab spawns $SHELL, falling back to the passwd
+        // entry. Without this the tab the app opens runs the bash it was told
+        // to run while Ctrl+Shift+T drops to /bin/sh, losing the prompt.
+        //
+        // Resolved here rather than interpolated, so the test runs against the
+        // guest's own filesystem, and set rather than defaulted: the host's
+        // SHELL arrives through the launch environment naming a macOS path
+        // that means nothing here, the same reason LD_LIBRARY_PATH is unset.
+        "if [ -x /bin/bash ]; then SHELL=/bin/bash; else SHELL=/bin/sh; fi\n"
+        "export SHELL\n"
         "export LOGNAME=${LOGNAME:-muplar}\n"
         "export LANG=${LANG:-C.UTF-8}\n"
         "export LC_ALL=${LC_ALL:-C.UTF-8}\n"
@@ -1145,6 +1178,10 @@ static void ensure_linux_unprivileged_user(const std::filesystem::path &rootfs)
         "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin\n"
         "export HOME=${HOME:-/home/muplar}\n"
         "export USER=${USER:-muplar}\n"
+        // Same reason as the gnome-terminal-server wrapper, including why the
+        // inherited host value is overwritten rather than honoured.
+        "if [ -x /bin/bash ]; then SHELL=/bin/bash; else SHELL=/bin/sh; fi\n"
+        "export SHELL\n"
         "export LOGNAME=${LOGNAME:-muplar}\n"
         "export LANG=${LANG:-C.UTF-8}\n"
         "export LC_ALL=${LC_ALL:-C.UTF-8}\n"
@@ -1153,6 +1190,11 @@ static void ensure_linux_unprivileged_user(const std::filesystem::path &rootfs)
         "export GDK_DEBUG=no-portals\n"
         "export NO_AT_BRIDGE=1\n"
         "export GTK_A11Y=none\n"
+        "export GIO_USE_VFS=local\n"
+        "export DEBIAN_FRONTEND=${DEBIAN_FRONTEND:-noninteractive}\n"
+        "export DEBCONF_NONINTERACTIVE_SEEN=true\n"
+        // The host's loader path must not leak into guest processes.
+        "unset LD_LIBRARY_PATH\n"
         "if [ -z \"${WAYLAND_DISPLAY:-}\" ]; then "
         "WAYLAND_DISPLAY=wayland-0; fi\n"
         "if [ -z \"${XDG_RUNTIME_DIR:-}\" ]; then\n"
@@ -1329,27 +1371,67 @@ static void ensure_relative_symlink(const std::filesystem::path &link_path,
     std::filesystem::create_symlink(target, link_path, ec);
 }
 
-// The compositor's socket lives on the host, outside the sysroot. Provisioning
-// used to bridge it in with a relative symlink, but such a target has to climb
-// out of the sysroot ("../" repeated to the filesystem root) and elfuse clamps
-// ".." at the sysroot root. The link therefore resolves to a path *inside* the
-// rootfs that does not exist, and a guest connect() through it fails with
-// ECONNREFUSED -- clients report it as "no compositor running".
+// The compositor's socket lives on the host, outside the sysroot, and the guest
+// cannot name it. Guest /tmp resolves inside the prefix with no host fallback,
+// and since elfuse started translating pathname AF_UNIX addresses a connect()
+// resolves the same way, so the socket has to exist *inside* the rootfs at the
+// path the guest is told to use.
 //
-// With no link in the way the plain path reaches the real socket through
-// elfuse's host-path fallback, so the correct action is to remove any link an
-// older provisioning run left behind rather than to create one. Existing
-// prefixes are repaired in place; no re-provision needed.
-static void clear_host_socket_symlink(const std::filesystem::path &rootfs,
-                                      const std::filesystem::path &host_socket)
+// A symlink cannot do it: an escaping target ("../" to the filesystem root) is
+// clamped at the sysroot root, and an absolute target is re-resolved inside the
+// sysroot. Both land on a path that does not exist and clients report it as "no
+// compositor running". A hard link does, because it names the same inode
+// without naming a path -- connect() through it reaches the listening socket.
+//
+// The inode changes every time the compositor rebinds, so this replaces any
+// earlier link rather than trusting one that is already there, and it has to
+// run once the compositor is up rather than at provisioning time.
+static void link_host_socket_into_rootfs(
+    const std::filesystem::path &rootfs,
+    const std::filesystem::path &host_socket)
 {
     if (!host_socket.is_absolute())
         return;
 
     std::error_code ec;
     std::filesystem::path link_path = rootfs / host_socket.relative_path();
-    if (std::filesystem::is_symlink(link_path, ec))
+
+    struct stat host_st;
+    if (::stat(host_socket.c_str(), &host_st) != 0 ||
+        !S_ISSOCK(host_st.st_mode)) {
+        // No live socket to publish. Drop a stale entry so the guest gets a
+        // clean ENOENT instead of connecting to a dead inode.
+        if (std::filesystem::is_symlink(link_path, ec) ||
+            std::filesystem::exists(link_path, ec))
+            std::filesystem::remove(link_path, ec);
+        return;
+    }
+
+    // lstat, not stat: a prefix provisioned before this carries a symlink here
+    // whose "../" chain resolves to the host socket when the *host* follows it,
+    // so stat would report the socket's own inode and this would return leaving
+    // the symlink in place. The guest resolves that same link with ".." clamped
+    // at the sysroot root, lands nowhere, and reports no compositor running --
+    // the exact failure this replaces. Not following the link makes the stale
+    // entry visibly not a hard link to the socket, so it gets removed below.
+    struct stat link_st;
+    if (::lstat(link_path.c_str(), &link_st) == 0 &&
+        link_st.st_dev == host_st.st_dev && link_st.st_ino == host_st.st_ino)
+        return;  // already the same inode
+
+    std::filesystem::create_directories(link_path.parent_path(), ec);
+    if (std::filesystem::is_symlink(link_path, ec) ||
+        std::filesystem::exists(link_path, ec))
         std::filesystem::remove(link_path, ec);
+
+    if (::link(host_socket.c_str(), link_path.c_str()) != 0) {
+        // EXDEV is the one to expect: a prefix on another volume cannot share
+        // an inode with the host runtime dir. Nothing to fall back on -- a copy
+        // of a socket is just a dead file -- so say so rather than leaving a
+        // path that looks bridged.
+        log_warn("could not publish the compositor socket into %s: %s (%s)",
+                 link_path.c_str(), std::strerror(errno), host_socket.c_str());
+    }
 }
 
 static std::filesystem::path default_wawona_runtime_dir()
@@ -1358,31 +1440,35 @@ static std::filesystem::path default_wawona_runtime_dir()
            ("wawona-" + std::to_string(static_cast<unsigned long>(getuid())));
 }
 
-static void clear_host_display_socket_links(const std::filesystem::path &rootfs)
+static void publish_display_socket_impl(const std::filesystem::path &rootfs)
 {
     const char *wayland_display = std::getenv("WAYLAND_DISPLAY");
     if (!wayland_display || !wayland_display[0]) {
-        clear_host_socket_symlink(rootfs,
-                                  default_wawona_runtime_dir() / "wayland-0");
+        link_host_socket_into_rootfs(
+            rootfs, default_wawona_runtime_dir() / "wayland-0");
         return;
     }
 
     std::filesystem::path wayland_path = wayland_display;
     if (wayland_path.is_absolute()) {
-        clear_host_socket_symlink(rootfs, wayland_path);
+        link_host_socket_into_rootfs(rootfs, wayland_path);
         return;
     }
 
-    // Clear the default location too: the guest is pointed at
-    // /tmp/wawona-<uid> regardless of what the host's XDG_RUNTIME_DIR says, so
-    // a link there would still shadow the socket.
-    clear_host_socket_symlink(rootfs,
-                              default_wawona_runtime_dir() / wayland_path);
+    // The guest is pointed at /tmp/wawona-<uid> regardless of what the host's
+    // XDG_RUNTIME_DIR says, so publish there first and at the host's own
+    // runtime dir second when the two differ.
+    std::filesystem::path guest_visible =
+        default_wawona_runtime_dir() / wayland_path;
+    link_host_socket_into_rootfs(rootfs, guest_visible);
 
     const char *runtime_dir = std::getenv("XDG_RUNTIME_DIR");
-    if (runtime_dir && runtime_dir[0])
-        clear_host_socket_symlink(
-            rootfs, std::filesystem::path(runtime_dir) / wayland_path);
+    if (runtime_dir && runtime_dir[0]) {
+        std::filesystem::path host_visible =
+            std::filesystem::path(runtime_dir) / wayland_path;
+        if (host_visible != guest_visible)
+            link_host_socket_into_rootfs(rootfs, host_visible);
+    }
 }
 
 static void ensure_guest_x11_socket_dir(const std::filesystem::path &rootfs)
@@ -2333,7 +2419,6 @@ void ensure_layout_dirs(const PrefixLayout &layout)
         std::filesystem::create_directories(layout.rootfs / "sbin");
         std::filesystem::create_directories(layout.rootfs / "usr" / "sbin");
         ensure_guest_x11_socket_dir(layout.rootfs);
-        clear_host_display_socket_links(layout.rootfs);
         {
             std::error_code ec;
             auto real_sh = layout.rootfs / "bin" / "sh";
@@ -2773,6 +2858,12 @@ PrefixLayout clone_prefix_into(const std::string &source_spec,
 
 }  // namespace
 
+void publish_display_socket(const std::filesystem::path &rootfs)
+{
+    publish_display_socket_impl(rootfs);
+}
+
+
 std::filesystem::path muplar_home()
 {
     if (const char *env = std::getenv("MUPLAR_HOME"); env && env[0])
@@ -3060,7 +3151,7 @@ static void pass_linux_display_environment(std::vector<std::string> &env)
 }
 
 std::vector<std::string> default_linux_guest_environment(
-    const PrefixLayout & /*layout*/)
+    const PrefixLayout &layout)
 {
     std::string home_dir = "/home/muplar";
     std::vector<std::string> env = {
@@ -3068,7 +3159,10 @@ std::vector<std::string> default_linux_guest_environment(
         "HOME=" + home_dir,
         "LOGNAME=muplar",
         "PWD=" + home_dir,
-        "SHELL=/bin/sh",
+        // Same answer the passwd entry records. A launch that does not go
+        // through the session launcher would otherwise advertise a shell that
+        // /etc/passwd contradicts.
+        "SHELL=" + default_guest_login_shell(layout.rootfs),
         "TMPDIR=/tmp",
         "USER=muplar",
         "TERM=xterm-256color",

@@ -99,4 +99,17 @@ std::vector<std::string> default_linux_guest_environment(
     const PrefixLayout &layout);
 std::filesystem::path default_linux_host_cwd(const PrefixLayout &layout);
 
+// Publish the running compositor's Wayland socket inside a prefix, as a hard
+// link at the path the guest is told to use. The guest cannot reach the host
+// socket by name -- guest /tmp resolves inside the prefix, and elfuse
+// translates pathname AF_UNIX addresses the same way -- and a symlink cannot
+// bridge that because both escaping and absolute targets resolve back inside
+// the sysroot.
+//
+// Call once the compositor is listening and before starting a client: the
+// socket's inode changes on every rebind, so an older link is replaced rather
+// than reused. A no-op when no socket is listening, and a logged warning if the
+// prefix lives on another volume, where an inode cannot be shared.
+void publish_display_socket(const std::filesystem::path &rootfs);
+
 }  // namespace muplar::runtime::prefix

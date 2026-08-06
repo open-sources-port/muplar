@@ -4530,35 +4530,21 @@ static NSString* MapLinuxIconToSFSymbol(NSString* icon)
         return;
     }
 
+    // Launch the guest program directly -- no `/usr/bin/env VAR=... ` prefix.
+    //
+    // env(1) reaches the program through a second execve, and a GUI client that
+    // starts fine when exec'd once never produces a frame when exec'd that way:
+    // it connects to the compositor, loads its config and fonts, then stops
+    // silently with nothing on stderr and no window. Measured on foot -- first
+    // frame after ~1s launched directly, no frame at all in 60s behind env(1),
+    // alternating runs in one session.
+    //
+    // The session launcher already exports this environment (HOME, USER,
+    // LOGNAME, LANG, LC_ALL, PATH, the Wayland/toolkit variables) and unsets
+    // SESSION_MANAGER, DESKTOP_AUTOSTART_ID and GNOME_DESKTOP_SESSION_ID, so
+    // every request inherits it without the extra exec.
     NSMutableArray<NSString*>* actualGuestArguments =
-        [NSMutableArray arrayWithArray:@[@"/usr/bin/env",
-                                         @"HOME=/home/muplar",
-                                         @"USER=muplar",
-                                         @"LOGNAME=muplar",
-                                         @"LANG=C.UTF-8",
-                                         @"LC_ALL=C.UTF-8",
-                                         @"LD_LIBRARY_PATH=",
-                                         [@"XDG_RUNTIME_DIR="
-                                             stringByAppendingString:DefaultWawonaRuntimeDir()],
-                                         [@"WAYLAND_DISPLAY="
-                                             stringByAppendingString:DefaultWawonaDisplayName()],
-                                         @"XDG_SESSION_TYPE=wayland",
-                                         @"GDK_BACKEND=wayland,x11",
-                                         @"QT_QPA_PLATFORM=wayland;xcb",
-                                         @"SDL_VIDEODRIVER=wayland",
-                                         @"CLUTTER_BACKEND=wayland",
-                                         @"EGL_PLATFORM=wayland",
-                                         @"SESSION_MANAGER=",
-                                         @"DESKTOP_AUTOSTART_ID=",
-                                         @"GNOME_DESKTOP_SESSION_ID=",
-                                         @"NO_AT_BRIDGE=1",
-                                         @"GTK_A11Y=none",
-                                         @"GDK_DEBUG=no-portals",
-                                         @"GIO_USE_VFS=local",
-                                         @"DEBIAN_FRONTEND=noninteractive",
-                                         @"DEBCONF_NONINTERACTIVE_SEEN=true",
-                                         @"PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"]];
-    [actualGuestArguments addObjectsFromArray:wrappedGuestArguments];
+        [NSMutableArray arrayWithArray:wrappedGuestArguments];
 
     NSMutableDictionary<NSString*, NSString*>* env =
         [NSProcessInfo.processInfo.environment mutableCopy];
@@ -4573,6 +4559,11 @@ static NSString* MapLinuxIconToSFSymbol(NSString* icon)
             ? [angleDir stringByAppendingFormat:@":%@", existingDyld]
             : angleDir;
     }
+
+    // The guest reaches the compositor through a hard link inside the prefix:
+    // it cannot name the host socket, and the inode changes on every rebind, so
+    // republish here rather than at provisioning time.
+    prefix::publish_display_socket(selected->rootfs);
 
     NSTask* task = [[NSTask alloc] init];
     task.launchPath = mupBin;
