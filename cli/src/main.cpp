@@ -47,6 +47,7 @@ extern "C" {
 #include "debug/log.h"
 #include "runtime/forkipc.h"
 void proc_set_fakeroot_enabled(bool enabled);
+bool proc_set_fakeroot_exec_path(const char *path);
 }
 
 #ifdef MUPLAR_HAS_WINE
@@ -1242,6 +1243,18 @@ static void exit_when_instance_root_dies()
 
 int main(int argc, char **argv)
 {
+    // mup embeds elfuse rather than running its main(), so the environment
+    // parsing that arms ELFUSE_FAKEROOT_EXEC upstream never runs. Forward it
+    // here, before the fork-child dispatch below and for the same reason
+    // elfuse parses it before its own: a guest fork re-executes this binary,
+    // and the exec that has to elevate happens in that child rather than in
+    // the process that armed it. Without this the sudo shim runs as the
+    // ordinary guest user and "sudo bash" leaves the caller unprivileged.
+    if (const char *fakeroot_exec = std::getenv("ELFUSE_FAKEROOT_EXEC")) {
+        if (*fakeroot_exec && !proc_set_fakeroot_exec_path(fakeroot_exec))
+            std::cerr << "ELFUSE_FAKEROOT_EXEC must be an absolute path\n";
+    }
+
     // Check if we are running as a fork-child helper process
     int fork_child_fd = -1;
     int vfork_notify_fd = -1;

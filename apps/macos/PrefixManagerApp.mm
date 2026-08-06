@@ -3523,6 +3523,10 @@ static NSString* MapLinuxIconToSFSymbol(NSString* icon)
     ApplyDefaultLinuxDisplayEnvironment(env);
     env[@"ELFUSE_GUEST_UID"] = @"1000";
     env[@"ELFUSE_GUEST_GID"] = @"1000";
+    // Arms the sudo shim. elfuse reads this once at process start and hands it
+    // to fork children, so it belongs on the host environment here rather than
+    // exported from inside the guest session.
+    env[@"ELFUSE_FAKEROOT_EXEC"] = @(prefix::linux_fakeroot_exec_guest_path());
     env[@"MUPLAR_APP_PROCESS_GROUP"] = @"1";
     env[@"MUPLAR_SESSION_MAP_DIR"] =
         [NSStringFromPath(selected->rootfs / "tmp" / "muplar-session")
@@ -4551,6 +4555,10 @@ static NSString* MapLinuxIconToSFSymbol(NSString* icon)
     ApplyDefaultLinuxDisplayEnvironment(env);
     env[@"ELFUSE_GUEST_UID"] = @"1000";
     env[@"ELFUSE_GUEST_GID"] = @"1000";
+    // Arms the sudo shim. elfuse reads this once at process start and hands it
+    // to fork children, so it belongs on the host environment here rather than
+    // exported from inside the guest session.
+    env[@"ELFUSE_FAKEROOT_EXEC"] = @(prefix::linux_fakeroot_exec_guest_path());
     env[@"MUPLAR_APP_PROCESS_GROUP"] = @"1";
     NSString* angleDir = [self angleLibraryDir];
     if (angleDir.length > 0) {
@@ -4721,6 +4729,7 @@ static NSString* MapLinuxIconToSFSymbol(NSString* icon)
         @"PREFIX=%@\n"
         @"export ELFUSE_GUEST_UID=1000\n"
         @"export ELFUSE_GUEST_GID=1000\n"
+        @"export ELFUSE_FAKEROOT_EXEC=%@\n"
         @"LOG=%@\n"
         @"LOGGING=%@\n"
         @"clear\n"
@@ -4752,6 +4761,7 @@ static NSString* MapLinuxIconToSFSymbol(NSString* icon)
         @"done\n",
         ShellSingleQuote(mupBin),
         ShellSingleQuote(NSStringFromStdString(selected->name)),
+        ShellSingleQuote(@(prefix::linux_fakeroot_exec_guest_path())),
         ShellSingleQuote(logPath),
         selected->logging ? @"1" : @"0"];
     [self runCommandInTerminal:command prefix:selected app:app];

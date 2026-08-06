@@ -112,4 +112,10 @@ std::filesystem::path default_linux_host_cwd(const PrefixLayout &layout);
 // prefix lives on another volume, where an inode cannot be shared.
 void publish_display_socket(const std::filesystem::path &rootfs);
 
+// Guest path of the one executable allowed to enter fakeroot, which the launch
+// environment hands to elfuse as ELFUSE_FAKEROOT_EXEC. elfuse arms nothing by
+// default, so without that variable the sudo shim runs as the ordinary guest
+// user and "sudo bash" leaves the caller unprivileged.
+const char *linux_fakeroot_exec_guest_path();
+
 }  // namespace muplar::runtime::prefix

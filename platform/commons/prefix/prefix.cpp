@@ -983,7 +983,14 @@ static void ensure_linux_unprivileged_user(const std::filesystem::path &rootfs)
                                      std::filesystem::perms::others_all,
                                  std::filesystem::perm_options::replace, ec);
 
-    const auto sudo_compat = rootfs / "usr" / "local" / "bin" / "sudo";
+    // Marked as the fakeroot entry point, so exec'ing it is what raises
+    // privilege (see linux_fakeroot_exec_guest_path). The setuid bit below is
+    // vestigial under elfuse -- the file is owned by whoever unpacked the
+    // prefix, and set-id is ignored on a shebang script the way Linux ignores
+    // it -- so the bit alone never made sudo work.
+    const auto sudo_compat =
+        rootfs /
+        std::filesystem::path(linux_fakeroot_exec_guest_path()).relative_path();
     write_text_file_if_missing(
         sudo_compat,
         "#!/bin/sh\n"
@@ -3148,6 +3155,11 @@ static void pass_linux_display_environment(std::vector<std::string> &env)
     set_guest_env_if_missing(env, "SDL_VIDEODRIVER", "wayland");
     set_guest_env_if_missing(env, "CLUTTER_BACKEND", "wayland");
     set_guest_env_if_missing(env, "EGL_PLATFORM", "wayland");
+}
+
+const char *linux_fakeroot_exec_guest_path()
+{
+    return "/usr/local/bin/sudo";
 }
 
 std::vector<std::string> default_linux_guest_environment(
