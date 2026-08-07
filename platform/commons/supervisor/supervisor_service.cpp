@@ -766,8 +766,16 @@ SupervisorService::~SupervisorService()
 
 void SupervisorService::start(int poll_interval_ms)
 {
+    std::lock_guard<std::mutex> lk(lifecycle_mu_);
     if (running_.exchange(true))
         return;
+
+    // A stop() that cleared running_ but has not finished joining leaves the
+    // thread joinable; assigning over it below would call std::terminate().
+    // Holding lifecycle_mu_ makes that impossible from a concurrent stop(), and
+    // this covers a prior stop() that already returned.
+    if (poll_thread_.joinable())
+        poll_thread_.join();
 
     // 1. Start Wawona
     wawona_guard_->start();
@@ -783,6 +791,7 @@ void SupervisorService::start(int poll_interval_ms)
 
 void SupervisorService::stop()
 {
+    std::lock_guard<std::mutex> lk(lifecycle_mu_);
     if (!running_.exchange(false))
         return;
 

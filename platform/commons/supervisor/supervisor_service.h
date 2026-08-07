@@ -214,6 +214,19 @@ private:
     std::unordered_map<std::string, std::unique_ptr<WineServerGuard>>
         wine_guards_;
 
+    /* Serializes start() against stop() so the two cannot interleave on
+     * poll_thread_. stop() clears running_ before it joins, which leaves a
+     * window where a start() arriving from the main thread sees the service as
+     * stopped and assigns over a thread that is still joinable -- and assigning
+     * to a joinable std::thread calls std::terminate(). AppKit reaches exactly
+     * that interleaving during shutdown: applicationShouldTerminate: runs stop()
+     * on a background queue while _shouldTerminate spins a nested run loop that
+     * can still drain a queued launch block into start().
+     *
+     * Not the same lock as guards_mu_: poll_loop takes that one on every tick,
+     * and stop() joins the poll thread while holding this one.
+     */
+    std::mutex lifecycle_mu_;
     std::atomic<bool> running_{false};
     std::thread poll_thread_;
 };
