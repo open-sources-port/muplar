@@ -766,7 +766,7 @@ SupervisorService::~SupervisorService()
 
 void SupervisorService::start(int poll_interval_ms)
 {
-    std::lock_guard<std::mutex> lk(lifecycle_mu_);
+    std::lock_guard<std::mutex> lifecycle_lk(lifecycle_mu_);
     if (running_.exchange(true))
         return;
 
@@ -791,7 +791,7 @@ void SupervisorService::start(int poll_interval_ms)
 
 void SupervisorService::stop()
 {
-    std::lock_guard<std::mutex> lk(lifecycle_mu_);
+    std::lock_guard<std::mutex> lifecycle_lk(lifecycle_mu_);
     if (!running_.exchange(false))
         return;
 

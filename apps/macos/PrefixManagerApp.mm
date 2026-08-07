@@ -573,6 +573,11 @@ static NSImage* InstancePreviewImage(const prefix::PrefixLayout& layout)
 @property (nonatomic, copy) NSString* iconName;
 @property (nonatomic, assign) BOOL isManual;
 @property (nonatomic, assign) BOOL isLnk;
+/* path with symlinks resolved, used only to recognize an app already in the
+ * list. Distinct from path, which stays as discovered so the row shows where
+ * the entry actually came from.
+ */
+@property (nonatomic, copy) NSString* resolvedPath;
 @end
 
 @implementation MuplarAppShortcut
@@ -2560,8 +2565,25 @@ static NSString* MapLinuxIconToSFSymbol(NSString* icon)
         normalizedPath = [path stringByReplacingOccurrencesOfString:@"/" withString:@"\\"];
     }
 
+    /* Match on the resolved path, not the string we were handed. Distros that
+     * merge /bin into /usr/bin reach one binary by two names, and the terminal
+     * scan probes both spellings while a .desktop Exec= may name a third, so a
+     * literal compare lists the same program several times -- xterm and uxterm
+     * showed up twice each. Wine paths are already backslash-normalized above
+     * and are not host paths, so they keep the literal comparison.
+     */
+    NSString* resolvedPath = normalizedPath;
+    if (!(selected && selected->kind == prefix::PrefixKind::Wine)) {
+        std::error_code resolveEc;
+        std::filesystem::path canonical =
+            std::filesystem::canonical(normalizedPath.UTF8String, resolveEc);
+        if (!resolveEc)
+            resolvedPath = NSStringFromStdString(canonical.string());
+    }
+
     for (MuplarAppShortcut* existing in _appsList) {
-        if ([existing.path caseInsensitiveCompare:normalizedPath] == NSOrderedSame) {
+        NSString* existingKey = existing.resolvedPath ?: existing.path;
+        if ([existingKey caseInsensitiveCompare:resolvedPath] == NSOrderedSame) {
             return;
         }
     }
@@ -2569,6 +2591,7 @@ static NSString* MapLinuxIconToSFSymbol(NSString* icon)
     MuplarAppShortcut* app = [[MuplarAppShortcut alloc] init];
     app.name = name;
     app.path = normalizedPath;
+    app.resolvedPath = resolvedPath;
     app.unixPath = unixPath;
     app.iconName = iconName;
     app.isManual = isManual;
