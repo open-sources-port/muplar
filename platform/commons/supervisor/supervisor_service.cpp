@@ -290,7 +290,16 @@ pid_t WawonaGuard::spawn()
 
 void WawonaGuard::start()
 {
-    if (!MuplarWawonaIsRunningInProcess()) {
+    bool running = MuplarWawonaIsRunningInProcess();
+    if (running && !socket_is_live(wayland_socket_path())) {
+        log_warn(
+            "[WawonaGuard] in-process compositor is running without live "
+            "Wayland socket %s; restarting",
+            wayland_socket_path().c_str());
+        MuplarWawonaStopInProcess();
+        running = false;
+    }
+    if (!running) {
         log_info("[WawonaGuard] starting in-process compositor socket=%s",
                  wayland_socket_path().c_str());
         MuplarWawonaStartInProcess("wayland-0");
@@ -788,18 +797,37 @@ void SupervisorService::start(int poll_interval_ms)
             poll_thread_.join();
     }
 
+    // A stop() can land between releasing the lock above and starting the
+    // guards below. Cheap pre-check for the common case; the unwind after
+    // covers the rest of the window.
+    if (!running_.load())
+        return;
+
     // Both of these can round-trip to the main queue, so neither may run while
     // lifecycle_mu_ is held. See the invariant note on the member.
     wawona_guard_->start();
     sync_wine_guards();
 
-    std::lock_guard<std::mutex> lifecycle_lk(lifecycle_mu_);
-    // A stop() may have overtaken us while the guards were coming up; its join
-    // has already run, so publishing a thread now would leave it unowned.
-    if (running_.load()) {
-        poll_thread_ = std::thread(
-            [this, poll_interval_ms] { poll_loop(poll_interval_ms); });
+    bool still_running;
+    {
+        std::lock_guard<std::mutex> lifecycle_lk(lifecycle_mu_);
+        // A stop() may have overtaken us while the guards were coming up; its
+        // join has already run, so publishing a thread now would leave it
+        // unowned.
+        still_running = running_.load();
+        if (still_running) {
+            poll_thread_ = std::thread(
+                [this, poll_interval_ms] { poll_loop(poll_interval_ms); });
+        }
     }
+
+    // The teardown finished before our guards came up, so its stop_guards()
+    // ran against a supervisor that had nothing started yet. Without this the
+    // compositor and the Windows compatibility services stay alive with no
+    // supervisor owning them, and the next stop() returns early on
+    // running_ == false and never reaches them.
+    if (!still_running)
+        stop_guards();
 }
 
 void SupervisorService::stop()
@@ -819,6 +847,11 @@ void SupervisorService::stop()
     // applicationShouldTerminate:. Holding lifecycle_mu_ across that let the
     // main thread block on the lock while this thread waited on the main
     // queue, which hung the app on quit.
+    stop_guards();
+}
+
+void SupervisorService::stop_guards()
+{
     {
         std::lock_guard<std::mutex> lk(guards_mu_);
         for (auto &[name, guard] : wine_guards_)

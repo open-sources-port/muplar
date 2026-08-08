@@ -208,6 +208,13 @@ private:
     void poll_loop(int interval_ms);
     void sync_wine_guards();
 
+    /* Tear down every guard. Must be called with lifecycle_mu_ released: it
+     * reaches MuplarWawonaStopInProcess, which dispatch_sync's to the main
+     * queue. Shared by stop() and by start()'s unwind when a teardown
+     * overtakes it.
+     */
+    void stop_guards();
+
     std::unique_ptr<WawonaGuard> wawona_guard_;
 
     mutable std::mutex guards_mu_;
