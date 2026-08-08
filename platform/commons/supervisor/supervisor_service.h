@@ -223,6 +223,15 @@ private:
      * stop() on a background queue while _shouldTerminate spins a nested run
      * loop that can still drain a queued launch block into start().
      *
+     * Invariant: never hold this across a call that can reach the main queue.
+     * WawonaGuard's start/stop go through MuplarWawona{Start,Stop}InProcess,
+     * which dispatch_sync to the main queue from a background thread. Holding
+     * the lock across one deadlocked the app on quit: the background stop()
+     * waited on the main queue while the main thread waited on the lock. Both
+     * start() and stop() therefore drop it before touching the guards, and
+     * start() takes it with try_lock so the main thread can never block on a
+     * teardown that is already under way.
+     *
      * Not the same lock as guards_mu_: poll_loop takes that one on every tick,
      * and stop() joins the poll thread while holding this one.
      */

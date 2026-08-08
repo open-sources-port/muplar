@@ -766,39 +766,59 @@ SupervisorService::~SupervisorService()
 
 void SupervisorService::start(int poll_interval_ms)
 {
-    std::lock_guard<std::mutex> lifecycle_lk(lifecycle_mu_);
-    if (running_.exchange(true))
-        return;
+    {
+        // try_lock, never lock: this runs on the main thread, and stop() runs
+        // on a background queue. Blocking here is what turned the earlier
+        // crash into a hang -- stop() held the lock while MuplarWawonaStop-
+        // InProcess dispatch_sync'd to the main queue, so the two waited on
+        // each other. Failing to acquire means a teardown is under way, and
+        // declining to start during shutdown is the correct answer anyway.
+        std::unique_lock<std::mutex> lifecycle_lk(lifecycle_mu_,
+                                                  std::try_to_lock);
+        if (!lifecycle_lk.owns_lock())
+            return;
+        if (running_.exchange(true))
+            return;
 
-    // A stop() that cleared running_ but has not finished joining leaves the
-    // thread joinable; assigning over it below would call std::terminate().
-    // Holding lifecycle_mu_ makes that impossible from a concurrent stop(), and
-    // this covers a prior stop() that already returned.
-    if (poll_thread_.joinable())
-        poll_thread_.join();
+        // A stop() that cleared running_ but has not finished joining leaves
+        // the thread joinable; assigning over it below would call
+        // std::terminate(). The lock makes that impossible from a concurrent
+        // stop(), and this covers a prior stop() that already returned.
+        if (poll_thread_.joinable())
+            poll_thread_.join();
+    }
 
-    // 1. Start Wawona
+    // Both of these can round-trip to the main queue, so neither may run while
+    // lifecycle_mu_ is held. See the invariant note on the member.
     wawona_guard_->start();
-
-    // 2. Start Windows compatibility services for all existing Windows
-    // instances
     sync_wine_guards();
 
-    // 3. Background poll for new/removed prefixes
-    poll_thread_ =
-        std::thread([this, poll_interval_ms] { poll_loop(poll_interval_ms); });
+    std::lock_guard<std::mutex> lifecycle_lk(lifecycle_mu_);
+    // A stop() may have overtaken us while the guards were coming up; its join
+    // has already run, so publishing a thread now would leave it unowned.
+    if (running_.load()) {
+        poll_thread_ = std::thread(
+            [this, poll_interval_ms] { poll_loop(poll_interval_ms); });
+    }
 }
 
 void SupervisorService::stop()
 {
-    std::lock_guard<std::mutex> lifecycle_lk(lifecycle_mu_);
-    if (!running_.exchange(false))
-        return;
+    {
+        std::lock_guard<std::mutex> lifecycle_lk(lifecycle_mu_);
+        if (!running_.exchange(false))
+            return;
 
-    if (poll_thread_.joinable())
-        poll_thread_.join();
+        if (poll_thread_.joinable())
+            poll_thread_.join();
+    }
 
-    // Stop all Windows compatibility services
+    // Deliberately outside the lock: wawona_guard_->stop() reaches
+    // MuplarWawonaStopInProcess, which dispatch_sync's to the main queue when
+    // called from a background thread -- and this is called from one, off
+    // applicationShouldTerminate:. Holding lifecycle_mu_ across that let the
+    // main thread block on the lock while this thread waited on the main
+    // queue, which hung the app on quit.
     {
         std::lock_guard<std::mutex> lk(guards_mu_);
         for (auto &[name, guard] : wine_guards_)
