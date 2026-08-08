@@ -1521,6 +1521,11 @@ int main(int argc, char **argv)
                     }
                 }
             }
+            if (active_prefix->kind ==
+                muplar::runtime::prefix::PrefixKind::Linux) {
+                muplar::runtime::prefix::publish_display_socket(
+                    active_prefix->rootfs);
+            }
         } catch (const std::exception &e) {
             std::cerr << "Prefix error: " << e.what() << "\n";
             return 1;

@@ -1408,9 +1408,9 @@ static void link_host_socket_into_rootfs(
         !S_ISSOCK(host_st.st_mode)) {
         // No live socket to publish. Drop a stale entry so the guest gets a
         // clean ENOENT instead of connecting to a dead inode.
-        if (std::filesystem::is_symlink(link_path, ec) ||
-            std::filesystem::exists(link_path, ec))
-            std::filesystem::remove(link_path, ec);
+        struct stat stale_st;
+        if (::lstat(link_path.c_str(), &stale_st) == 0)
+            (void) ::unlink(link_path.c_str());
         return;
     }
 
@@ -3140,7 +3140,7 @@ static void pass_linux_display_environment(std::vector<std::string> &env)
         "WAYLAND_DISPLAY",       "XDG_RUNTIME_DIR", "DBUS_SESSION_BUS_ADDRESS",
         "XDG_SESSION_TYPE",      "GDK_BACKEND",     "QT_QPA_PLATFORM",
         "SDL_VIDEODRIVER",       "CLUTTER_BACKEND", "EGL_PLATFORM",
-        "LIBGL_ALWAYS_INDIRECT",
+        "LIBGL_ALWAYS_INDIRECT", "WAYLAND_DEBUG",   "ELFUSE_EPOLL_DEBUG",
     };
 
     for (const char *name : kDisplayEnv)
