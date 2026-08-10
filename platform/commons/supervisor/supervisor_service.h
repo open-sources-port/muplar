@@ -2,12 +2,13 @@
 
 // platform/commons/supervisor/supervisor_service.h
 //
-// SupervisorService: keeps Wawona (global Wayland compositor) and per-prefix
-// Windows compatibility services alive for the lifetime of the instance
-// manager.
+// SupervisorService: keeps Muplar Wayland (global Wayland compositor) and
+// per-prefix Windows compatibility services alive for the lifetime of the
+// instance manager.
 //
 // Architecture:
-//   - WawonaGuard   — one global instance; restarts wawona on crash with
+//   - WaylandGuard   — one global instance; restarts muplar-wayland on crash
+//   with
 //                     exponential backoff; uses kqueue EVFILT_PROC/NOTE_EXIT
 //                     for zero-latency crash detection on macOS.
 //   - WineServerGuard — one per Windows instance; same restart logic scoped to
@@ -51,29 +52,31 @@ struct RestartPolicy {
 };
 
 // ---------------------------------------------------------------------------
-// WawonaGuard
+// WaylandGuard
 // ---------------------------------------------------------------------------
-// Keeps a single global wawona process alive. The Wayland socket appears at
-// /tmp/wawona-<uid>/wayland-0 and is shared by all Linux instances.
+// Keeps a single global muplar-wayland process alive. The Wayland socket
+// appears at /tmp/muplar-wayland-<uid>/wayland-0 and is shared by all Linux
+// instances.
 
-class WawonaGuard
+class WaylandGuard
 {
 public:
-    explicit WawonaGuard(RestartPolicy policy = {});
-    ~WawonaGuard();
+    explicit WaylandGuard(RestartPolicy policy = {});
+    ~WaylandGuard();
 
-    // Start supervising wawona. Spawns the process immediately, then watches
-    // for exit via kqueue. Non-blocking: monitor thread runs in background.
+    // Start supervising muplar-wayland. Spawns the process immediately, then
+    // watches for exit via kqueue. Non-blocking: monitor thread runs in
+    // background.
     void start();
 
-    // Stop the guard: send SIGTERM to wawona, wait for it to exit, join the
-    // monitor thread. Blocks for up to 5 seconds then escalates to SIGKILL.
+    // Stop the guard: send SIGTERM to muplar-wayland, wait for it to exit, join
+    // the monitor thread. Blocks for up to 5 seconds then escalates to SIGKILL.
     void stop();
 
-    // True if wawona is currently running (pid > 0 and alive).
+    // True if muplar-wayland is currently running (pid > 0 and alive).
     bool is_running() const;
 
-    // Path of the Wayland socket wawona will create.
+    // Path of the Wayland socket muplar-wayland will create.
     static std::filesystem::path wayland_socket_path();
 
     // Block until the wayland socket appears or timeout_ms elapses.
@@ -180,9 +183,9 @@ public:
     SupervisorService();
     ~SupervisorService();
 
-    // Start the supervisor: launch Wawona, then start Windows compatibility
-    // services for all existing Windows instances. Kicks off a background
-    // thread that polls for newly-created Windows instances every
+    // Start the supervisor: launch Muplar Wayland, then start Windows
+    // compatibility services for all existing Windows instances. Kicks off a
+    // background thread that polls for newly-created Windows instances every
     // poll_interval_ms milliseconds.
     void start(int poll_interval_ms = 2000);
 
@@ -195,9 +198,9 @@ public:
     // Called by the instance manager when a prefix is deleted.
     void on_prefix_deleted(const std::string &prefix_name);
 
-    // Access to the global Wawona guard (e.g. to wait for the socket).
-    WawonaGuard &wawona() { return *wawona_guard_; }
-    const WawonaGuard &wawona() const { return *wawona_guard_; }
+    // Access to the global Muplar Wayland guard (e.g. to wait for the socket).
+    WaylandGuard &wayland() { return *wayland_guard_; }
+    const WaylandGuard &wayland() const { return *wayland_guard_; }
 
     // Access to a specific WineServerGuard (nullptr if not found).
     WineServerGuard *wine_server(const std::string &prefix_name);
@@ -215,7 +218,7 @@ private:
      */
     void stop_guards();
 
-    std::unique_ptr<WawonaGuard> wawona_guard_;
+    std::unique_ptr<WaylandGuard> wayland_guard_;
 
     mutable std::mutex guards_mu_;
     std::unordered_map<std::string, std::unique_ptr<WineServerGuard>>
@@ -231,7 +234,7 @@ private:
      * loop that can still drain a queued launch block into start().
      *
      * Invariant: never hold this across a call that can reach the main queue.
-     * WawonaGuard's start/stop go through MuplarWawona{Start,Stop}InProcess,
+     * WaylandGuard's start/stop go through MuplarWawona{Start,Stop}InProcess,
      * which dispatch_sync to the main queue from a background thread. Holding
      * the lock across one deadlocked the app on quit: the background stop()
      * waited on the main queue while the main thread waited on the lock. Both

@@ -214,7 +214,7 @@ jobs:
         run: ninja -C build elfuse_external -v
 
       - name: Build Wawona
-        run: ninja -C build wawona_external -v
+        run: ninja -C build muplar_wayland_external -v
 
       - name: Build Muplar app bundle
         run: cmake --build build

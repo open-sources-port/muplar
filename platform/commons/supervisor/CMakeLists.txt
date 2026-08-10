@@ -40,11 +40,11 @@ if(APPLE)
         endif()
     endforeach()
 
-    add_library(muplar_wawona STATIC
+    add_library(muplar_wayland_bridge STATIC
         ${WAWONA_SOURCES}
     )
 
-    target_include_directories(muplar_wawona PUBLIC
+    target_include_directories(muplar_wayland_bridge PUBLIC
         ${WAWONA_DIR}/src
         ${WAWONA_DIR}/src/util
         ${WAWONA_DIR}/src/platform/macos
@@ -55,7 +55,7 @@ if(APPLE)
         /opt/homebrew/include
     )
 
-    target_compile_definitions(muplar_wawona PUBLIC
+    target_compile_definitions(muplar_wayland_bridge PUBLIC
         USE_RUST_CORE=1
         WAWONA_VERSION="0.0.1"
         WAWONA_WAYLAND_VERSION="unknown"
@@ -67,7 +67,7 @@ if(APPLE)
         WAWONA_WAYPIPE_VERSION="unknown"
     )
 
-    target_compile_options(muplar_wawona PRIVATE
+    target_compile_options(muplar_wayland_bridge PRIVATE
         -fobjc-arc
         -Wall
         -Wextra
@@ -81,12 +81,12 @@ if(APPLE)
         -Wno-unguarded-availability-new
     )
 
-    target_link_directories(muplar_wawona INTERFACE
+    target_link_directories(muplar_wayland_bridge INTERFACE
         /opt/homebrew/lib
         /opt/homebrew/opt/openssl@3/lib
     )
 
-    target_link_libraries(muplar_wawona
+    target_link_libraries(muplar_wayland_bridge
         PUBLIC
             "${WAWONA_DIR}/target/release/libmuplar_wayland.a"
             pixman-1
@@ -112,7 +112,7 @@ if(APPLE)
             "-ObjC"
     )
 
-    add_dependencies(muplar_wawona wawona_external)
+    add_dependencies(muplar_wayland_bridge muplar_wayland_external)
 
-    target_link_libraries(muplar_runtime_supervisor PUBLIC muplar_wawona)
+    target_link_libraries(muplar_runtime_supervisor PUBLIC muplar_wayland_bridge)
 endif()
