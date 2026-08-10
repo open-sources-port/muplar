@@ -5,8 +5,6 @@ ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 MUPLAR_WAYLAND_SRC="${ROOT_DIR}/third_party/muplar-wayland"
 WAWONA_SRC="${MUPLAR_WAYLAND_SRC}"
 BUILD_DIR="${ROOT_DIR}/build"
-OUTPUT_BIN="${BUILD_DIR}/bin/wawona"
-OBJ_BUILD_DIR="${BUILD_DIR}/wawona-macos-objc"
 
 CARGO_BIN="cargo"
 
@@ -202,5 +200,5 @@ if [ ! -f "$WAWONA_RUST_STATICLIB" ]; then
     exit 1
 fi
 
-echo "Successfully built Wawona static library."
+echo "Successfully built Muplar Wayland static library."
 exit 0

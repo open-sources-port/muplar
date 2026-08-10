@@ -181,14 +181,14 @@ else()
 endif()
 
 # =========================================
-# Wawona: Wayland compositor
+# Muplar Wayland: Wayland compositor
 # =========================================
-set(WAWONA_BUILD_SHELL ${CMAKE_SOURCE_DIR}/tools/build-muplar-wayland.sh)
-ExternalProject_Add(wawona_external
+set(MUPLAR_WAYLAND_BUILD_SHELL ${CMAKE_SOURCE_DIR}/tools/build-muplar-wayland.sh)
+ExternalProject_Add(muplar_wayland_external
     DOWNLOAD_COMMAND ""
     SOURCE_DIR      ${CMAKE_SOURCE_DIR}/third_party/muplar-wayland
     CONFIGURE_COMMAND ""
-    BUILD_COMMAND   sh ${WAWONA_BUILD_SHELL}
+    BUILD_COMMAND   sh ${MUPLAR_WAYLAND_BUILD_SHELL}
     INSTALL_COMMAND ""
     BUILD_IN_SOURCE 0
     USES_TERMINAL_BUILD YES
@@ -197,7 +197,7 @@ ExternalProject_Add(wawona_external
         ${CMAKE_SOURCE_DIR}/third_party/muplar-wayland/target/release/libmuplar_wayland.a
 )
 
-add_custom_target(wawona_bin DEPENDS wawona_external)
+add_custom_target(muplar_wayland_bin DEPENDS muplar_wayland_external)
 
 # =========================================
 # EGL/GLESv2 Guest Stubs

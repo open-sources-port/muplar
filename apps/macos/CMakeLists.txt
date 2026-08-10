@@ -109,7 +109,7 @@ target_compile_options(muplar_prefix_manager PRIVATE
 )
 
 # wine_lib and muplar_runtime_wine are always built; ensure they complete before manager compilation.
-add_dependencies(muplar_prefix_manager wine_lib muplar_runtime_wine wawona_external)
+add_dependencies(muplar_prefix_manager wine_lib muplar_runtime_wine muplar_wayland_external)
 
 # ── Clean stale bundle name from older builds ──────────────────────────────────
 add_custom_command(TARGET muplar_prefix_manager PRE_BUILD
@@ -192,7 +192,7 @@ add_custom_target(populate_manager_bundle ALL
              find '${LINUX_BOOTSTRAP_DIR}' -name 'linux-bootstrap-*.tar.gz' -exec cp -f {} '${APP_CONTENTS}/Frameworks/' \\;; \
          fi"
 
-    # ── Wawona Dependencies → Frameworks/ (with dependency bundling) ──────────
+    # ── Muplar Wayland Dependencies → Frameworks/ (with dependency bundling) ──────────
     COMMAND bash -c
         "brew_prefix=''; \
          for prefix in /opt/homebrew /usr/local; do \
@@ -202,7 +202,7 @@ add_custom_target(populate_manager_bundle ALL
              fi; \
          done; \
          if [ -n \"\$brew_prefix\" ]; then \
-             echo '[bundle] Copying Wawona Homebrew dependencies from' \"\$brew_prefix\"; \
+             echo '[bundle] Copying Muplar Wayland Homebrew dependencies from' \"\$brew_prefix\"; \
              for lib in libpixman-1.0.dylib libxkbcommon.0.dylib libssl.3.dylib libcrypto.3.dylib; do \
                  lib_src=\"\$brew_prefix/lib/\$lib\"; \
                  if [ -f \"\$lib_src\" ]; then \
@@ -376,5 +376,5 @@ add_custom_target(populate_manager_bundle ALL
 )
 
 add_dependencies(populate_manager_bundle muplar_prefix_manager
-    muplar_android_builtin_apps wine_lib dxmt_lib mup muplard wawona_bin
+    muplar_android_builtin_apps wine_lib dxmt_lib mup muplard muplar_wayland_bin
     egl_gles_stubs_bin)

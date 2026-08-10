@@ -84,13 +84,13 @@ static NSString* HostDisplayEnvironmentExportScript()
     return script;
 }
 
-static NSString* DefaultWawonaRuntimeDir()
+static NSString* DefaultMuplarWaylandRuntimeDir()
 {
-    return [NSString stringWithFormat:@"/tmp/wawona-%lu",
+    return [NSString stringWithFormat:@"/tmp/muplar-wayland-%lu",
                                       static_cast<unsigned long>(getuid())];
 }
 
-static NSString* DefaultWawonaDisplayName()
+static NSString* DefaultMuplarWaylandDisplayName()
 {
     return @"wayland-0";
 }
@@ -120,7 +120,7 @@ static BOOL UnixSocketAcceptsConnection(NSString* path)
     return ok;
 }
 
-static NSSet<NSNumber*>* VisibleWawonaWindowNumbers()
+static NSSet<NSNumber*>* VisibleMuplarWaylandWindowNumbers()
 {
     NSMutableSet<NSNumber*>* windowNumbers = [NSMutableSet set];
     for (NSWindow* window in NSApp.windows) {
@@ -260,9 +260,9 @@ static void ApplyDefaultLinuxDisplayEnvironment(
     NSMutableDictionary<NSString*, NSString*>* env)
 {
     if ((env[@"XDG_RUNTIME_DIR"] ?: @"").length == 0)
-        env[@"XDG_RUNTIME_DIR"] = DefaultWawonaRuntimeDir();
+        env[@"XDG_RUNTIME_DIR"] = DefaultMuplarWaylandRuntimeDir();
     if ((env[@"WAYLAND_DISPLAY"] ?: @"").length == 0)
-        env[@"WAYLAND_DISPLAY"] = DefaultWawonaDisplayName();
+        env[@"WAYLAND_DISPLAY"] = DefaultMuplarWaylandDisplayName();
     [env removeObjectForKey:@"DISPLAY"];
     [env removeObjectForKey:@"XAUTHORITY"];
     if ((env[@"XDG_SESSION_TYPE"] ?: @"").length == 0)
@@ -757,7 +757,7 @@ static NSString* ParseLnkFile(const std::filesystem::path& lnkPath)
     NSMutableSet<NSString*>* _startingAndroidSessionKeys;
     NSMutableSet<NSString*>* _cancelledAndroidSessionKeys;
     NSMutableSet<NSString*>* _stoppingAndroidSessionKeys;
-    NSTask* _wawonaTask;
+    NSTask* _waylandTask;
     std::unique_ptr<supervisor::SupervisorService> _supervisor;
     dispatch_source_t _termSignalSource;
 
@@ -3357,7 +3357,7 @@ static NSString* MapLinuxIconToSFSymbol(NSString* icon)
         }
 
         NSMutableSet<NSNumber*>* newWindowNumbers =
-            [VisibleWawonaWindowNumbers() mutableCopy];
+            [VisibleMuplarWaylandWindowNumbers() mutableCopy];
         [newWindowNumbers minusSet:baselineWindowNumbers];
         if (newWindowNumbers.count > 0) {
             [self->_linuxLaunchTokens removeObjectForKey:key];
@@ -3405,10 +3405,10 @@ static NSString* MapLinuxIconToSFSymbol(NSString* icon)
     return nil;
 }
 
-- (BOOL)waitForWawonaSocket
+- (BOOL)waitForMuplarWaylandSocket
 {
-    NSString* socketPath = [DefaultWawonaRuntimeDir()
-        stringByAppendingPathComponent:DefaultWawonaDisplayName()];
+    NSString* socketPath = [DefaultMuplarWaylandRuntimeDir()
+        stringByAppendingPathComponent:DefaultMuplarWaylandDisplayName()];
     for (int i = 0; i < 20; ++i) {
         if (UnixSocketAcceptsConnection(socketPath))
             return YES;
@@ -3417,46 +3417,46 @@ static NSString* MapLinuxIconToSFSymbol(NSString* icon)
     return UnixSocketAcceptsConnection(socketPath);
 }
 
-- (BOOL)ensureWawonaForLinuxPrefix:(prefix::PrefixLayout*)selected
+- (BOOL)ensureMuplarWaylandForLinuxPrefix:(prefix::PrefixLayout*)selected
                       errorMessage:(NSString**)errorMessage
 {
-    NSString* socketPath = [DefaultWawonaRuntimeDir()
-        stringByAppendingPathComponent:DefaultWawonaDisplayName()];
+    NSString* socketPath = [DefaultMuplarWaylandRuntimeDir()
+        stringByAppendingPathComponent:DefaultMuplarWaylandDisplayName()];
     [self appendLaunchLogLineForPrefix:selected
                                   line:[NSString stringWithFormat:
-                                      @"[Wawona] ensure start socket=%@",
+                                      @"[muplar-wayland] ensure start socket=%@",
                                       socketPath]];
     if (!_supervisor)
         _supervisor = std::make_unique<supervisor::SupervisorService>();
     if (!_supervisor->is_running()) {
         [self appendLaunchLogLineForPrefix:selected
-                                      line:@"[Wawona] supervisor not running; starting"];
+                                      line:@"[muplar-wayland] supervisor not running; starting"];
         _supervisor->start();
     } else {
         [self appendLaunchLogLineForPrefix:selected
-                                      line:@"[Wawona] supervisor already running"];
+                                      line:@"[muplar-wayland] supervisor already running"];
     }
 
-    BOOL wawonaReady = _supervisor->wawona().wait_for_socket(5000);
+    BOOL waylandReady = _supervisor->wayland().wait_for_socket(5000);
     [self appendLaunchLogLineForPrefix:selected
                                   line:[NSString stringWithFormat:
-                                      @"[Wawona] initial socket ready=%@",
-                                      wawonaReady ? @"yes" : @"no"]];
-    if (!wawonaReady) {
-        log_warn("[Muplar Linux] Wawona socket is not live at %s; restarting "
+                                      @"[muplar-wayland] initial socket ready=%@",
+                                      waylandReady ? @"yes" : @"no"]];
+    if (!waylandReady) {
+        log_warn("[Muplar Linux] Muplar Wayland socket is not live at %s; restarting "
                  "compositor",
                  socketPath.UTF8String);
         [self appendLaunchLogLineForPrefix:selected
-                                      line:@"[Wawona] restarting compositor"];
-        _supervisor->wawona().stop();
-        _supervisor->wawona().start();
-        wawonaReady = _supervisor->wawona().wait_for_socket(5000);
+                                      line:@"[muplar-wayland] restarting compositor"];
+        _supervisor->wayland().stop();
+        _supervisor->wayland().start();
+        waylandReady = _supervisor->wayland().wait_for_socket(5000);
         [self appendLaunchLogLineForPrefix:selected
                                       line:[NSString stringWithFormat:
-                                          @"[Wawona] restart socket ready=%@",
-                                          wawonaReady ? @"yes" : @"no"]];
+                                          @"[muplar-wayland] restart socket ready=%@",
+                                          waylandReady ? @"yes" : @"no"]];
     }
-    if (!wawonaReady) {
+    if (!waylandReady) {
         if (errorMessage) {
             *errorMessage = [NSString stringWithFormat:
                 @"Muplar display compositor did not create a live Wayland socket at %@.",
@@ -3484,8 +3484,8 @@ static NSString* MapLinuxIconToSFSymbol(NSString* icon)
         _supervisor->start();
 
     dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
-        BOOL wawonaReady = self->_supervisor->wawona().wait_for_socket(5000);
-        if (wawonaReady) {
+        BOOL waylandReady = self->_supervisor->wayland().wait_for_socket(5000);
+        if (waylandReady) {
             dispatch_async(dispatch_get_main_queue(), ^{
                 NSString* sessionError = nil;
                 [self ensureLinuxSessionForPrefix:selected errorMessage:&sessionError];
@@ -4417,8 +4417,8 @@ static NSString* MapLinuxIconToSFSymbol(NSString* icon)
         @"done; "
         @"fi; "
         @"%@",
-        ShellSingleQuote(DefaultWawonaRuntimeDir()),
-        ShellSingleQuote(DefaultWawonaDisplayName()),
+        ShellSingleQuote(DefaultMuplarWaylandRuntimeDir()),
+        ShellSingleQuote(DefaultMuplarWaylandDisplayName()),
         ShellSingleQuote(xwaylandPath),
         execLine];
 
@@ -4535,9 +4535,9 @@ static NSString* MapLinuxIconToSFSymbol(NSString* icon)
         return;
     }
 
-    NSString* wawonaError = nil;
-    if (![self ensureWawonaForLinuxPrefix:selected errorMessage:&wawonaError]) {
-        [self showError:wawonaError ?: @"Failed to start Muplar display compositor."];
+    NSString* waylandError = nil;
+    if (![self ensureMuplarWaylandForLinuxPrefix:selected errorMessage:&waylandError]) {
+        [self showError:waylandError ?: @"Failed to start Muplar display compositor."];
         return;
     }
 
@@ -4607,7 +4607,7 @@ static NSString* MapLinuxIconToSFSymbol(NSString* icon)
     [self setupLoggingForTask:task prefix:selected appName:app.name];
 
     NSString* key = [self appKeyForApp:app];
-    NSSet<NSNumber*>* baselineWindowNumbers = VisibleWawonaWindowNumbers();
+    NSSet<NSNumber*>* baselineWindowNumbers = VisibleMuplarWaylandWindowNumbers();
     NSUUID* launchToken = NSUUID.UUID;
     [_launchingAppPaths addObject:key];
     _linuxLaunchTokens[key] = launchToken;
@@ -4623,7 +4623,7 @@ static NSString* MapLinuxIconToSFSymbol(NSString* icon)
     task.terminationHandler = ^(NSTask* t) {
         // Fork helpers outlive the top-level guest unless the complete launch
         // group is reaped. They can otherwise retain Wayland sockets and keep
-        // already-exited terminal windows visible in Wawona.
+        // already-exited terminal windows visible in Muplar Wayland.
         kill(-t.processIdentifier, SIGKILL);
         [[NSFileManager defaultManager] removeItemAtPath:pidFile error:nil];
         dispatch_async(dispatch_get_main_queue(), ^{

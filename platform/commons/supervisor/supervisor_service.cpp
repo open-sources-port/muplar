@@ -1,6 +1,6 @@
 // platform/commons/supervisor/supervisor_service.cpp
 //
-// SupervisorService, WawonaGuard, WineServerGuard implementation.
+// SupervisorService, WaylandGuard, WineServerGuard implementation.
 //
 // kqueue EVFILT_PROC + NOTE_EXIT gives us instant notification when a child
 // exits — no polling, no waitpid loop. The monitor thread blocks on kevent()
@@ -101,40 +101,30 @@ static void ensure_wine_tmp_dir_private()
     }
 }
 
-// Locate the wawona binary: try next to mup, then build dir, then PATH.
-static fs::path resolve_wawona_bin()
+// Locate the muplar-wayland binary: try next to mup, inside the app bundle,
+// then from PATH.
+static fs::path resolve_muplar_wayland_bin()
 {
     auto exec_dir = get_executable_dir();
     std::error_code ec;
 
     // 1. Next to mup binary (production layout)
-    auto candidate = exec_dir / "wawona";
+    auto candidate = exec_dir / "muplar-wayland";
     if (fs::is_regular_file(candidate, ec))
         return candidate;
 
-    // 2. App bundle Contents/MacOS/../Frameworks/wawona
-    candidate = exec_dir.parent_path() / "Frameworks" / "wawona";
+    // 2. App bundle Contents/MacOS/../Frameworks/muplar-wayland
+    candidate = exec_dir.parent_path() / "Frameworks" / "muplar-wayland";
     if (fs::is_regular_file(candidate, ec))
         return candidate;
 
-    // 3. build/bin/wawona (dev layout: mup lives in build/bin/)
-    candidate = exec_dir / "wawona";
-    if (fs::is_regular_file(candidate, ec))
-        return candidate;
-
-    // 4. Relative to mup going up to project root: <root>/build/bin/wawona
-    candidate =
-        exec_dir.parent_path().parent_path() / "build" / "bin" / "wawona";
-    if (fs::is_regular_file(candidate, ec))
-        return candidate;
-
-    // 5. PATH
+    // 3. PATH
     const char *path_env = std::getenv("PATH");
     if (path_env) {
         std::istringstream ss(path_env);
         std::string dir;
         while (std::getline(ss, dir, ':')) {
-            auto p = fs::path(dir) / "wawona";
+            auto p = fs::path(dir) / "muplar-wayland";
             if (fs::is_regular_file(p, ec))
                 return p;
         }
@@ -257,50 +247,51 @@ static bool make_pipe(int fds[2])
 }
 
 // ---------------------------------------------------------------------------
-// WawonaGuard
+// WaylandGuard
 // ---------------------------------------------------------------------------
 
-fs::path WawonaGuard::wayland_socket_path()
+fs::path WaylandGuard::wayland_socket_path()
 {
     auto uid = static_cast<unsigned long>(getuid());
-    return fs::path("/tmp") / ("wawona-" + std::to_string(uid)) / "wayland-0";
+    return fs::path("/tmp") / ("muplar-wayland-" + std::to_string(uid)) /
+           "wayland-0";
 }
 
-WawonaGuard::WawonaGuard(RestartPolicy policy)
+WaylandGuard::WaylandGuard(RestartPolicy policy)
     : policy_(std::move(policy)), current_delay_ms_(policy_.initial_delay_ms)
 {
 }
 
-WawonaGuard::~WawonaGuard()
+WaylandGuard::~WaylandGuard()
 {
     stop();
 }
 
-bool WawonaGuard::wait_for_socket(int timeout_ms) const
+bool WaylandGuard::wait_for_socket(int timeout_ms) const
 {
     return poll_for_socket(wayland_socket_path(), timeout_ms);
 }
 
 
 #ifdef __APPLE__
-pid_t WawonaGuard::spawn()
+pid_t WaylandGuard::spawn()
 {
     return 0;
 }
 
-void WawonaGuard::start()
+void WaylandGuard::start()
 {
     bool running = MuplarWawonaIsRunningInProcess();
     if (running && !socket_is_live(wayland_socket_path())) {
         log_warn(
-            "[WawonaGuard] in-process compositor is running without live "
+            "[WaylandGuard] in-process compositor is running without live "
             "Wayland socket %s; restarting",
             wayland_socket_path().c_str());
         MuplarWawonaStopInProcess();
         running = false;
     }
     if (!running) {
-        log_info("[WawonaGuard] starting in-process compositor socket=%s",
+        log_info("[WaylandGuard] starting in-process compositor socket=%s",
                  wayland_socket_path().c_str());
         MuplarWawonaStartInProcess("wayland-0");
     }
@@ -312,39 +303,40 @@ void WawonaGuard::start()
     std::thread([socket = wayland_socket_path()] {
         if (!poll_for_socket(socket, 5000)) {
             log_warn(
-                "[WawonaGuard] in-process compositor did not expose live "
+                "[WaylandGuard] in-process compositor did not expose live "
                 "Wayland socket %s",
                 socket.c_str());
         }
     }).detach();
 }
 
-void WawonaGuard::stop()
+void WaylandGuard::stop()
 {
     if (MuplarWawonaIsRunningInProcess()) {
-        log_info("[WawonaGuard] stopping in-process compositor");
+        log_info("[WaylandGuard] stopping in-process compositor");
         MuplarWawonaStopInProcess();
     }
 }
 
-bool WawonaGuard::is_running() const
+bool WaylandGuard::is_running() const
 {
     return MuplarWawonaIsRunningInProcess() &&
            socket_is_live(wayland_socket_path());
 }
 
-void WawonaGuard::apply_backoff() {}
-void WawonaGuard::monitor_loop() {}
+void WaylandGuard::apply_backoff() {}
+void WaylandGuard::monitor_loop() {}
 #else
-pid_t WawonaGuard::spawn()
+pid_t WaylandGuard::spawn()
 {
-    fs::path wawona = resolve_wawona_bin();
-    if (wawona.empty()) {
-        log_error("[WawonaGuard] wawona binary not found");
+    fs::path wayland_bin = resolve_muplar_wayland_bin();
+    if (wayland_bin.empty()) {
+        log_error("[WaylandGuard] muplar-wayland binary not found");
         return -1;
     }
 
-    // Ensure the runtime dir exists before wawona tries to create the socket
+    // Ensure the runtime dir exists before muplar-wayland tries to create the
+    // socket
     auto socket_dir = wayland_socket_path().parent_path();
     auto socket_path = wayland_socket_path();
     std::error_code ec;
@@ -356,27 +348,28 @@ pid_t WawonaGuard::spawn()
 
     pid_t pid = fork();
     if (pid < 0) {
-        log_error("[WawonaGuard] fork() failed: %s", strerror(errno));
+        log_error("[WaylandGuard] fork() failed: %s", strerror(errno));
         return -1;
     }
     if (pid == 0) {
-        // Child: exec wawona
+        // Child: exec muplar-wayland
         std::string socket_dir_str = socket_dir.string();
         std::string socket_name = socket_path.filename().string();
         setenv("XDG_RUNTIME_DIR", socket_dir_str.c_str(), 1);
         setenv("WAYLAND_DISPLAY", socket_name.c_str(), 1);
 
-        std::string wawona_str = wawona.string();
-        char *argv[] = {const_cast<char *>(wawona_str.c_str()), nullptr};
-        execve(wawona_str.c_str(), argv, get_environ());
-        log_error("[WawonaGuard] execve failed: %s", strerror(errno));
+        std::string wayland_bin_str = wayland_bin.string();
+        char *argv[] = {const_cast<char *>(wayland_bin_str.c_str()), nullptr};
+        execve(wayland_bin_str.c_str(), argv, get_environ());
+        log_error("[WaylandGuard] execve failed: %s", strerror(errno));
         _exit(127);
     }
-    log_info("[WawonaGuard] started pid=%d path=%s", (int) pid, wawona.c_str());
+    log_info("[WaylandGuard] started pid=%d path=%s", (int) pid,
+             wayland_bin.c_str());
     return pid;
 }
 
-void WawonaGuard::start()
+void WaylandGuard::start()
 {
     if (monitor_thread_.joinable())
         return;  // already started
@@ -385,7 +378,7 @@ void WawonaGuard::start()
     monitor_thread_ = std::thread([this] { monitor_loop(); });
 }
 
-void WawonaGuard::stop()
+void WaylandGuard::stop()
 {
     stop_requested_.store(true);
 
@@ -399,7 +392,7 @@ void WawonaGuard::stop()
                 break;
         }
         if (kill(pid, 0) == 0) {
-            log_warn("[WawonaGuard] escalating to SIGKILL pid=%d", (int) pid);
+            log_warn("[WaylandGuard] escalating to SIGKILL pid=%d", (int) pid);
             kill(pid, SIGKILL);
         }
         waitpid(pid, nullptr, 0);
@@ -410,13 +403,13 @@ void WawonaGuard::stop()
         monitor_thread_.join();
 }
 
-bool WawonaGuard::is_running() const
+bool WaylandGuard::is_running() const
 {
     pid_t pid = pid_.load();
     return pid > 0 && kill(pid, 0) == 0;
 }
 
-void WawonaGuard::apply_backoff()
+void WaylandGuard::apply_backoff()
 {
     if (current_delay_ms_ <= 0) {
         current_delay_ms_ =
@@ -428,7 +421,7 @@ void WawonaGuard::apply_backoff()
                  policy_.max_delay_ms);
 }
 
-void WawonaGuard::monitor_loop()
+void WaylandGuard::monitor_loop()
 {
     int stop_pipe[2] = {-1, -1};
     make_pipe(stop_pipe);
@@ -445,7 +438,7 @@ void WawonaGuard::monitor_loop()
 
             if ((int) crash_times_.size() >= policy_.max_crashes_in_window) {
                 log_warn(
-                    "[WawonaGuard] crash rate too high (%zu crashes in %ds), "
+                    "[WaylandGuard] crash rate too high (%zu crashes in %ds), "
                     "stopping restarts",
                     crash_times_.size(), policy_.crash_window_sec);
                 break;
@@ -475,7 +468,7 @@ void WawonaGuard::monitor_loop()
 
         if (!poll_for_socket(wayland_socket_path(), 5000)) {
             log_warn(
-                "[WawonaGuard] pid=%d did not create Wayland socket %s; "
+                "[WaylandGuard] pid=%d did not create Wayland socket %s; "
                 "terminating",
                 (int) pid, wayland_socket_path().c_str());
             kill(pid, SIGTERM);
@@ -499,7 +492,7 @@ void WawonaGuard::monitor_loop()
             break;  // stop requested
 
         int exit_code = WIFEXITED(status) ? WEXITSTATUS(status) : -1;
-        log_warn("[WawonaGuard] exited (status=%d), will restart", exit_code);
+        log_warn("[WaylandGuard] exited (status=%d), will restart", exit_code);
 
         crash_times_.push_back(steady_clock::now());
         apply_backoff();
@@ -511,7 +504,7 @@ void WawonaGuard::monitor_loop()
         close(stop_pipe[0]);
     if (stop_pipe[1] >= 0)
         close(stop_pipe[1]);
-    log_info("[WawonaGuard] monitor thread exiting");
+    log_info("[WaylandGuard] monitor thread exiting");
 }
 #endif
 
@@ -764,7 +757,7 @@ void WineServerGuard::monitor_loop()
 // ---------------------------------------------------------------------------
 
 SupervisorService::SupervisorService()
-    : wawona_guard_(std::make_unique<WawonaGuard>())
+    : wayland_guard_(std::make_unique<WaylandGuard>())
 {
 }
 
@@ -805,7 +798,7 @@ void SupervisorService::start(int poll_interval_ms)
 
     // Both of these can round-trip to the main queue, so neither may run while
     // lifecycle_mu_ is held. See the invariant note on the member.
-    wawona_guard_->start();
+    wayland_guard_->start();
     sync_wine_guards();
 
     bool still_running;
@@ -841,7 +834,7 @@ void SupervisorService::stop()
             poll_thread_.join();
     }
 
-    // Deliberately outside the lock: wawona_guard_->stop() reaches
+    // Deliberately outside the lock: wayland_guard_->stop() reaches
     // MuplarWawonaStopInProcess, which dispatch_sync's to the main queue when
     // called from a background thread -- and this is called from one, off
     // applicationShouldTerminate:. Holding lifecycle_mu_ across that let the
@@ -859,7 +852,7 @@ void SupervisorService::stop_guards()
         wine_guards_.clear();
     }
 
-    wawona_guard_->stop();
+    wayland_guard_->stop();
 }
 
 void SupervisorService::on_prefix_created(const prefix::PrefixLayout &layout)

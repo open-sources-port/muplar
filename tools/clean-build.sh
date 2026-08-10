@@ -8,7 +8,7 @@ find build -mindepth 1 -maxdepth 1 \
   ! -name busybox-x86_64 \
   ! -name busybox-aarch64 \
   ! -name busybox_external-prefix \
-  ! -name wawona_external-prefix \
+  ! -name muplar_wayland_external-prefix \
   ! -name launcher3 \
   ! -name bin \
   -exec rm -rfv {} +

@@ -1120,14 +1120,14 @@ static void ensure_linux_unprivileged_user(const std::filesystem::path &rootfs)
         "if [ -z \"${WAYLAND_DISPLAY:-}\" ]; then "
         "WAYLAND_DISPLAY=wayland-0; fi\n"
         "if [ -z \"${XDG_RUNTIME_DIR:-}\" ]; then\n"
-        "  for d in /tmp/wawona-*; do\n"
+        "  for d in /tmp/muplar-wayland-*; do\n"
         "    [ -S \"$d/$WAYLAND_DISPLAY\" ] || continue\n"
         "    XDG_RUNTIME_DIR=$d\n"
         "    break\n"
         "  done\n"
         "fi\n"
         "if [ -z \"${XDG_RUNTIME_DIR:-}\" ]; then "
-        "XDG_RUNTIME_DIR=/tmp/wawona-$(id -u); fi\n"
+        "XDG_RUNTIME_DIR=/tmp/muplar-wayland-$(id -u); fi\n"
         "export XDG_RUNTIME_DIR WAYLAND_DISPLAY\n"
         "export XDG_SESSION_TYPE=${XDG_SESSION_TYPE:-wayland}\n"
         "export GDK_BACKEND=${GDK_BACKEND:-wayland,x11}\n"
@@ -1205,14 +1205,14 @@ static void ensure_linux_unprivileged_user(const std::filesystem::path &rootfs)
         "if [ -z \"${WAYLAND_DISPLAY:-}\" ]; then "
         "WAYLAND_DISPLAY=wayland-0; fi\n"
         "if [ -z \"${XDG_RUNTIME_DIR:-}\" ]; then\n"
-        "  for d in /tmp/wawona-*; do\n"
+        "  for d in /tmp/muplar-wayland-*; do\n"
         "    [ -S \"$d/$WAYLAND_DISPLAY\" ] || continue\n"
         "    XDG_RUNTIME_DIR=$d\n"
         "    break\n"
         "  done\n"
         "fi\n"
         "if [ -z \"${XDG_RUNTIME_DIR:-}\" ]; then "
-        "XDG_RUNTIME_DIR=/tmp/wawona-$(id -u); fi\n"
+        "XDG_RUNTIME_DIR=/tmp/muplar-wayland-$(id -u); fi\n"
         "if [ -z \"${XDG_SESSION_TYPE:-}\" ]; then "
         "XDG_SESSION_TYPE=wayland; fi\n"
         "if [ -z \"${GDK_BACKEND:-}\" ]; then "
@@ -1441,10 +1441,11 @@ static void link_host_socket_into_rootfs(
     }
 }
 
-static std::filesystem::path default_wawona_runtime_dir()
+static std::filesystem::path default_muplar_wayland_runtime_dir()
 {
     return std::filesystem::path("/tmp") /
-           ("wawona-" + std::to_string(static_cast<unsigned long>(getuid())));
+           ("muplar-wayland-" +
+            std::to_string(static_cast<unsigned long>(getuid())));
 }
 
 static void publish_display_socket_impl(const std::filesystem::path &rootfs)
@@ -1452,7 +1453,7 @@ static void publish_display_socket_impl(const std::filesystem::path &rootfs)
     const char *wayland_display = std::getenv("WAYLAND_DISPLAY");
     if (!wayland_display || !wayland_display[0]) {
         link_host_socket_into_rootfs(
-            rootfs, default_wawona_runtime_dir() / "wayland-0");
+            rootfs, default_muplar_wayland_runtime_dir() / "wayland-0");
         return;
     }
 
@@ -1462,11 +1463,11 @@ static void publish_display_socket_impl(const std::filesystem::path &rootfs)
         return;
     }
 
-    // The guest is pointed at /tmp/wawona-<uid> regardless of what the host's
-    // XDG_RUNTIME_DIR says, so publish there first and at the host's own
+    // The guest is pointed at /tmp/muplar-wayland-<uid> regardless of what the
+    // host's XDG_RUNTIME_DIR says, so publish there first and at the host's own
     // runtime dir second when the two differ.
     std::filesystem::path guest_visible =
-        default_wawona_runtime_dir() / wayland_path;
+        default_muplar_wayland_runtime_dir() / wayland_path;
     link_host_socket_into_rootfs(rootfs, guest_visible);
 
     const char *runtime_dir = std::getenv("XDG_RUNTIME_DIR");
@@ -3147,7 +3148,7 @@ static void pass_linux_display_environment(std::vector<std::string> &env)
         pass_host_env_if_set(env, name);
 
     set_guest_env_if_missing(env, "XDG_RUNTIME_DIR",
-                             default_wawona_runtime_dir().string());
+                             default_muplar_wayland_runtime_dir().string());
     set_guest_env_if_missing(env, "WAYLAND_DISPLAY", "wayland-0");
     set_guest_env_if_missing(env, "XDG_SESSION_TYPE", "wayland");
     set_guest_env_if_missing(env, "GDK_BACKEND", "wayland,x11");

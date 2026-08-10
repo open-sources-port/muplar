@@ -76,7 +76,7 @@ if [[ "${1:-}" == "--build" ]]; then
     done
     ./tools/configure-build.sh
     ninja -C build elfuse_external
-    ninja -C build wawona_external
+    ninja -C build muplar_wayland_external
     cmake --build build
     echo "build: OK"
 fi
