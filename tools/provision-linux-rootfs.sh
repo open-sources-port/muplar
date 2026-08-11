@@ -162,6 +162,12 @@ EOF
     fi
 }
 
+clean_runtime_sysusers_conf_dirs() {
+    [[ "$DISTRO" == "ubuntu" || "$DISTRO" == "debian" ]] || return 0
+    run_guest_root \
+        'if [ -d /run/sysusers.d ]; then find /run/sysusers.d -mindepth 1 -maxdepth 1 -type d -name "*.conf" -exec rm -rf {} + 2>/dev/null || true; fi'
+}
+
 ensure_debconf_pipe_compat() {
     local root="$1"
     [[ "$DISTRO" == "ubuntu" || "$DISTRO" == "debian" ]] || return 0
@@ -279,8 +285,9 @@ install_terminal() {
 
     case "$DISTRO" in
         ubuntu|debian)
+            clean_runtime_sysusers_conf_dirs || true
             run_guest_root \
-                "export DEBIAN_FRONTEND=noninteractive DEBCONF_NONINTERACTIVE_SEEN=true TZ=Etc/UTC; apt-get update && apt-get install -y $terminal_pkg" || rc=$?
+                "export DEBIAN_FRONTEND=noninteractive DEBCONF_NONINTERACTIVE_SEEN=true TZ=Etc/UTC; if [ -d /run/sysusers.d ]; then find /run/sysusers.d -mindepth 1 -maxdepth 1 -type d -name '*.conf' -exec rm -rf {} + 2>/dev/null || true; fi; apt-get update && apt-get install -y $terminal_pkg" || rc=$?
             ;;
 
         alpine)
