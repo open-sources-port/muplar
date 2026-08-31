@@ -7328,6 +7328,17 @@ jint Java_android_view_SurfaceControl_nativeGetTransformHint(JNIEnv *env,
     return 0;
 }
 
+void Java_android_view_SurfaceControl_nativeSetTransformHint(JNIEnv *env,
+                                                             jclass clazz,
+                                                             jlong surface,
+                                                             jint transformHint)
+{
+    (void) env;
+    (void) clazz;
+    (void) surface;
+    (void) transformHint;
+}
+
 jboolean Java_android_graphics_Region_contains(JNIEnv *env,
                                                jobject thiz,
                                                jint x,
@@ -9721,6 +9732,9 @@ JNIEXPORT jint JNICALL JNI_OnLoad(JavaVM *vm, void *reserved)
     muplar_register_one(
         env, cls, "nativeGetTransformHint", "(J)I",
         (void *) Java_android_view_SurfaceControl_nativeGetTransformHint);
+    muplar_register_one(
+        env, cls, "nativeSetTransformHint", "(JI)V",
+        (void *) Java_android_view_SurfaceControl_nativeSetTransformHint);
 
     cls = (*env)->FindClass(env, "android/os/SystemClock");
     if (!cls) {
