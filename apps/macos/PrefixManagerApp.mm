@@ -3347,12 +3347,12 @@ static NSString* MapLinuxIconToSFSymbol(NSString* icon)
         if (!task || !task.isRunning)
             return;
 
-        if (attempts >= 300) {
+        if (attempts >= 600) {
             [self->_linuxLaunchTokens removeObjectForKey:key];
             [self->_launchingAppPaths removeObject:key];
             [self->_appsTableView reloadData];
             kill(-task.processIdentifier, SIGKILL);
-            [self showError:@"The Linux application did not create a window within 30 seconds and was stopped."];
+            [self showError:@"The Linux application did not create a window within 60 seconds and was stopped."];
             return;
         }
 

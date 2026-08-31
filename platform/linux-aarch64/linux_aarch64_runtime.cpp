@@ -146,6 +146,12 @@ int LinuxAarch64Runtime::run(const PlatformLaunchConfig &config)
 
     if (config.active_prefix) {
         ensure_linux_guest_x11_socket_dir(*config.active_prefix);
+        // Refresh the compositor socket link. The inode changes on every
+        // rebind, so the link has to be replaced right before the guest boots
+        // rather than trusted from an earlier launch -- and doing it here
+        // rather than in each entry point means no caller can start a client
+        // through a link that has gone stale.
+        prefix::publish_display_socket(config.active_prefix->rootfs);
         guest_cfg.inherit_host_env = false;
         if (!config.guest_env.empty()) {
             guest_cfg.env = config.guest_env;
