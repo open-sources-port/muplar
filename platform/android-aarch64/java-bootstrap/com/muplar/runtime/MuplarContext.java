@@ -52,6 +52,7 @@ public final class MuplarContext extends ContextWrapper {
     private final LayoutInflater layoutInflater;
     private final Object launcherApps;
     private final Object statsManager;
+    private final Object inputMethodManager;
     private final ContentResolver contentResolver;
     private final PackageManager packageManager;
     private final IBinder activityToken = new Binder();
@@ -92,6 +93,7 @@ public final class MuplarContext extends ContextWrapper {
         this.packageManager =
             new MuplarPackageManager(this.packageName, applicationInfo, resources);
         this.statsManager = new android.app.StatsManager();
+        this.inputMethodManager = createInputMethodManager(this);
     }
 
     @Override
@@ -394,6 +396,9 @@ public final class MuplarContext extends ContextWrapper {
         if (Context.LAYOUT_INFLATER_SERVICE.equals(name)) {
             return layoutInflater;
         }
+        if (Context.INPUT_METHOD_SERVICE.equals(name) || "input_method".equals(name)) {
+            return inputMethodManager;
+        }
         if ("launcherapps".equals(name)) {
             return launcherApps;
         }
@@ -537,10 +542,59 @@ public final class MuplarContext extends ContextWrapper {
             return "stats";
         }
         if (serviceClass != null &&
+            "android.view.inputmethod.InputMethodManager".equals(serviceClass.getName())) {
+            return Context.INPUT_METHOD_SERVICE;
+        }
+        if (serviceClass != null &&
             "android.app.admin.DevicePolicyManager".equals(serviceClass.getName())) {
             return Context.DEVICE_POLICY_SERVICE;
         }
         return serviceClass == null ? null : serviceClass.getName();
+    }
+
+    private static Object createInputMethodManager(Context context) {
+        try {
+            Class<?> type = Class.forName("android.view.inputmethod.InputMethodManager");
+            Object imm = null;
+            try {
+                java.lang.reflect.Constructor<?> ctor =
+                    type.getDeclaredConstructor(Looper.class);
+                ctor.setAccessible(true);
+                imm = ctor.newInstance(Looper.getMainLooper());
+            } catch (Throwable ignored) {
+                try {
+                    java.lang.reflect.Constructor<?> ctor =
+                        type.getDeclaredConstructor();
+                    ctor.setAccessible(true);
+                    imm = ctor.newInstance();
+                } catch (Throwable ignored2) {
+                    imm = allocateWithoutConstructor(type);
+                }
+            }
+            if (imm != null) {
+                setFieldIfPresent(imm, "mContext", context);
+                setFieldIfPresent(imm, "mLock", new Object());
+                setFieldIfPresent(imm, "mMainLooper", Looper.getMainLooper());
+                try {
+                    Class<?> hClass = Class.forName("android.view.inputmethod.InputMethodManager$H");
+                    Object hInstance = allocateWithoutConstructor(hClass);
+                    setFieldIfPresent(hInstance, "mLooper", Looper.getMainLooper());
+                    setFieldIfPresent(imm, "mH", hInstance);
+                } catch (Throwable ignored) {
+                    setFieldIfPresent(imm, "mH", new Object());
+                }
+                try {
+                    Class<?> delegateClass =
+                        Class.forName("android.view.inputmethod.InputMethodManager$DelegateImpl");
+                    Object delegate = allocateWithoutConstructor(delegateClass);
+                    setFieldIfPresent(imm, "mDelegate", delegate);
+                } catch (Throwable ignored) {
+                }
+            }
+            return imm;
+        } catch (Throwable ignored) {
+            return null;
+        }
     }
 
     private static Object createLauncherApps(Context context) {
@@ -1144,11 +1198,17 @@ public final class MuplarContext extends ContextWrapper {
     }
 
     private static void setFieldIfPresent(Object target, String name, Object value) {
-        try {
-            java.lang.reflect.Field field = target.getClass().getDeclaredField(name);
-            field.setAccessible(true);
-            field.set(target, value);
-        } catch (Throwable ignored) {
+        if (target == null || name == null) return;
+        Class<?> cls = target.getClass();
+        while (cls != null && cls != Object.class) {
+            try {
+                java.lang.reflect.Field field = cls.getDeclaredField(name);
+                field.setAccessible(true);
+                field.set(target, value);
+                return;
+            } catch (Throwable ignored) {
+                cls = cls.getSuperclass();
+            }
         }
     }
 
