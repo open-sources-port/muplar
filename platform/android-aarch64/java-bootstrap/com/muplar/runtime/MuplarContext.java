@@ -587,6 +587,7 @@ public final class MuplarContext extends ContextWrapper {
                     Class<?> delegateClass =
                         Class.forName("android.view.inputmethod.InputMethodManager$DelegateImpl");
                     Object delegate = allocateWithoutConstructor(delegateClass);
+                    setFieldIfPresent(delegate, "this$0", imm);
                     setFieldIfPresent(imm, "mDelegate", delegate);
                 } catch (Throwable ignored) {
                 }
