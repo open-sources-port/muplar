@@ -7339,6 +7339,136 @@ void Java_android_view_SurfaceControl_nativeSetTransformHint(JNIEnv *env,
     (void) transformHint;
 }
 
+jlong Java_android_animation_PropertyValuesHolder_nGetIntMethod(
+    JNIEnv *env, jclass clazz, jclass targetClass, jstring methodName)
+{
+    (void) env;
+    (void) clazz;
+    (void) targetClass;
+    (void) methodName;
+    return 0;
+}
+
+jlong Java_android_animation_PropertyValuesHolder_nGetFloatMethod(
+    JNIEnv *env, jclass clazz, jclass targetClass, jstring methodName)
+{
+    (void) env;
+    (void) clazz;
+    (void) targetClass;
+    (void) methodName;
+    return 0;
+}
+
+jlong Java_android_animation_PropertyValuesHolder_nGetMultipleIntMethod(
+    JNIEnv *env, jclass clazz, jclass targetClass, jstring methodName, jint numParameters)
+{
+    (void) env;
+    (void) clazz;
+    (void) targetClass;
+    (void) methodName;
+    (void) numParameters;
+    return 0;
+}
+
+jlong Java_android_animation_PropertyValuesHolder_nGetMultipleFloatMethod(
+    JNIEnv *env, jclass clazz, jclass targetClass, jstring methodName, jint numParameters)
+{
+    (void) env;
+    (void) clazz;
+    (void) targetClass;
+    (void) methodName;
+    (void) numParameters;
+    return 0;
+}
+
+void Java_android_animation_PropertyValuesHolder_nCallIntMethod(
+    JNIEnv *env, jclass clazz, jobject target, jlong methodID, jint arg)
+{
+    (void) env;
+    (void) clazz;
+    (void) target;
+    (void) methodID;
+    (void) arg;
+}
+
+void Java_android_animation_PropertyValuesHolder_nCallFloatMethod(
+    JNIEnv *env, jclass clazz, jobject target, jlong methodID, jfloat arg)
+{
+    (void) env;
+    (void) clazz;
+    (void) target;
+    (void) methodID;
+    (void) arg;
+}
+
+void Java_android_animation_PropertyValuesHolder_nCallMultipleIntMethod(
+    JNIEnv *env, jclass clazz, jobject target, jlong methodID, jintArray args)
+{
+    (void) env;
+    (void) clazz;
+    (void) target;
+    (void) methodID;
+    (void) args;
+}
+
+void Java_android_animation_PropertyValuesHolder_nCallMultipleFloatMethod(
+    JNIEnv *env, jclass clazz, jobject target, jlong methodID, jfloatArray args)
+{
+    (void) env;
+    (void) clazz;
+    (void) target;
+    (void) methodID;
+    (void) args;
+}
+
+void Java_android_animation_PropertyValuesHolder_nCallTwoIntMethod(
+    JNIEnv *env, jclass clazz, jobject target, jlong methodID, jint arg1, jint arg2)
+{
+    (void) env;
+    (void) clazz;
+    (void) target;
+    (void) methodID;
+    (void) arg1;
+    (void) arg2;
+}
+
+void Java_android_animation_PropertyValuesHolder_nCallFourIntMethod(
+    JNIEnv *env, jclass clazz, jobject target, jlong methodID, jint arg1, jint arg2, jint arg3, jint arg4)
+{
+    (void) env;
+    (void) clazz;
+    (void) target;
+    (void) methodID;
+    (void) arg1;
+    (void) arg2;
+    (void) arg3;
+    (void) arg4;
+}
+
+void Java_android_animation_PropertyValuesHolder_nCallTwoFloatMethod(
+    JNIEnv *env, jclass clazz, jobject target, jlong methodID, jfloat arg1, jfloat arg2)
+{
+    (void) env;
+    (void) clazz;
+    (void) target;
+    (void) methodID;
+    (void) arg1;
+    (void) arg2;
+}
+
+void Java_android_animation_PropertyValuesHolder_nCallFourFloatMethod(
+    JNIEnv *env, jclass clazz, jobject target, jlong methodID, jfloat arg1, jfloat arg2, jfloat arg3, jfloat arg4)
+{
+    (void) env;
+    (void) clazz;
+    (void) target;
+    (void) methodID;
+    (void) arg1;
+    (void) arg2;
+    (void) arg3;
+    (void) arg4;
+}
+
 jboolean Java_android_graphics_Region_contains(JNIEnv *env,
                                                jobject thiz,
                                                jint x,
@@ -9735,6 +9865,36 @@ JNIEXPORT jint JNICALL JNI_OnLoad(JavaVM *vm, void *reserved)
     muplar_register_one(
         env, cls, "nativeSetTransformHint", "(JI)V",
         (void *) Java_android_view_SurfaceControl_nativeSetTransformHint);
+
+    cls = (*env)->FindClass(env, "android/animation/PropertyValuesHolder");
+    if (cls) {
+        muplar_register_one(env, cls, "nGetIntMethod", "(Ljava/lang/Class;Ljava/lang/String;)J",
+                            (void *) Java_android_animation_PropertyValuesHolder_nGetIntMethod);
+        muplar_register_one(env, cls, "nGetFloatMethod", "(Ljava/lang/Class;Ljava/lang/String;)J",
+                            (void *) Java_android_animation_PropertyValuesHolder_nGetFloatMethod);
+        muplar_register_one(env, cls, "nGetMultipleIntMethod", "(Ljava/lang/Class;Ljava/lang/String;I)J",
+                            (void *) Java_android_animation_PropertyValuesHolder_nGetMultipleIntMethod);
+        muplar_register_one(env, cls, "nGetMultipleFloatMethod", "(Ljava/lang/Class;Ljava/lang/String;I)J",
+                            (void *) Java_android_animation_PropertyValuesHolder_nGetMultipleFloatMethod);
+        muplar_register_one(env, cls, "nCallIntMethod", "(Ljava/lang/Object;JI)V",
+                            (void *) Java_android_animation_PropertyValuesHolder_nCallIntMethod);
+        muplar_register_one(env, cls, "nCallFloatMethod", "(Ljava/lang/Object;JF)V",
+                            (void *) Java_android_animation_PropertyValuesHolder_nCallFloatMethod);
+        muplar_register_one(env, cls, "nCallMultipleIntMethod", "(Ljava/lang/Object;J[I)V",
+                            (void *) Java_android_animation_PropertyValuesHolder_nCallMultipleIntMethod);
+        muplar_register_one(env, cls, "nCallMultipleFloatMethod", "(Ljava/lang/Object;J[F)V",
+                            (void *) Java_android_animation_PropertyValuesHolder_nCallMultipleFloatMethod);
+        muplar_register_one(env, cls, "nCallTwoIntMethod", "(Ljava/lang/Object;JII)V",
+                            (void *) Java_android_animation_PropertyValuesHolder_nCallTwoIntMethod);
+        muplar_register_one(env, cls, "nCallFourIntMethod", "(Ljava/lang/Object;JIIII)V",
+                            (void *) Java_android_animation_PropertyValuesHolder_nCallFourIntMethod);
+        muplar_register_one(env, cls, "nCallTwoFloatMethod", "(Ljava/lang/Object;JFF)V",
+                            (void *) Java_android_animation_PropertyValuesHolder_nCallTwoFloatMethod);
+        muplar_register_one(env, cls, "nCallFourFloatMethod", "(Ljava/lang/Object;JFFFF)V",
+                            (void *) Java_android_animation_PropertyValuesHolder_nCallFourFloatMethod);
+    } else {
+        (*env)->ExceptionClear(env);
+    }
 
     cls = (*env)->FindClass(env, "android/os/SystemClock");
     if (!cls) {

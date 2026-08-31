@@ -18,9 +18,11 @@ mkdir -p "$(dirname "$LOG")"
     >"$LOG" 2>&1 &
 PID=$!
 cleanup() {
-    pkill -TERM -P "$PID" 2>/dev/null || true
-    kill "$PID" 2>/dev/null || true
-    wait "$PID" 2>/dev/null || true
+    set +e
+    pkill -TERM -P "$PID" 2>/dev/null
+    kill "$PID" 2>/dev/null
+    wait "$PID" 2>/dev/null
+    exit 0
 }
 trap cleanup EXIT
 
@@ -65,4 +67,8 @@ python3 "$SCRIPT_DIR/test-touch-dispatch.py" "$SOCK_PATH"
 
 sleep 0.5
 echo "--- Log Output After Touch Dispatch ---"
-grep -iE 'motion trace|dispatch|MotionEvent|SIGSEGV|exit code|fault|crash' "$LOG" || tail -40 "$LOG"
+if grep -q -iE 'motion trace|dispatch|MotionEvent|SIGSEGV|exit code|fault|crash' "$LOG"; then
+    grep -iE 'motion trace|dispatch|MotionEvent|SIGSEGV|exit code|fault|crash' "$LOG"
+else
+    echo "(No motion trace lines in log)"
+fi
