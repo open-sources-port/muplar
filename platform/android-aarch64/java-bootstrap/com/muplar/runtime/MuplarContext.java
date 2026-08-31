@@ -835,10 +835,34 @@ public final class MuplarContext extends ContextWrapper {
     private static Object createWindowManager(final Context context) {
         try {
             Class<?> impl = Class.forName("android.view.WindowManagerImpl");
-            java.lang.reflect.Constructor<?> ctor =
-                impl.getDeclaredConstructor(Context.class);
-            ctor.setAccessible(true);
-            return ctor.newInstance(context);
+            for (java.lang.reflect.Constructor<?> ctor : impl.getDeclaredConstructors()) {
+                ctor.setAccessible(true);
+                Class<?>[] params = ctor.getParameterTypes();
+                if (params.length == 1 && params[0].isAssignableFrom(context.getClass())) {
+                    return ctor.newInstance(context);
+                }
+            }
+            for (java.lang.reflect.Constructor<?> ctor : impl.getDeclaredConstructors()) {
+                ctor.setAccessible(true);
+                Class<?>[] params = ctor.getParameterTypes();
+                Object[] args = new Object[params.length];
+                for (int i = 0; i < params.length; i++) {
+                    if (params[i].isAssignableFrom(context.getClass())) {
+                        args[i] = context;
+                    } else if (params[i] == Boolean.TYPE) {
+                        args[i] = Boolean.FALSE;
+                    } else if (params[i] == Integer.TYPE) {
+                        args[i] = Integer.valueOf(0);
+                    }
+                }
+                try {
+                    return ctor.newInstance(args);
+                } catch (Throwable ignored) {
+                }
+            }
+            Object manager = allocateWithoutConstructor(impl);
+            setFieldIfPresent(manager, "mContext", context);
+            return manager;
         } catch (Throwable ignored) {
         }
 

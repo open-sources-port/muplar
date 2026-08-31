@@ -694,28 +694,43 @@ public final class ArtApkMain {
             // and NPEs calling getApplicationInfo() on null.
             android.content.Context context =
                 (android.content.Context) activityObj;
+            android.content.Context baseContext =
+                (activityObj instanceof android.content.ContextWrapper)
+                    ? ((android.content.ContextWrapper) activityObj).getBaseContext()
+                    : context;
+            if (baseContext == null) {
+                baseContext = context;
+            }
             Object window = MuplarWindow.create(context);
             Object windowManager =
-                context.getSystemService(android.content.Context.WINDOW_SERVICE);
+                baseContext.getSystemService(android.content.Context.WINDOW_SERVICE);
             if (windowManager != null) {
-                java.lang.reflect.Method setWindowManager =
-                    Class.forName("android.view.Window").getMethod(
-                        "setWindowManager",
-                        Class.forName("android.view.WindowManager"),
-                        Class.forName("android.os.IBinder"),
-                        String.class,
-                        Boolean.TYPE);
-                setWindowManager.invoke(
-                    window,
-                    windowManager,
-                    new android.os.Binder(),
-                    packageName,
-                    Boolean.FALSE);
-                java.lang.reflect.Method getWindowManager =
-                    Class.forName("android.view.Window").getMethod(
-                        "getWindowManager");
-                setField(activityObj, "mWindowManager",
-                    getWindowManager.invoke(window));
+                try {
+                    java.lang.reflect.Method setWindowManager =
+                        Class.forName("android.view.Window").getMethod(
+                            "setWindowManager",
+                            Class.forName("android.view.WindowManager"),
+                            Class.forName("android.os.IBinder"),
+                            String.class,
+                            Boolean.TYPE);
+                    setWindowManager.invoke(
+                        window,
+                        windowManager,
+                        new android.os.Binder(),
+                        packageName,
+                        Boolean.FALSE);
+                } catch (Throwable t) {
+                    System.err.println("[Muplar/ART] Window.setWindowManager fallback: " + t);
+                }
+                Object wm = null;
+                try {
+                    java.lang.reflect.Method getWindowManager =
+                        Class.forName("android.view.Window").getMethod(
+                            "getWindowManager");
+                    wm = getWindowManager.invoke(window);
+                } catch (Throwable ignored) {
+                }
+                setField(activityObj, "mWindowManager", wm != null ? wm : windowManager);
             }
             setField(activityObj, "mWindow", window);
             System.out.println("[Muplar/ART] window attached");

@@ -40,44 +40,23 @@ usable user experience?"
   from the device window (`AndroidDeviceShell.mm` -> muplard `DeviceInput`
   opcode -> `FrameworkDeviceController.readInputs()`) reach
   `MotionEvent.obtain(...)` and construct a valid event object successfully.
-- `LauncherApps`/`PackageManager` app discovery (2026-07-29): the host
-  (`PrefixManagerApp.mm`'s `scanAndroidApps:`) now writes one record per
-  installed, non-launcher APK — `package`/`activity`/`label`/`apk`,
-  `---`-separated — to `registry_dir/android-packages.properties` using
-  the same `apk::classify_apk` manifest parser Instance Manager's own app
-  list already relies on. The guest reads it back via muplard's
-  previously-unused `QueryPackages` opcode (`FrameworkServiceClient`,
-  operation `"query-packages"`) and `MuplarServices.launcherAppsValue()`
-  builds real `ActivityInfo`/`ApplicationInfo`/`IncrementalStatesInfo`/
-  `LauncherActivityInfoInternal` objects via reflection (field names
-  verified via `dexdump` against `framework.jar`) for
-  `getLauncherActivities`/`getUserProfiles`/`isActivityEnabled`/
-  `isPackageEnabled`, wrapped in a real `ParceledListSlice`. The whole
-  path is wrapped in a top-level `catch (Throwable)` that logs and falls
-  back to `defaultValue(returnType)` — this class runs inside a Java
-  `Proxy` `InvocationHandler` standing in for a real Binder, so any
-  checked exception not assignable to the AIDL method's declared
-  `throws` gets wrapped in `UndeclaredThrowableException` by the JVM and
-  propagates as if the interface method itself threw it; do not remove
-  this catch. Confirmed via `visual-smoke.sh`'s standalone launch (passes
-  cleanly, no crash/hang) and by inspecting the written registry file
-  directly — **not yet confirmed visually in the interactive device
-  window**, because of the separate frame-bridge issue below.
+- Touch input dispatch (2026-08-31): `MuplarContext.createWindowManager` and
+  `ArtApkMain.attachWindow` were updated to resolve `WindowManagerImpl` through
+  `baseContext` (preventing `Activity.getSystemService(WINDOW_SERVICE)` from
+  returning `null` before `mWindowManager` is set). This resolved an NPE during
+  `QuickstepLauncher.onCreate` (`UnfoldMoveFromCenterAnimator.<init>`), allowing
+  the View hierarchy to fully initialize. Touch dispatch (`ACTION_DOWN` /
+  `ACTION_UP`) via `muplard` `DeviceInput` now passes end-to-end through
+  `dispatchTouchEvent` and `recycle()` without crashing (`test-touch-smoke.sh`
+  passes cleanly).
 
 ## User-Visible Problem
 
-The device window session/tab UI and Home/Recents/Settings dispatch all work
-now via the native socket transport, and `LauncherApps` now returns real
-installed-app data. Three things still block a real "Android device" feel:
-Back can hang the whole session on some apps, touch input reaches
-`MotionEvent` construction but crashes the guest before `dispatchTouchEvent`
-finishes, and the device window's frame bridge only captures a screenshot
-once per device action rather than continuously, so the window is often
-stuck showing a stale or premature frame (see Main Blockers for all three).
-The target experience is a persistent device session that feels like
-BlueStacks or MuMu Player (see [Android Device Window](./device-window.md))
-— touch and frame updates that reliably work end-to-end are prerequisites
-for that.
+The device window session/tab UI, Home/Recents/Settings dispatch, `LauncherApps`
+installed-app query, and touch input dispatch all work now. Two primary items
+remain to achieve a seamless "Android device" feel: Back button hangs on
+apps driving un-ticked animations, and continuous frame rendering needs
+optimization under interpreter performance.
 
 The product target is documented in:
 
@@ -90,14 +69,9 @@ The product target is documented in:
   `QuickstepLauncher`) blocks the main thread indefinitely and never
   recovers, likely because the animation depends on Choreographer/RenderThread
   frame callbacks this environment does not fully deliver.
-- Touch input crashes the guest process: `MotionEvent` construction (all 44
-  native methods, `nativeInitialize` included) works, and the event reaches
-  `dispatchTouchEvent` on the real `QuickstepLauncher`/View hierarchy, but
-  the guest process dies (native SIGSEGV — `libc: failed to connect to
-  tombstoned` followed by `guest_bootstrap_prepare` / `exit code: 139`,
-  the same crash signature the F-Droid native-launch bug and the two
-  earlier kernel panics share) on essentially the first real touch event,
-  before `dispatchTouchEvent` returns. No Java exception is thrown (it
+- Touch input dispatch: **Resolved (2026-08-31)**. Touch input dispatch now
+  executes cleanly through `dispatchTouchEvent` and `recycle()` without native
+  crashes. Automated test coverage is added in `test-touch-smoke.sh`.
   would be caught and logged) — this is a hard native crash, so it's very
   likely a missing/broken native dependency somewhere inside real
   Quickstep touch handling (ripple/touch-feedback, `VelocityTracker`,
