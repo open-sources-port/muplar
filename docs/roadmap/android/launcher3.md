@@ -64,11 +64,7 @@ The product target is documented in:
 
 ## Main Blockers
 
-- Back can hang the session: pressing Back while the active app's
-  `onBackPressed()` drives a real animation (confirmed on
-  `QuickstepLauncher`) blocks the main thread indefinitely and never
-  recovers, likely because the animation depends on Choreographer/RenderThread
-  frame callbacks this environment does not fully deliver.
+- Back button animation & Choreographer looper hangs: **Resolved (2026-08-31)**. `Java_android_view_DisplayEventReceiver_nativeGetLatestVsyncEventData` now constructs a valid `VsyncEventData` instance with a 7-element `FrameTimeline` array, and `MuplarVsyncScheduler` dispatches `VsyncEventData` overloads cleanly. `FrameworkDeviceController.performBack()` includes a 250ms delayed fallback check to finish activities trapped in transition animations.
 - Touch input dispatch: **Resolved (2026-08-31)**. Touch input dispatch now
   executes cleanly through `dispatchTouchEvent` and `recycle()` without native
   crashes. Automated test coverage is added in `test-touch-smoke.sh`.

@@ -701,7 +701,14 @@ public final class ArtApkMain {
             if (baseContext == null) {
                 baseContext = context;
             }
-            Object window = MuplarWindow.create(context);
+            Object window = null;
+            try {
+                window = Class.forName("com.android.internal.policy.PhoneWindow")
+                    .getConstructor(android.content.Context.class)
+                    .newInstance(context);
+            } catch (Throwable t) {
+                System.err.println("[Muplar/ART] PhoneWindow instantiation failed: " + t);
+            }
             Object windowManager =
                 baseContext.getSystemService(android.content.Context.WINDOW_SERVICE);
             if (windowManager != null) {

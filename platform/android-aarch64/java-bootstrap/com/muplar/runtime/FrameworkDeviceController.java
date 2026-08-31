@@ -83,6 +83,8 @@ public final class FrameworkDeviceController {
     private static final Object lock = new Object();
     private static final Map<String, ActivityRecord> activities =
         new LinkedHashMap<String, ActivityRecord>();
+    private static final ArrayList<String> activityStack =
+        new ArrayList<String>();
     private static final ArrayList<DeviceAction> pendingActions =
         new ArrayList<DeviceAction>();
     private static final ArrayList<DeviceInput> pendingInputs =
@@ -462,7 +464,7 @@ public final class FrameworkDeviceController {
                     moveActiveActivityToBackground();
                 }
             } else if ("recents".equals(next.action)) {
-                System.out.println("[DeviceController] recents tab=" + next.tab);
+                toggleRecents();
             } else if ("focus-tab".equals(next.action)) {
                 if ("launcher".equals(next.tab)) {
                     focusRecord(activityForTab("launcher"));
@@ -636,7 +638,7 @@ public final class FrameworkDeviceController {
     }
 
     private static void performBack() throws Exception {
-        ActivityRecord record = activeRecord();
+        final ActivityRecord record = activeRecord();
         if (record == null || record.activity == null) return;
         try {
             java.lang.reflect.Method onBackPressed =
@@ -646,6 +648,21 @@ public final class FrameworkDeviceController {
             if (isFinishing(record.activity)) {
                 finishRecord(record);
                 removeRecord(record);
+            } else {
+                android.os.Looper looper = android.os.Looper.getMainLooper();
+                if (looper != null) {
+                    new android.os.Handler(looper).postDelayed(new Runnable() {
+                        @Override public void run() {
+                            try {
+                                if (record.activity != null && isFinishing(record.activity)) {
+                                    finishRecord(record);
+                                    removeRecord(record);
+                                }
+                            } catch (Throwable ignored) {
+                            }
+                        }
+                    }, 250);
+                }
             }
             System.out.println("[DeviceController] back dispatched");
             return;
@@ -666,8 +683,44 @@ public final class FrameworkDeviceController {
         System.out.println("[DeviceController] activity backgrounded");
     }
 
+    private static void pushTaskStack(String tab) {
+        synchronized (lock) {
+            activityStack.remove(tab);
+            activityStack.add(tab);
+        }
+    }
+
+    private static String popTaskStack(String tab) {
+        synchronized (lock) {
+            activityStack.remove(tab);
+            if (!activityStack.isEmpty()) {
+                return activityStack.get(activityStack.size() - 1);
+            }
+            return activities.containsKey("launcher") ? "launcher" : "";
+        }
+    }
+
+    private static void toggleRecents() throws Exception {
+        synchronized (lock) {
+            System.out.println("[DeviceController] recents stack=" + activityStack);
+            if (activityStack.size() >= 2) {
+                String previousTab = activityStack.get(activityStack.size() - 2);
+                ActivityRecord record = activities.get(previousTab);
+                if (record != null) {
+                    focusRecord(record);
+                    return;
+                }
+            }
+            ActivityRecord launcher = activities.get("launcher");
+            if (launcher != null) {
+                focusRecord(launcher);
+            }
+        }
+    }
+
     private static void focusRecord(ActivityRecord record) throws Exception {
         if (record == null || record.activity == null) return;
+        pushTaskStack(record.tab);
         ActivityRecord previous = activeRecord();
         if (previous != null && previous != record)
             moveActiveActivityToBackground();
@@ -717,19 +770,13 @@ public final class FrameworkDeviceController {
         synchronized (lock) {
             activities.remove(tabValue);
             wasActive = tabValue.equals(activeTab);
+            newActiveTab = popTaskStack(tabValue);
             if (wasActive) {
-                activeTab = activities.containsKey("launcher")
-                    ? "launcher"
-                    : "";
+                activeTab = newActiveTab;
             }
-            newActiveTab = activeTab;
         }
         if (!"launcher".equals(tabValue))
             FrameworkServiceClient.request("tab-finished", tabValue);
-        // The removed activity's decor view was the frame presenter's
-        // presented root; without this, the device window keeps showing
-        // that (now gone) activity's last-drawn pixels forever instead of
-        // switching back to whatever tab is now active.
         if (wasActive) {
             ActivityRecord next = activityForTab(newActiveTab);
             if (next != null) {

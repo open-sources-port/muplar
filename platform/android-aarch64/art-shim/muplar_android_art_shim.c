@@ -150,19 +150,43 @@ static int muplar_write_all(int fd, const void *data, size_t size)
     return 1;
 }
 
+static int muplar_frame_socket_fd = -1;
+
+static int muplar_get_frame_socket(void)
+{
+    if (muplar_frame_socket_fd >= 0)
+        return muplar_frame_socket_fd;
+    const char *socket_path = getenv("MUPLAR_HOST_WINDOW_FRAME_SOCKET");
+    if (!socket_path || !*socket_path)
+        return -1;
+    struct sockaddr_un addr;
+    memset(&addr, 0, sizeof(addr));
+    addr.sun_family = AF_UNIX;
+    strncpy(addr.sun_path, socket_path, sizeof(addr.sun_path) - 1);
+    int fd = socket(AF_UNIX, SOCK_STREAM, 0);
+    if (fd < 0)
+        return -1;
+    if (connect(fd, (struct sockaddr *) &addr, sizeof(addr)) != 0) {
+        close(fd);
+        return -1;
+    }
+    muplar_frame_socket_fd = fd;
+    fprintf(stderr, "[Muplar/ART] direct frame socket connected: %s\n", socket_path);
+    return muplar_frame_socket_fd;
+}
+
 static int muplar_write_bitmap_frame(struct muplar_bitmap_state *bitmap,
                                      const char *path)
 {
     struct muplar_frame_header header;
-    char tmp_path[512];
     uint8_t *rgba;
     size_t count;
     size_t i;
-    int fd;
-    if (!bitmap || !bitmap->pixels || !path || !*path)
+    int sock_fd;
+
+    if (!bitmap || !bitmap->pixels)
         return 0;
-    if (strlen(path) + 5 >= sizeof(tmp_path))
-        return 0;
+
     count = (size_t) bitmap->width * (size_t) bitmap->height;
     rgba = malloc(count * 4);
     if (!rgba)
@@ -174,17 +198,40 @@ static int muplar_write_bitmap_frame(struct muplar_bitmap_state *bitmap,
         rgba[i * 4 + 2] = (uint8_t) argb;
         rgba[i * 4 + 3] = (uint8_t) (argb >> 24);
     }
-    snprintf(tmp_path, sizeof(tmp_path), "%s.tmp", path);
-    fd = open(tmp_path, O_CREAT | O_TRUNC | O_WRONLY, 0600);
-    if (fd < 0) {
-        free(rgba);
-        return 0;
-    }
+
     header.magic = 0x4d485231u;
     header.width = (uint32_t) bitmap->width;
     header.height = (uint32_t) bitmap->height;
     header.stride_pixels = (uint32_t) bitmap->width;
     header.bytes = count * 4;
+
+    sock_fd = muplar_get_frame_socket();
+    if (sock_fd >= 0) {
+        if (muplar_write_all(sock_fd, &header, sizeof(header)) &&
+            muplar_write_all(sock_fd, rgba, count * 4)) {
+            free(rgba);
+            return 1;
+        }
+        close(sock_fd);
+        muplar_frame_socket_fd = -1;
+    }
+
+    if (!path || !*path) {
+        free(rgba);
+        return 0;
+    }
+
+    char tmp_path[512];
+    if (strlen(path) + 5 >= sizeof(tmp_path)) {
+        free(rgba);
+        return 0;
+    }
+    snprintf(tmp_path, sizeof(tmp_path), "%s.tmp", path);
+    int fd = open(tmp_path, O_CREAT | O_TRUNC | O_WRONLY, 0600);
+    if (fd < 0) {
+        free(rgba);
+        return 0;
+    }
     if (!muplar_write_all(fd, &header, sizeof(header)) ||
         !muplar_write_all(fd, rgba, count * 4)) {
         close(fd);
@@ -6900,15 +6947,65 @@ void Java_android_view_DisplayEventReceiver_nativeScheduleVsync(
                                  state->receiver_global_ref);
 }
 
+static uint64_t muplar_vsync_id_counter = 1;
+
 jobject Java_android_view_DisplayEventReceiver_nativeGetLatestVsyncEventData(
     JNIEnv *env,
     jclass clazz,
     jlong receiver_ptr)
 {
-    (void) env;
     (void) clazz;
     (void) receiver_ptr;
-    return NULL;
+
+    jclass vsyncDataCls = (*env)->FindClass(env, "android/view/DisplayEventReceiver$VsyncEventData");
+    if (!vsyncDataCls) {
+        (*env)->ExceptionClear(env);
+        return NULL;
+    }
+
+    jclass timelineCls = (*env)->FindClass(env, "android/view/DisplayEventReceiver$VsyncEventData$FrameTimeline");
+    if (!timelineCls) {
+        (*env)->ExceptionClear(env);
+        return NULL;
+    }
+
+    jobject vsyncData = (*env)->AllocObject(env, vsyncDataCls);
+    if (!vsyncData) {
+        (*env)->ExceptionClear(env);
+        return NULL;
+    }
+
+    jobject timelineObj = (*env)->AllocObject(env, timelineCls);
+    if (!timelineObj) {
+        (*env)->ExceptionClear(env);
+        return NULL;
+    }
+
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    uint64_t now_ns = (uint64_t) ts.tv_sec * 1000000000ULL + (uint64_t) ts.tv_nsec;
+    uint64_t interval_ns = 16666666ULL;
+
+    jfieldID f_vsyncId = (*env)->GetFieldID(env, timelineCls, "vsyncId", "J");
+    jfieldID f_expected = (*env)->GetFieldID(env, timelineCls, "expectedPresentationTime", "J");
+    jfieldID f_deadline = (*env)->GetFieldID(env, timelineCls, "deadline", "J");
+    if (f_vsyncId) (*env)->SetLongField(env, timelineObj, f_vsyncId, (jlong) muplar_vsync_id_counter++);
+    if (f_expected) (*env)->SetLongField(env, timelineObj, f_expected, (jlong) (now_ns + interval_ns));
+    if (f_deadline) (*env)->SetLongField(env, timelineObj, f_deadline, (jlong) (now_ns + interval_ns * 2));
+
+    jobjectArray timelineArray = (*env)->NewObjectArray(env, 7, timelineCls, timelineObj);
+
+    jfieldID f_frameInterval = (*env)->GetFieldID(env, vsyncDataCls, "frameInterval", "J");
+    jfieldID f_frameTimelines = (*env)->GetFieldID(env, vsyncDataCls, "frameTimelines", "[Landroid/view/DisplayEventReceiver$VsyncEventData$FrameTimeline;");
+    jfieldID f_frameTimelinesLength = (*env)->GetFieldID(env, vsyncDataCls, "frameTimelinesLength", "I");
+    jfieldID f_preferred = (*env)->GetFieldID(env, vsyncDataCls, "preferredFrameTimelineIndex", "I");
+
+    if (f_frameInterval) (*env)->SetLongField(env, vsyncData, f_frameInterval, (jlong) interval_ns);
+    if (f_frameTimelines && timelineArray) (*env)->SetObjectField(env, vsyncData, f_frameTimelines, timelineArray);
+    if (f_frameTimelinesLength) (*env)->SetIntField(env, vsyncData, f_frameTimelinesLength, 1);
+    if (f_preferred) (*env)->SetIntField(env, vsyncData, f_preferred, 0);
+
+    return vsyncData;
 }
 
 jlong Java_android_graphics_Region_nativeConstructor(JNIEnv *env, jclass clazz)

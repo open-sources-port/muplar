@@ -252,7 +252,48 @@ public final class MuplarServices {
                     return value;
                 }
             }
+            if ("android.app.IWallpaperManager".equals(descriptor)) {
+                Object value = wallpaperManagerValue(method, args);
+                if (value != null) {
+                    return value;
+                }
+            }
             return defaultValue(method.getReturnType());
+        }
+
+        private Object wallpaperManagerValue(Method method, Object[] args) {
+            String name = method.getName();
+            if ("getProfileIds".equals(name) || "getProfileIdsWithDisabled".equals(name)) {
+                return new int[] { 0 };
+            }
+            if ("isUserUnlocked".equals(name) || "isUserRunning".equals(name) ||
+                "isWallpaperSupported".equals(name) || "isSetWallpaperAllowed".equals(name)) {
+                return Boolean.TRUE;
+            }
+            if ("getUserSerialNumber".equals(name)) {
+                return Long.valueOf(0L);
+            }
+            if ("getUserHandle".equals(name) || "getWallpaperId".equals(name)) {
+                return Integer.valueOf(1);
+            }
+            if ("getWallpaperColors".equals(name) || "getWallpaperColorsWithFeature".equals(name)) {
+                return createSyntheticWallpaperColors();
+            }
+            return null;
+        }
+
+        private Object createSyntheticWallpaperColors() {
+            try {
+                Class<?> colorsCls = Class.forName("android.app.WallpaperColors");
+                Class<?> colorCls = Class.forName("android.graphics.Color");
+                Method valueOf = colorCls.getMethod("valueOf", Integer.TYPE);
+                Object primaryColor = valueOf.invoke(null, Integer.valueOf(0xFF1E1E1E));
+                Constructor<?> ctor = colorsCls.getConstructor(colorCls, colorCls, colorCls);
+                ctor.setAccessible(true);
+                return ctor.newInstance(primaryColor, null, null);
+            } catch (Throwable ignored) {
+                return null;
+            }
         }
 
         private Object windowManagerValue(Method method, Object[] args)

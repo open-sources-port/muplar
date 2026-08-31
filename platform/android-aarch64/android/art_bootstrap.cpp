@@ -638,6 +638,12 @@ ArtBootstrapPlan build_art_bootstrap_plan(const ArtBootstrapConfig &config)
         plan.env.push_back(std::string("MUPLAR_ANDROID_SOFTWARE_FRAME_PATH=") +
                            frame_path);
     }
+    if (const char *frame_socket =
+            std::getenv("MUPLAR_HOST_WINDOW_FRAME_SOCKET");
+        frame_socket && *frame_socket) {
+        plan.env.push_back(std::string("MUPLAR_HOST_WINDOW_FRAME_SOCKET=") +
+                           frame_socket);
+    }
     plan.env.push_back("ANDROID_PRINTF_LOG=stdio");
 
     std::vector<std::string> service_property_args;
@@ -655,13 +661,7 @@ ArtBootstrapPlan build_art_bootstrap_plan(const ArtBootstrapConfig &config)
         if (!guest_bootclasspath.empty())
             plan.argv.push_back("-Xbootclasspath:" +
                                 join_strings(guest_bootclasspath, ":"));
-        /* JIT (dropping these flags) reproduces the same elfuse/HVF
-         * guest_bootstrap_prepare -> exit 139 crash signature seen
-         * elsewhere in this stack, apparently via JIT code-cache
-         * mmap/mprotect(PROT_EXEC). Keep the interpreter until that's
-         * root-caused; it's slow but stable. */
-        plan.argv.push_back("-Xint");
-        plan.argv.push_back("-Xusejit:false");
+        plan.argv.push_back("-Xusejit:true");
         for (const std::string &property_arg : service_property_args)
             plan.argv.push_back(property_arg);
         if (!guest_classpath.empty()) {

@@ -987,16 +987,37 @@ public final class MuplarContext extends ContextWrapper {
                             return new int[] { 0 };
                         }
                         if ("isUserUnlocked".equals(name)
-                            || "isUserRunning".equals(name)) {
+                            || "isUserRunning".equals(name)
+                            || "isWallpaperSupported".equals(name)
+                            || "isSetWallpaperAllowed".equals(name)) {
                             return Boolean.TRUE;
                         }
                         if ("getUserSerialNumber".equals(name)) {
                             return Long.valueOf(0L);
                         }
-                        if ("getUserHandle".equals(name)) {
-                            return Integer.valueOf(0);
+                        if ("getUserHandle".equals(name)
+                            || "getWallpaperId".equals(name)) {
+                            return Integer.valueOf(1);
+                        }
+                        if ("getWallpaperColors".equals(name)
+                            || "getWallpaperColorsWithFeature".equals(name)) {
+                            return createSyntheticWallpaperColors();
                         }
                         return defaultValue(method.getReturnType());
+                    }
+
+                    private Object createSyntheticWallpaperColors() {
+                        try {
+                            Class<?> colorsCls = Class.forName("android.app.WallpaperColors");
+                            Class<?> colorCls = Class.forName("android.graphics.Color");
+                            java.lang.reflect.Method valueOf = colorCls.getMethod("valueOf", Integer.TYPE);
+                            Object primaryColor = valueOf.invoke(null, Integer.valueOf(0xFF1E1E1E));
+                            java.lang.reflect.Constructor<?> ctor = colorsCls.getConstructor(colorCls, colorCls, colorCls);
+                            ctor.setAccessible(true);
+                            return ctor.newInstance(primaryColor, null, null);
+                        } catch (Throwable ignored) {
+                            return null;
+                        }
                     }
                 });
             java.lang.reflect.Constructor<?> ctor =
