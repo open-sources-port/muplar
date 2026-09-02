@@ -97,7 +97,10 @@ add_custom_target(elfuse_lib DEPENDS elfuse_external)
 
 # Importable CMake target for target_link_libraries(... elfuse)
 add_library(elfuse STATIC IMPORTED GLOBAL)
-set_target_properties(elfuse PROPERTIES IMPORTED_LOCATION ${ELFUSE_STATIC_LIB})
+set_target_properties(elfuse PROPERTIES
+    IMPORTED_LOCATION ${ELFUSE_STATIC_LIB}
+    INTERFACE_LINK_LIBRARIES "-framework Hypervisor -framework IOKit -framework CoreFoundation"
+)
 add_dependencies(elfuse elfuse_lib)
 
 # =========================================
