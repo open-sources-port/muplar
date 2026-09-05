@@ -1,4 +1,5 @@
 #include <math.h>
+#include <stdatomic.h>
 #include <stddef.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -7593,6 +7594,40 @@ void Java_android_view_MotionEvent_nativeWriteToParcel(JNIEnv *env,
     (void) parcel;
 }
 
+/* Muplar-owned native backing for android.view.KeyEvent */
+static _Atomic int g_key_event_id = 1;
+
+JNIEXPORT jint JNICALL
+Java_android_view_KeyEvent_nativeNextId(JNIEnv *env, jclass clazz)
+{
+    (void) env;
+    (void) clazz;
+    return atomic_fetch_add(&g_key_event_id, 1);
+}
+
+JNIEXPORT jstring JNICALL
+Java_android_view_KeyEvent_nativeKeyCodeToString(JNIEnv *env,
+                                                 jclass clazz,
+                                                 jint keyCode)
+{
+    (void) env;
+    (void) clazz;
+    (void) keyCode;
+    return NULL;
+}
+
+JNIEXPORT jint JNICALL
+Java_android_view_KeyEvent_nativeKeyCodeFromString(JNIEnv *env,
+                                                   jclass clazz,
+                                                   jstring label)
+{
+    (void) env;
+    (void) clazz;
+    (void) label;
+    return 0;
+}
+
+
 /* NativeAllocationRegistry (real AOSP/libnativehelper code, unmodified
  * here) calls the returned function pointer as void(*)(void*) from its own
  * reference-queue processing thread with no JNIEnv attached -- it must not
@@ -11413,6 +11448,21 @@ JNIEXPORT jint JNICALL JNI_OnLoad(JavaVM *vm, void *reserved)
             env, cls, "nativeWriteToParcel", "(JLandroid/os/Parcel;)V",
             (void *) Java_android_view_MotionEvent_nativeWriteToParcel);
     }
+
+    cls = (*env)->FindClass(env, "android/view/KeyEvent");
+    if ((*env)->ExceptionCheck(env)) {
+        (*env)->ExceptionClear(env);
+    } else if (cls) {
+        muplar_register_one(env, cls, "nativeNextId", "()I",
+                            (void *) Java_android_view_KeyEvent_nativeNextId);
+        muplar_register_one(env, cls, "nativeKeyCodeToString",
+                            "(I)Ljava/lang/String;",
+                            (void *) Java_android_view_KeyEvent_nativeKeyCodeToString);
+        muplar_register_one(env, cls, "nativeKeyCodeFromString",
+                            "(Ljava/lang/String;)I",
+                            (void *) Java_android_view_KeyEvent_nativeKeyCodeFromString);
+    }
+
 
     cls = (*env)->FindClass(env, "android/view/DisplayEventReceiver");
     if ((*env)->ExceptionCheck(env)) {

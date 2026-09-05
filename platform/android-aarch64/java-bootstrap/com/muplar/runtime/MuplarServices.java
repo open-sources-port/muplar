@@ -49,7 +49,7 @@ public final class MuplarServices {
         }
     }
 
-    private static IBinder getBinder(String name) {
+    static IBinder getBinder(String name) {
         String key = name == null ? "" : name;
         IBinder binder = services.get(key);
         if (binder == null) {
@@ -305,25 +305,48 @@ public final class MuplarServices {
         private Object activityTaskManagerValue(Method method, Object[] args) {
             String name = method.getName();
             if ("finishActivity".equals(name) || "finishActivityAffinity".equals(name)) {
+                android.os.IBinder token = null;
+                if (args != null) {
+                    for (Object arg : args) {
+                        if (arg instanceof android.os.IBinder) {
+                            token = (android.os.IBinder) arg;
+                            break;
+                        }
+                    }
+                }
+                if (token != null) {
+                    FrameworkDeviceController.finishActivityByToken(token);
+                } else {
+                    FrameworkDeviceController.finishActiveActivity();
+                }
                 return Boolean.TRUE;
             }
             if ("startActivity".equals(name) || "startActivityAsUser".equals(name)) {
                 android.content.Intent intent = null;
+                FrameworkDeviceController.ActivityRecord callerRecord = null;
                 if (args != null) {
                     for (Object arg : args) {
                         if (arg instanceof android.content.Intent) {
                             intent = (android.content.Intent) arg;
-                            break;
+                        } else if (arg instanceof android.os.IBinder && callerRecord == null) {
+                            callerRecord = FrameworkDeviceController.findActivityByToken((android.os.IBinder) arg);
                         }
                     }
+                }
+                if (callerRecord == null) {
+                    callerRecord = FrameworkDeviceController.activeRecord();
                 }
                 if (intent != null) {
                     android.content.ComponentName cn = intent.getComponent();
                     String pkgName = cn != null ? cn.getPackageName() : intent.getPackage();
                     String clsName = cn != null ? cn.getClassName() : "";
+                    int flags = intent.getFlags();
+                    if ((pkgName == null || pkgName.isEmpty()) && callerRecord != null) {
+                        pkgName = callerRecord.packageName;
+                    }
                     InstalledPackage pkg = findInstalledPackage(pkgName);
-                    String apkPath = pkg != null ? pkg.apk : "";
-                    String appClass = pkg != null ? pkg.application : "";
+                    String apkPath = pkg != null ? pkg.apk : (callerRecord != null ? callerRecord.apkPath : "");
+                    String appClass = pkg != null ? pkg.application : (callerRecord != null ? callerRecord.applicationName : "");
                     if ((clsName == null || clsName.isEmpty()) && pkg != null) {
                         clsName = pkg.activity;
                     }
@@ -331,8 +354,13 @@ public final class MuplarServices {
                         && !pkgName.equals("com.android.launcher3")
                         && apkPath != null && !apkPath.isEmpty()) {
                         System.out.println("[Muplar/ART] activityTaskManager " + name + " launching pkg="
-                            + pkgName + " cls=" + clsName + " apk=" + apkPath);
-                        FrameworkDeviceController.launchApp(apkPath, pkgName, clsName, appClass);
+                            + pkgName + " cls=" + clsName + " apk=" + apkPath + " flags=0x" + Integer.toHexString(flags));
+                        boolean isNewTask = (flags & android.content.Intent.FLAG_ACTIVITY_NEW_TASK) != 0;
+                        if (!isNewTask && callerRecord != null && callerRecord.packageName.equals(pkgName)) {
+                            FrameworkDeviceController.startActivityInCurrentTask(callerRecord, apkPath, pkgName, clsName, appClass);
+                        } else {
+                            FrameworkDeviceController.launchApp(apkPath, pkgName, clsName, appClass);
+                        }
                     }
                 }
                 return Integer.valueOf(0);
@@ -478,6 +506,39 @@ public final class MuplarServices {
                     return createParceledListSlice(
                         buildLauncherActivities(packageFilter));
                 }
+                if ("addOnAppsChangedListener".equals(name)) {
+                    System.out.println("[Muplar/ART] addOnAppsChangedListener args length=" + (args != null ? args.length : "null")
+                        + " args=" + java.util.Arrays.toString(args));
+                    Object listener = null;
+                    if (args != null) {
+                        for (Object arg : args) {
+                            if (arg != null && ! (arg instanceof String)) {
+                                listener = arg;
+                                break;
+                            }
+                        }
+                        if (listener == null && args.length > 0) {
+                            listener = args[args.length - 1];
+                        }
+                    }
+                    if (listener != null) {
+                        synchronized (appChangedListeners) {
+                            if (!appChangedListeners.contains(listener)) {
+                                appChangedListeners.add(listener);
+                            }
+                        }
+                        System.out.println("[Muplar/ART] registered onAppsChangedListener: " + listener);
+                    }
+                    return null;
+                }
+                if ("removeOnAppsChangedListener".equals(name)) {
+                    if (args != null && args.length > 0 && args[0] != null) {
+                        synchronized (appChangedListeners) {
+                            appChangedListeners.remove(args[0]);
+                        }
+                    }
+                    return null;
+                }
                 if ("isActivityEnabled".equals(name)
                     || "isPackageEnabled".equals(name)) {
                     return Boolean.TRUE;
@@ -549,6 +610,42 @@ public final class MuplarServices {
             }
         }
         return result;
+    }
+
+    private static final List<Object> appChangedListeners = new ArrayList<>();
+
+    public static void notifyPackageAdded(String packageName) {
+        System.out.println("[Muplar/ART] notifyPackageAdded pkg=" + packageName);
+        Object user;
+        try {
+            user = buildUserHandle(0);
+        } catch (Throwable t) {
+            System.err.println("[Muplar/ART] buildUserHandle failed: " + t);
+            return;
+        }
+
+        List<Object> copy;
+        synchronized (appChangedListeners) {
+            copy = new ArrayList<>(appChangedListeners);
+        }
+        for (Object listener : copy) {
+            try {
+                Method targetMethod = null;
+                for (Method m : listener.getClass().getMethods()) {
+                    if ("onPackageAdded".equals(m.getName()) && m.getParameterTypes().length == 2) {
+                        targetMethod = m;
+                        break;
+                    }
+                }
+                if (targetMethod != null) {
+                    targetMethod.setAccessible(true);
+                    targetMethod.invoke(listener, user, packageName);
+                    System.out.println("[Muplar/ART] dispatched onPackageAdded to " + listener);
+                }
+            } catch (Throwable t) {
+                System.err.println("[Muplar/ART] onPackageAdded callback failed: " + t);
+            }
+        }
     }
 
     static final class InstalledPackage {

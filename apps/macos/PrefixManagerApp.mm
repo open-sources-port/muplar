@@ -3146,6 +3146,69 @@ static NSString* MapLinuxIconToSFSymbol(NSString* icon)
     [_appsTableView reloadData];
 }
 
+- (BOOL)installApkAtPath:(NSString*)unixPath
+               forPrefix:(prefix::PrefixLayout*)selected
+                   error:(NSError**)outError
+    installedPackageName:(NSString**)outPackageName
+{
+    if (!selected || unixPath.length == 0) return NO;
+
+    NSString* packagesDir = NSStringFromPath(selected->packages_dir);
+    NSError* installError = nil;
+    [[NSFileManager defaultManager]
+        createDirectoryAtPath:packagesDir
+  withIntermediateDirectories:YES
+                   attributes:nil
+                        error:&installError];
+    if (installError) {
+        if (outError) *outError = installError;
+        return NO;
+    }
+
+    NSString* destination =
+        [packagesDir stringByAppendingPathComponent:unixPath.lastPathComponent];
+    if (![destination isEqualToString:unixPath]) {
+        [[NSFileManager defaultManager] removeItemAtPath:destination error:nil];
+        [[NSFileManager defaultManager] copyItemAtPath:unixPath
+                                                toPath:destination
+                                                 error:&installError];
+        if (installError) {
+            if (outError) *outError = installError;
+            return NO;
+        }
+
+        NSString* sourceJar =
+            [[unixPath stringByDeletingPathExtension]
+                stringByAppendingString:@"-classes.jar"];
+        if ([[NSFileManager defaultManager] isReadableFileAtPath:sourceJar]) {
+            NSString* destinationJar =
+                [[destination stringByDeletingPathExtension]
+                    stringByAppendingString:@"-classes.jar"];
+            [[NSFileManager defaultManager] removeItemAtPath:destinationJar
+                                                       error:nil];
+            [[NSFileManager defaultManager] copyItemAtPath:sourceJar
+                                                    toPath:destinationJar
+                                                     error:nil];
+        }
+    }
+
+    std::string pkgName;
+    @try {
+        auto apk = muplar::runtime::apk::classify_apk(destination.fileSystemRepresentation);
+        if (apk.manifest_package && !apk.manifest_package->empty()) {
+            pkgName = *apk.manifest_package;
+        }
+    } @catch (...) {}
+
+    if (outPackageName && !pkgName.empty()) {
+        *outPackageName = [NSString stringWithUTF8String:pkgName.c_str()];
+    }
+
+    [self scanAndroidApps:selected];
+    [self loadAppsForSelectedPrefix];
+    return YES;
+}
+
 - (void)installApkForPrefix:(prefix::PrefixLayout*)selected
 {
     if (!selected) return;
@@ -3168,46 +3231,15 @@ static NSString* MapLinuxIconToSFSymbol(NSString* icon)
 
     if ([panel runModal] != NSModalResponseOK || !panel.URL) return;
 
-    NSString* unixPath = panel.URL.path;
-    NSString* packagesDir = NSStringFromPath(selected->packages_dir);
     NSError* installError = nil;
-    [[NSFileManager defaultManager]
-        createDirectoryAtPath:packagesDir
-      withIntermediateDirectories:YES
-                       attributes:nil
-                            error:&installError];
-    if (!installError) {
-        NSString* destination =
-            [packagesDir stringByAppendingPathComponent:unixPath.lastPathComponent];
-        if (![destination isEqualToString:unixPath]) {
-            [[NSFileManager defaultManager] removeItemAtPath:destination
-                                                       error:nil];
-            [[NSFileManager defaultManager] copyItemAtPath:unixPath
-                                                    toPath:destination
-                                                     error:&installError];
-
-            NSString* sourceJar =
-                [[unixPath stringByDeletingPathExtension]
-                    stringByAppendingString:@"-classes.jar"];
-            if (!installError &&
-                [[NSFileManager defaultManager] isReadableFileAtPath:sourceJar]) {
-                NSString* destinationJar =
-                    [[destination stringByDeletingPathExtension]
-                        stringByAppendingString:@"-classes.jar"];
-                [[NSFileManager defaultManager] removeItemAtPath:destinationJar
-                                                           error:nil];
-                [[NSFileManager defaultManager] copyItemAtPath:sourceJar
-                                                        toPath:destinationJar
-                                                         error:&installError];
-            }
-        }
-    }
-    if (installError) {
+    NSString* pkg = nil;
+    if (![self installApkAtPath:panel.URL.path
+                     forPrefix:selected
+                         error:&installError
+          installedPackageName:&pkg]) {
         [self showError:[NSString stringWithFormat:
             @"Failed to install APK: %@", installError.localizedDescription]];
-        return;
     }
-    [self loadAppsForSelectedPrefix];
 }
 
 - (void)addApplication:(id)sender
@@ -5104,8 +5136,13 @@ static NSString* MapLinuxIconToSFSymbol(NSString* icon)
                                tabIdentifier:tabIdentifier
                                      logPath:capturedLogPath];
         if ([action isEqualToString:@"install-apk"]) {
-            [strongSelf installApkForPrefix:
-                            [strongSelf prefixNamed:capturedPrefixName]];
+            AndroidDeviceShell* strongShell = weakShell;
+            if (strongShell) {
+                [strongShell deviceInstall:nil];
+            } else {
+                [strongSelf installApkForPrefix:
+                                [strongSelf prefixNamed:capturedPrefixName]];
+            }
             return;
         }
         [strongSelf sendAndroidDeviceAction:action
@@ -5116,6 +5153,32 @@ static NSString* MapLinuxIconToSFSymbol(NSString* icon)
             [strongSelf pollTabFinishedForIdentifier:tabIdentifier
                                           deviceShell:weakShell
                                            socketPath:capturedSocketPath];
+        }
+    };
+    shell.installApkHandler = ^(NSString* apkPath) {
+        PrefixManagerAppDelegate* strongSelf = weakSelf;
+        AndroidDeviceShell* strongShell = weakShell;
+        if (!strongSelf || !strongShell || apkPath.length == 0)
+            return;
+        [strongShell showInstallProgress:[NSString stringWithFormat:@"Installing %@...", apkPath.lastPathComponent]];
+        prefix::PrefixLayout* prefix = [strongSelf prefixNamed:capturedPrefixName];
+        NSError* error = nil;
+        NSString* pkg = nil;
+        BOOL ok = [strongSelf installApkAtPath:apkPath
+                                    forPrefix:prefix
+                                        error:&error
+                         installedPackageName:&pkg];
+        if (!ok) {
+            [strongShell showStoppedWithMessage:[NSString stringWithFormat:@"Install failed: %@", error.localizedDescription ?: @"unknown error"]];
+            return;
+        }
+        [strongShell showInstallSuccess:[NSString stringWithFormat:@"Installed %@", pkg ?: apkPath.lastPathComponent]];
+        if (pkg.length > 0) {
+            [strongSelf sendAndroidDeviceAction:@"package-installed"
+                                  tabIdentifier:pkg
+                                 launchMetadata:@{@"package": pkg, @"apk": apkPath}
+                                     socketPath:capturedSocketPath
+                                        logPath:capturedLogPath];
         }
     };
     shell.tabFocusHandler = ^(NSString* tabIdentifier) {

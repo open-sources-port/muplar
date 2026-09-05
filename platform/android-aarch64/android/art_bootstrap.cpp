@@ -658,12 +658,24 @@ ArtBootstrapPlan build_art_bootstrap_plan(const ArtBootstrapConfig &config)
         plan.app_process64_guest_path.find("dalvikvm") != std::string::npos;
     if (!plan.app_process64_guest_path.empty())
         plan.argv.push_back(plan.app_process64_guest_path);
+    // JIT options shared by both launch paths.
+    // Cap the code cache to 1 MiB so it stays within elfuse's pre-mapped 2 MiB
+    // RX window (MMAP_RX_BASE..MMAP_RX_INITIAL_END). Exceeding that window
+    // triggers guest_extend_page_tables for a new RX L2 block adjacent to the
+    // RW heap, which violates HVF W^X enforcement on 2 MiB block descriptors
+    // and causes a native crash at the JIT entrypoint stub.
+    auto push_jit_options = [&]() {
+        plan.argv.push_back("-Xusejit:true");
+        plan.argv.push_back("-Xjitinitialsize:512k");
+        plan.argv.push_back("-Xjitmaxsize:1m");
+        // Compile hot paths sooner so JIT kicks in quickly within the cap.
+        plan.argv.push_back("-Xjitthreshold:200");
+    };
     if (use_dalvikvm) {
         if (!guest_bootclasspath.empty())
             plan.argv.push_back("-Xbootclasspath:" +
                                 join_strings(guest_bootclasspath, ":"));
-        plan.argv.push_back("-Xint");
-        plan.argv.push_back("-Xusejit:false");
+        push_jit_options();
         for (const std::string &property_arg : service_property_args)
             plan.argv.push_back(property_arg);
         if (!guest_classpath.empty()) {
@@ -677,6 +689,7 @@ ArtBootstrapPlan build_art_bootstrap_plan(const ArtBootstrapConfig &config)
         }
         for (const std::string &property_arg : service_property_args)
             plan.argv.push_back(property_arg);
+        push_jit_options();
         plan.argv.push_back("/system/bin");
         plan.argv.push_back("--application");
         plan.argv.push_back("--nice-name=muplar-art");

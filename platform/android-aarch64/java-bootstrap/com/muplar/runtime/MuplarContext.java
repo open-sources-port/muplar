@@ -670,45 +670,34 @@ public final class MuplarContext extends ContextWrapper {
     private static Object createLauncherApps(Context context) {
         try {
             Class<?> type = Class.forName("android.content.pm.LauncherApps");
-            Object launcherApps;
+            Class<?> ilserviceClass = Class.forName("android.content.pm.ILauncherApps");
+            Class<?> stubClass = Class.forName("android.content.pm.ILauncherApps$Stub");
+            IBinder binder = MuplarServices.getBinder("launcherapps");
+            java.lang.reflect.Method asInterface = stubClass.getMethod("asInterface", IBinder.class);
+            Object service = asInterface.invoke(null, binder);
+
+            Object launcherApps = null;
             try {
-                java.lang.reflect.Constructor<?> ctor = type.getDeclaredConstructor();
+                java.lang.reflect.Constructor<?> ctor = type.getDeclaredConstructor(Context.class, ilserviceClass);
                 ctor.setAccessible(true);
-                launcherApps = ctor.newInstance();
-            } catch (Throwable ignored) {
-                launcherApps = allocateWithoutConstructor(type);
-            }
-            if (launcherApps != null) {
-                setFieldIfPresent(launcherApps, "mContext", context);
-                setFieldIfPresent(launcherApps, "mCallbacks", new java.util.ArrayList<Object>());
-                setFieldIfPresent(launcherApps, "mDelegates", new java.util.ArrayList<Object>());
+                launcherApps = ctor.newInstance(context, service);
+            } catch (Throwable t1) {
                 try {
-                    Class<?> serviceType =
-                        Class.forName("android.content.pm.ILauncherApps");
-                    Object service = java.lang.reflect.Proxy.newProxyInstance(
-                        serviceType.getClassLoader(),
-                        new Class<?>[] { serviceType },
-                        new java.lang.reflect.InvocationHandler() {
-                            @Override
-                            public Object invoke(Object proxy,
-                                                 java.lang.reflect.Method method,
-                                                 Object[] args) {
-                                if ("getActivityOverrides".equals(method.getName())) {
-                                    return Collections.emptyMap();
-                                }
-                                if ("getAllSessions".equals(method.getName())
-                                    || "getAllPackageInstallerSessions".equals(method.getName())) {
-                                    return createParceledListSlice();
-                                }
-                                return defaultValue(method.getReturnType());
-                            }
-                        });
+                    java.lang.reflect.Constructor<?> ctor = type.getDeclaredConstructor(Context.class);
+                    ctor.setAccessible(true);
+                    launcherApps = ctor.newInstance(context);
                     setFieldIfPresent(launcherApps, "mService", service);
-                } catch (Throwable ignored) {
+                } catch (Throwable t2) {
+                    launcherApps = allocateWithoutConstructor(type);
+                    setFieldIfPresent(launcherApps, "mContext", context);
+                    setFieldIfPresent(launcherApps, "mCallbacks", new java.util.ArrayList<Object>());
+                    setFieldIfPresent(launcherApps, "mDelegates", new java.util.ArrayList<Object>());
+                    setFieldIfPresent(launcherApps, "mService", service);
                 }
             }
             return launcherApps;
-        } catch (Throwable ignored) {
+        } catch (Throwable t) {
+            System.err.println("[Muplar/ART] failed to create LauncherApps: " + t);
             return null;
         }
     }

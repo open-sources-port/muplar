@@ -53,12 +53,12 @@ usable user experience?"
 ## User-Visible Problem
 
 The device window session/tab UI, Home/Recents/Settings dispatch, `LauncherApps`
-installed-app query, touch input dispatch, secondary app launch, and Back
-navigation all work now. The end-to-end product loop (Launcher3 → launch app
-→ Back to Launcher) is verified by `test-app-launch.sh`. Two primary items
-remain to achieve a seamless "Android device" feel: JIT instability forces
-`-Xint` (making everything slow), and frame rendering is still a 200ms-polled
-software-bitmap bridge rather than a proper HWUI/Surface path.
+installed-app query, touch input dispatch, secondary app launch, Back navigation,
+and ART JIT execution all work now. The end-to-end product loop (Launcher3 → launch
+app → Back to Launcher) is verified by `test-app-launch.sh`. The primary remaining
+items to achieve a seamless "Android device" feel are real ActivityManager task/back-stack
+management (P2) and moving from the 200ms-polled software-bitmap bridge to a proper
+HWUI/Surface frame path (P4).
 
 The product target is documented in:
 
@@ -66,8 +66,16 @@ The product target is documented in:
 
 ## Main Blockers
 
-## Main Blockers
-
+- ART JIT Stability (elfuse/HVF crash): **Resolved (2026-09-05)**.
+  ART JIT is now enabled and running stably (`-Xusejit:true`). Root cause:
+  elfuse pre-maps a 2 MiB RX window (`MMAP_RX_BASE=0x10000000` .. `MMAP_RX_INITIAL_END=0x10200000`).
+  ART's default 64 MiB JIT code cache overflowed this window, invoking
+  `guest_extend_page_tables` to map an RX 2 MiB L2 block descriptor adjacent
+  to the RW heap, causing an HVF W^X violation and a native crash at the JIT
+  entrypoint stub. Fixed by capping the JIT code cache to 1 MiB (`-Xjitmaxsize:1m`,
+  `-Xjitinitialsize:512k`, `-Xjitthreshold:200`) in `art_bootstrap.cpp`.
+  Touches, actions, and lifecycle methods now execute compiled code without crashing,
+  eliminating the ~500% interpreter CPU spikes.
 - Back button animation & Choreographer looper hangs: **Resolved (2026-09-05)**.
   `FrameworkDeviceController.performBack()` now unconditionally calls
   `onBackPressed` then `finishRecord`+`removeRecord`. No more `isFinishing()`
@@ -80,109 +88,11 @@ The product target is documented in:
 - Touch input dispatch: **Resolved (2026-08-31)**. Touch input dispatch now
   executes cleanly through `dispatchTouchEvent` and `recycle()` without native
   crashes. Automated test coverage is added in `test-touch-smoke.sh`.
-  would be caught and logged) — this is a hard native crash, so it's very
-  likely a missing/broken native dependency somewhere inside real
-  Quickstep touch handling (ripple/touch-feedback, `VelocityTracker`,
-  `Choreographer`, etc.), not `MotionEvent` itself.
-  - Two real bugs were found and fixed on the way here, both still worth
-    knowing about:
-    1. Calling `MotionEvent.setSource()` after `obtain()` triggered an ART
-       interpreter argument-marshaling bug — the follow-up
-       `nativeSetSource(J I)V` call received garbage (`ptr`/`source`
-       values that looked like leftover stack addresses from the
-       *previous* native call's locals), despite the registered JNI
-       signature exactly matching the `dexdump`-verified declared
-       signature. Fixed by switching to the public 14-arg
-       `MotionEvent.obtain(downTime, eventTime, action, pointerCount,
-       PointerProperties[], PointerCoords[], metaState, buttonState,
-       xPrecision, yPrecision, deviceId, edgeFlags, source, flags)`
-       overload, which passes `source` straight into `nativeInitialize`
-       and never calls `setSource`/`nativeSetSource` at all.
-    2. Enabling ART's JIT (dropping `-Xint`/`-Xusejit:false` in
-       `art_bootstrap.cpp`) reproduced a crash with the same signature —
-       consistent with hitting the same underlying elfuse/HVF
-       instability via JIT code-cache `mmap`/`mprotect(PROT_EXEC)`. This
-       was reverted; `-Xint` stays until that's root-caused separately.
-       **Caveat:** the touch-dispatch crash above still reproduces with
-       `-Xint` restored, so JIT is not the cause of it — it was only
-       coincidentally triggered during that experiment.
-  - Separately, this build runs `-Xint` (pure interpreter, no JIT) for
-    stability, which makes any touch dispatch that *does* succeed very
-    slow — a burst of drag events (mouse-drag samples) can queue 100+
-    `DeviceInput` frames that take a long time to drain serially on the
-    main looper, one Quickstep-interpreted dispatch at a time. The guest
-    process can also be observed pegging ~500% CPU continuously without
-    crashing while working through a backlog like this — that's a real,
-    separate symptom, not necessarily a hang.
-  - **Root-cause update (2026-07-29):** a *local, uncommitted, reverted*
-    patch to elfuse's SIGSEGV-delivery path
-    (`third_party/elfuse/src/syscall/proc.c`, around the
-    `signal_deliver_fault(..., LINUX_SIGSEGV, ...)` call) was used for one
-    diagnostic session to unconditionally report the faulting PC/address
-    plus a `guest_region_find()` lookup for both — this is a vendored
-    third-party dependency, so the patch was deliberately not kept or
-    committed without the elfuse maintainer's sign-off; reproducing this
-    diagnostic again means re-adding the same small patch locally (see the
-    session transcript) or, better, proposing it upstream since it's a
-    generically useful fix (this diagnostic was previously gated behind
-    `verbose`, which is both off by default and, when turned on for a
-    test, generated so much syscall-trace volume it rotated the crash
-    straight out of the log within a few million lines before the patch —
-    a real trap; raise `kMaxLogFileBytes` in
-    `apps/macos/PrefixManagerApp.mm`, currently 5MB, before ever trying
-    `--verbose` for this again). One captured crash showed *two*
-    faults back to back:
-    1. The real crash: `PC=0x2013debfc` inside a small (~80KB) **unnamed,
-       anonymous, executable** guest region — not a named `.so`, so almost
-       certainly ART-generated code (an interpreter trampoline/stub;
-       `-Xint` should rule out full JIT-compiled method bodies, though an
-       always-on "quick entrypoint" stub cache is plausible) — dereferences
-       a garbage 64-bit value (`0x2c22b3a800000000`, not a remotely valid
-       address) as a pointer.
-    2. A **second, separate** null-pointer crash inside bionic itself
-       (`PC=0xff0009a078`, fault address `0x0`, region resolves to the
-       sysroot-mapped libc), immediately after step 1's signal handler
-       tries and fails to connect to `tombstoned` (which nothing in this
-       stack implements). This is bionic's own tombstoned-unreachable
-       fallback path null-derefing — a real, independent bug that's
-       currently masking any further diagnostics bionic's crash handler
-       might otherwise produce.
-    Next step to actually root-cause #1: disassemble/symbolicate the
-    unnamed region at crash time (no OAT/boot-image symbol source is
-    vendored here yet, so this needs either a boot-image symbol dump or
-    stepping through with a debugger attached to the vcpu thread) rather
-    than more log-based guessing.
-- The device window shows a stale/premature frame, not a live one — and
-  the real root cause is `-Xint` interpreter performance, not missing
-  scheduling. `MuplarFramePresenter.schedule()` originally only captured
-  a screenshot when a device action fired (`focusRecord`'s
-  `scheduleFrame`, or an input dispatch's own `scheduleFrame` at the end
-  of `applyInputOnMain`) — once immediately, plus one retry 48ms later,
-  never again. A self-rescheduling 200ms loop was added
-  (`MuplarFramePresenter.startLoop`, 2026-07-29) so *something* keeps
-  asking for frames, and it does work — confirmed via
-  `[Muplar/Window] frame loop started` / `software frame presented` log
-  lines, and it did produce one real, correctly-sized frame. But in a
-  ~15-20s interactive test it produced **exactly one** frame while 44
-  queued touch/input events sat completely unprocessed (zero
-  `input apply` lines) the whole time. The main thread is simply too
-  backlogged under pure interpretation to get back to a 200ms-interval
-  Runnable in any reasonable time — this is the same underlying cause as
-  the earlier-observed ~500% sustained CPU with an undrained input
-  queue. Scheduling more frame requests can't fix a main thread that
-  can't keep up; the loop is correct but can't overcome this on its own.
-  **This ties directly back to the reverted JIT experiment**: JIT is
-  very likely necessary for this to feel responsive at all, but currently
-  crashes via the elfuse/HVF bug documented in the touch-crash section
-  above. Getting JIT stable (or finding another way to cut
-  interpreted-execution cost) looks like a prerequisite for the device
-  window feeling live, not an independent nice-to-have.
-  Separately: `visual-smoke.sh`'s independent Bitmap.compress()-based
-  capture completes and produces a non-empty image, but **that image is
-  itself a checkerboard artifact, not a normal Launcher3 UI**
-  (`build/launcher3/verification/all-apps.png`, captured 2026-07-29) — a
-  separate, likely pre-existing bug in that capture path worth a look on
-  its own, unrelated to interpreter speed.
+  Two bugs were fixed:
+  1. Switched to the public 14-argument `MotionEvent.obtain(...)` overload,
+     avoiding an interpreter argument-marshaling issue in `setSource()`.
+  2. Fixed NPE in `QuickstepLauncher.onCreate` (`UnfoldMoveFromCenterAnimator`)
+     by properly resolving `WindowManagerImpl` through `baseContext`.
 - Android task/back-stack state: **P2 next step**. Currently host-simulated
   (a `LinkedHashMap` + stack in `FrameworkDeviceController`). True
   `ActivityManager` task tracking, intent resolution, and

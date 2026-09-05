@@ -30,14 +30,51 @@ public class MainActivity extends Activity {
         list.setAdapter(new ArrayAdapter<String>(this,
             android.R.layout.simple_list_item_1,
             new String[]{"Strings", "Colors", "Dimensions", "Lists"}));
+        list.setOnItemClickListener(new android.widget.AdapterView.OnItemClickListener() {
+            @Override public void onItemClick(android.widget.AdapterView<?> parent, View view, int position, long id) {
+                System.out.println("[UiTest] list item clicked: " + position);
+                launchSecondActivity();
+            }
+        });
         System.out.println("[UiTest] XML layout inflated");
     }
 
+    public void launchSecondActivity() {
+        System.out.println("[UiTest] launching SecondActivity");
+        startActivity(new android.content.Intent(this, SecondActivity.class));
+    }
+
+    @Override public boolean onKeyDown(int keyCode, android.view.KeyEvent event) {
+        if (keyCode == android.view.KeyEvent.KEYCODE_L || keyCode == android.view.KeyEvent.KEYCODE_SPACE) {
+            launchSecondActivity();
+            return true;
+        }
+        return super.onKeyDown(keyCode, event);
+    }
+
+    @Override protected void onRestart() {
+        super.onRestart();
+        System.out.println("[UiTest] onRestart");
+    }
     @Override protected void onStart() {
+        super.onStart();
         System.out.println("[UiTest] onStart");
     }
     @Override protected void onResume() {
+        super.onResume();
         System.out.println("[UiTest] onResume");
+    }
+    @Override protected void onPause() {
+        super.onPause();
+        System.out.println("[UiTest] onPause");
+    }
+    @Override protected void onStop() {
+        super.onStop();
+        System.out.println("[UiTest] onStop");
+    }
+    @Override protected void onDestroy() {
+        super.onDestroy();
+        System.out.println("[UiTest] onDestroy");
     }
     @Override public void onWindowFocusChanged(boolean focused) {
         System.out.println("[UiTest] focus=" + focused);

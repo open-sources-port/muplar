@@ -130,13 +130,9 @@ translation. Touch dispatch (`test-touch-smoke.sh`) and visual capture
 (`visual-smoke.sh`, 1080×1920) both pass.
 
 Known remaining issues in this step:
-- Frame rate feels slow under `-Xint` (pure interpreter): the main thread is
-  too backlogged to service 200ms frame-loop runnables at full rate. JIT would
-  help but is currently disabled due to elfuse/HVF instability (see
-  [Launcher3 Status](./launcher3.md)).
 - The Java View frame path (`MuplarFramePresenter` → raw MHR bitmap) should
   eventually move to framework/HWUI-backed presentation via real
-  `ViewRootImpl` / `Surface` semantics.
+  `ViewRootImpl` / `Surface` semantics (P4).
 
 Make Java and native Android UI draw into the same device window content area.
 
@@ -158,38 +154,45 @@ Implementation notes:
 - Next rendering phase: enough `ViewRootImpl`, `Surface`, and HWUI behavior
   that framework rendering naturally posts frames into `HostWindow`.
 
-## Current Priority
+## Current Priority: P4 — HWUI / Framework-Backed Rendering
 
-Steps 1–5 are now functionally complete for the software-rendered path.
-All smoke tests pass (`smoke-launch.sh`, `test-touch-smoke.sh`,
-`test-app-launch.sh`, `visual-smoke.sh`). The core product loop —
-Launcher3 as Home → launch secondary app → Back returns to Launcher —
-works end-to-end.
+Steps 1–5 are functionally complete for the software-rendered path,
+**P1 (ART JIT Stability)** is complete with ART JIT enabled and stable,
+**P2 (Real Android Task / Back-Stack)** is complete with intra-app `startActivity`,
+`finishActivity`, task stack management, and verified back navigation, and
+**P3 (App Install UX)** is complete with in-session drag-and-drop / file picker installation and dynamic Launcher3 app drawer refresh.
+All smoke and end-to-end tests pass (`smoke-launch.sh`, `test-touch-smoke.sh`,
+`test-app-launch.sh`, `test-backstack.sh`, `test-install-ux.sh`, `visual-smoke.sh`).
 
 Next priorities, in order:
 
-### P1 — JIT Stability (elfuse/HVF crash)
-The guest runs `-Xint` (pure interpreter) because enabling JIT triggers a
-native crash via an elfuse/HVF `mmap`/`mprotect(PROT_EXEC)` bug in ART's
-jit-code-cache allocation. Under `-Xint` everything works but is slow:
-touches are sluggish, frame rate is poor, and sustained CPU can hit ~500%
-during touch-backlog draining. Root-causing and fixing the JIT crash is the
-highest-leverage single fix available. See [Launcher3 Status](./launcher3.md)
-for the crash diagnosis (anonymous executable region, tombstoned-null-deref).
+### P1 — JIT Stability (elfuse/HVF crash) — **COMPLETE (2026-09-05)**
+Resolved by capping ART's JIT code cache to 1 MiB (`-Xjitmaxsize:1m`,
+`-Xjitinitialsize:512k`, `-Xjitthreshold:200`) so it never exceeds elfuse's
+pre-mapped 2 MiB RX window (`MMAP_RX_BASE=0x10000000` .. `MMAP_RX_INITIAL_END=0x10200000`).
+Touches and lifecycle methods now execute compiled code without crashing or ~500% CPU spikes.
 
-### P2 — Real Android Task / Back-Stack
-The tab model is currently host-simulated (a `LinkedHashMap` + stack in
-`FrameworkDeviceController`). True `ActivityManager` task tracking, intent
-resolution, and `startActivity`-from-app should be wired up so that apps can
-launch each other and the back stack behaves correctly across all cases.
+### P2 — Real Android Task / Back-Stack — **COMPLETE (2026-09-05)**
+Replaced the flat host-simulated tab map with a real `TaskRecord` back-stack model:
+- `TaskRecord` maintains an `activityStack` (`ArrayDeque<ActivityRecord>`) per task.
+- `MuplarServices` intercepts `startActivity` and `finishActivity`/`finishActivityAffinity` via `IActivityTaskManager`.
+- Intra-app `startActivity` pauses the top activity and pushes the new activity onto the same task/tab stack.
+- `finishActivityByToken` pops the activity; if the task still contains activities, the new top activity is resumed (`onRestart`/`onStart`/`onResume`) without closing the tab or sending `tab-finished`.
+- When the task becomes empty, `tab-finished` is dispatched to the host, resuming the previous task (e.g. Launcher3).
+- Implemented missing `android.view.KeyEvent` native methods (`nativeNextId`, `nativeKeyCodeToString`, `nativeKeyCodeFromString`) in ART preload shim.
+- Verified end-to-end via `platform/android-aarch64/compat/launcher3/test-backstack.sh`.
 
-### P3 — App Install UX
-APKs can be copied into `packages_dir` and registered in Instance Manager,
-but there is no in-session install flow (drag-and-drop, file picker, or
-`adb install`-equivalent). An install sheet inside the device window that
-triggers APK copy + re-scan is the next user-visible feature.
+### P3 — App Install UX — **COMPLETE (2026-09-05)**
+Implemented full in-session application installation flow:
+- **Host Drag-and-Drop**: `AndroidDeviceFrameView` conforms to `NSDraggingDestination` for `NSPasteboardTypeFileURL`, with visual blue-accent drop-target overlay rendering on drag enter/exit, validating `.apk` extensions and routing directly to the install handler.
+- **In-Window Sheet File Picker**: Toolbar "Install APK" button (`square.and.arrow.down`) opens `NSOpenPanel` as an in-window sheet modal (`beginSheetModalForWindow:completionHandler:`), keeping focus inside the device window.
+- **Install Progress & Feedback**: In-session progress indicator and completion feedback displayed over the phone viewport during installation.
+- **Prefix APK Management**: Automatically stages `.apk` files into `packages_dir`, extracts metadata via aapt/manifest parser, updates `android-packages.properties`, and rescans installed applications.
+- **Real-Time Notification Pipeline**: Host dispatches `action=package-installed` through `muplard`, which broadcasts to active guest runtimes.
+- **Dynamic Launcher3 App Drawer Refresh**: `MuplarContext.java` binds `LauncherApps` to `ILauncherApps$Stub.asInterface(MuplarServices.getBinder("launcherapps"))`, enabling Launcher3's `LauncherAppState` to register its `IOnAppsChangedListener`. `FrameworkDeviceController` routes `package-installed` to `MuplarServices.notifyPackageAdded(packageName)`, dispatching `onPackageAdded(user, packageName)` directly to Launcher3 in real time without restarting the session.
+- Verified end-to-end via `platform/android-aarch64/compat/launcher3/test-install-ux.sh`.
 
-### P4 — HWUI / Framework-Backed Rendering
+### P4 — HWUI / Framework-Backed Rendering (**CURRENT FOCUS**)
 Replace the `MuplarFramePresenter` software-bitmap bridge with real
 `ViewRootImpl` / `Surface` semantics so framework rendering naturally posts
 frames into `HostWindow`. This removes the 200ms polling loop and enables

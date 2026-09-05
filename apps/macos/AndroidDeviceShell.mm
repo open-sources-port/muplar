@@ -1,4 +1,5 @@
 #import "AndroidDeviceShell.h"
+#import <UniformTypeIdentifiers/UniformTypeIdentifiers.h>
 
 #include "android_keycodes.h"
 
@@ -8,8 +9,9 @@
 
 @class AndroidDeviceShell;
 
-@interface AndroidDeviceFrameView : NSImageView
+@interface AndroidDeviceFrameView : NSImageView <NSDraggingDestination>
 @property(nonatomic, weak) AndroidDeviceShell* deviceShell;
+@property(nonatomic, assign) BOOL dragHighlighted;
 @end
 
 @interface AndroidDeviceShell ()
@@ -222,6 +224,73 @@ static NSView* AndroidDeviceTabChipView(NSString* title,
     [self.deviceShell sendKeyEvent:event action:1];
 }
 
+- (NSDragOperation)draggingEntered:(id<NSDraggingInfo>)sender
+{
+    NSPasteboard* pboard = [sender draggingPasteboard];
+    if ([[pboard types] containsObject:NSPasteboardTypeFileURL]) {
+        NSArray* urls = [pboard readObjectsForClasses:@[[NSURL class]] options:nil];
+        for (NSURL* url in urls) {
+            if ([url.pathExtension.lowercaseString isEqualToString:@"apk"]) {
+                self.dragHighlighted = YES;
+                [self setNeedsDisplay:YES];
+                return NSDragOperationCopy;
+            }
+        }
+    }
+    return NSDragOperationNone;
+}
+
+- (void)draggingExited:(id<NSDraggingInfo>)sender
+{
+    (void)sender;
+    self.dragHighlighted = NO;
+    [self setNeedsDisplay:YES];
+}
+
+- (BOOL)performDragOperation:(id<NSDraggingInfo>)sender
+{
+    self.dragHighlighted = NO;
+    [self setNeedsDisplay:YES];
+    NSPasteboard* pboard = [sender draggingPasteboard];
+    if ([[pboard types] containsObject:NSPasteboardTypeFileURL]) {
+        NSArray* urls = [pboard readObjectsForClasses:@[[NSURL class]] options:nil];
+        for (NSURL* url in urls) {
+            if ([url.pathExtension.lowercaseString isEqualToString:@"apk"]) {
+                if (self.deviceShell.installApkHandler) {
+                    self.deviceShell.installApkHandler(url.path);
+                    return YES;
+                }
+            }
+        }
+    }
+    return NO;
+}
+
+- (void)drawRect:(NSRect)dirtyRect
+{
+    [super drawRect:dirtyRect];
+    if (_dragHighlighted) {
+        [[NSColor colorWithCalibratedRed:0.0 green:0.48 blue:1.0 alpha:0.22] set];
+        NSRectFillUsingOperation(self.bounds, NSCompositingOperationSourceOver);
+
+        NSBezierPath* border = [NSBezierPath bezierPathWithRoundedRect:NSInsetRect(self.bounds, 4, 4) xRadius:16 yRadius:16];
+        [border setLineWidth:3.0];
+        [[NSColor systemBlueColor] set];
+        [border stroke];
+
+        NSDictionary* attrs = @{
+            NSFontAttributeName: [NSFont boldSystemFontOfSize:18.0],
+            NSForegroundColorAttributeName: [NSColor whiteColor],
+        };
+        NSString* msg = @"Drop APK to Install";
+        NSSize sz = [msg sizeWithAttributes:attrs];
+        NSRect textRect = NSMakeRect((NSWidth(self.bounds) - sz.width) / 2.0,
+                                     (NSHeight(self.bounds) - sz.height) / 2.0,
+                                     sz.width, sz.height);
+        [msg drawInRect:textRect withAttributes:attrs];
+    }
+}
+
 @end
 
 @implementation AndroidDeviceShell
@@ -351,6 +420,7 @@ static NSView* AndroidDeviceTabChipView(NSString* title,
     _frameView = [[AndroidDeviceFrameView alloc] init];
     _frameView.deviceShell = self;
     _frameView.imageScaling = NSImageScaleAxesIndependently;
+    [_frameView registerForDraggedTypes:@[NSPasteboardTypeFileURL]];
     _frameView.translatesAutoresizingMaskIntoConstraints = NO;
     [screen addSubview:_frameView];
 
@@ -735,6 +805,30 @@ static NSView* AndroidDeviceTabChipView(NSString* title,
     [self.spinner stopAnimation:nil];
 }
 
+- (void)showInstallProgress:(NSString*)message
+{
+    self.titleLabel.hidden = NO;
+    self.statusLabel.hidden = NO;
+    self.statusLabel.stringValue = message ?: @"Installing APK...";
+    [self.spinner startAnimation:nil];
+}
+
+- (void)showInstallSuccess:(NSString*)message
+{
+    self.statusLabel.stringValue = message ?: @"Installation complete.";
+    [self.spinner stopAnimation:nil];
+    __weak typeof(self) weakSelf = self;
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(3.0 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+        [weakSelf updateActiveTabLabels];
+    });
+}
+
+- (void)dismissInstallProgress
+{
+    [self.spinner stopAnimation:nil];
+    [self updateActiveTabLabels];
+}
+
 - (void)deviceBack:(id)sender
 {
     (void)sender;
@@ -774,6 +868,32 @@ static NSView* AndroidDeviceTabChipView(NSString* title,
 - (void)deviceInstall:(id)sender
 {
     (void)sender;
+    if (self.installApkHandler) {
+        NSOpenPanel* panel = [NSOpenPanel openPanel];
+        panel.canChooseFiles = YES;
+        panel.canChooseDirectories = NO;
+        panel.allowsMultipleSelection = NO;
+        panel.prompt = @"Install";
+        panel.title = @"Select Android Package (.apk)";
+        if (@available(macOS 11.0, *)) {
+            panel.allowedContentTypes = @[[UTType typeWithFilenameExtension:@"apk"]];
+        } else {
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wdeprecated-declarations"
+            panel.allowedFileTypes = @[@"apk"];
+#pragma clang diagnostic pop
+        }
+        __weak typeof(self) weakSelf = self;
+        [panel beginSheetModalForWindow:self.window completionHandler:^(NSModalResponse result) {
+            if (result == NSModalResponseOK && panel.URL) {
+                AndroidDeviceShell* strongSelf = weakSelf;
+                if (strongSelf && strongSelf.installApkHandler) {
+                    strongSelf.installApkHandler(panel.URL.path);
+                }
+            }
+        }];
+        return;
+    }
     if (self.actionHandler)
         self.actionHandler(@"install-apk", self.activeTabIdentifier);
 }

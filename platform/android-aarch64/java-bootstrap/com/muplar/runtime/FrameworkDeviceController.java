@@ -70,17 +70,78 @@ public final class FrameworkDeviceController {
         }
     }
 
-    private static final class ActivityRecord {
-        String tab;
-        String apkPath;
-        String packageName;
-        String activityName;
-        Object activity;
-        Class<?> activityClass;
-        boolean foreground;
+    public static final class TaskRecord {
+        public final int taskId;
+        public final String affinity;
+        public final String tab;
+        public final ArrayList<ActivityRecord> activityStack =
+            new ArrayList<ActivityRecord>();
+
+        TaskRecord(int taskId, String affinity, String tab) {
+            this.taskId = taskId;
+            this.affinity = affinity;
+            this.tab = tab;
+        }
+
+        public synchronized ActivityRecord topActivity() {
+            if (activityStack.isEmpty()) return null;
+            return activityStack.get(activityStack.size() - 1);
+        }
+
+        public synchronized ActivityRecord rootActivity() {
+            if (activityStack.isEmpty()) return null;
+            return activityStack.get(0);
+        }
+
+        public synchronized void pushActivity(ActivityRecord record) {
+            activityStack.remove(record);
+            activityStack.add(record);
+            record.task = this;
+        }
+
+        public synchronized boolean removeActivity(ActivityRecord record) {
+            boolean removed = activityStack.remove(record);
+            if (removed) record.task = null;
+            return removed;
+        }
+
+        public synchronized int size() {
+            return activityStack.size();
+        }
+
+        public synchronized boolean isEmpty() {
+            return activityStack.isEmpty();
+        }
+
+        @Override public String toString() {
+            return "TaskRecord{id=" + taskId + ", tab=" + tab + ", size=" + activityStack.size() + "}";
+        }
+    }
+
+    public static final class ActivityRecord {
+        public TaskRecord task;
+        public android.os.IBinder token;
+        public String tab;
+        public String apkPath;
+        public String packageName;
+        public String activityName;
+        public String applicationName;
+        public Object activity;
+        public Class<?> activityClass;
+        public boolean foreground;
+        public boolean finishing;
     }
 
     private static final Object lock = new Object();
+    private static int nextTaskId = 1;
+    private static final Map<Integer, TaskRecord> tasks =
+        new LinkedHashMap<Integer, TaskRecord>();
+    private static final Map<String, TaskRecord> tasksByTab =
+        new LinkedHashMap<String, TaskRecord>();
+    private static final ArrayList<TaskRecord> taskStack =
+        new ArrayList<TaskRecord>();
+    private static final Map<android.os.IBinder, ActivityRecord> recordsByToken =
+        new LinkedHashMap<android.os.IBinder, ActivityRecord>();
     private static final Map<String, ActivityRecord> activities =
         new LinkedHashMap<String, ActivityRecord>();
     private static final ArrayList<String> activityStack =
@@ -105,8 +166,16 @@ public final class FrameworkDeviceController {
                                         String packageValue,
                                         String activityValue,
                                         Class<?> type) {
+        registerActivity(value, packageValue, activityValue, type, null);
+    }
+
+    public static void registerActivity(Object value,
+                                        String packageValue,
+                                        String activityValue,
+                                        Class<?> type,
+                                        android.os.IBinder token) {
         registerActivityForTab(defaultTabFor(packageValue, activityValue),
-            "", packageValue, activityValue, value, type);
+            "", packageValue, activityValue, value, type, token);
     }
 
     public static void registerActivityForTab(String tabValue,
@@ -115,6 +184,16 @@ public final class FrameworkDeviceController {
                                              String activityValue,
                                              Object value,
                                              Class<?> type) {
+        registerActivityForTab(tabValue, apkValue, packageValue, activityValue, value, type, null);
+    }
+
+    public static void registerActivityForTab(String tabValue,
+                                             String apkValue,
+                                             String packageValue,
+                                             String activityValue,
+                                             Object value,
+                                             Class<?> type,
+                                             android.os.IBinder token) {
         String normalizedPackage = clean(packageValue);
         String normalizedActivity =
             normalizeActivityName(normalizedPackage, activityValue);
@@ -130,17 +209,39 @@ public final class FrameworkDeviceController {
         record.activityClass =
             type == null && value != null ? value.getClass() : type;
         record.foreground = value != null;
+        record.token = token;
+
         synchronized (lock) {
+            TaskRecord task = tasksByTab.get(normalizedTab);
+            if (task == null) {
+                task = new TaskRecord(nextTaskId++, normalizedPackage, normalizedTab);
+                tasks.put(task.taskId, task);
+                tasksByTab.put(normalizedTab, task);
+            }
+            task.pushActivity(record);
+            if (token != null) {
+                recordsByToken.put(token, record);
+            }
             activities.put(normalizedTab, record);
             activeTab = normalizedTab;
             mainReady = true;
+            taskStack.remove(task);
+            taskStack.add(task);
             activityStack.remove(normalizedTab);
             activityStack.add(normalizedTab);
         }
         System.out.println("[DeviceController] registered activity tab=" +
             normalizedTab + " package=" + normalizedPackage + " activity=" +
-            normalizedActivity);
+            normalizedActivity + " task=" + record.task + " token=" + (token != null));
         flushPendingActions();
+        start();
+    }
+
+    public static ActivityRecord findActivityByToken(android.os.IBinder token) {
+        if (token == null) return null;
+        synchronized (lock) {
+            return recordsByToken.get(token);
+        }
     }
 
     public static void launchApp(String apkPath,
@@ -163,26 +264,48 @@ public final class FrameworkDeviceController {
         dispatchAction(action);
     }
 
+    private static volatile boolean connecting;
+
     public static synchronized void start() {
-        if (subscriber != null) return;
-        String socket = FrameworkServiceClient.getServiceSocket();
-        if (socket.isEmpty()) return;
+        if (subscriber != null || connecting) return;
+        connecting = true;
+        Thread connectThread = new Thread(new Runnable() {
+            @Override public void run() {
+                try {
+                    for (int i = 0; i < 150; i++) {
+                        String socket = FrameworkServiceClient.getServiceSocket();
+                        if (!socket.isEmpty()) {
+                            if (initSubscriber(socket)) {
+                                return;
+                            }
+                        }
+                        try {
+                            Thread.sleep(100);
+                        } catch (InterruptedException ignored) {
+                            break;
+                        }
+                    }
+                    System.err.println("[DeviceController] could not connect to muplard socket after retry");
+                } finally {
+                    connecting = false;
+                }
+            }
+        }, "muplar-device-connect");
+        connectThread.setDaemon(true);
+        connectThread.start();
+    }
+
+    private static boolean initSubscriber(String socket) {
+        synchronized (FrameworkDeviceController.class) {
+            if (subscriber != null) return true;
+        }
         MuplarSocketClient actionClient = MuplarSocketClient.connect(socket);
         MuplarSocketClient inputClient =
             actionClient == null ? null : MuplarSocketClient.connect(socket);
         if (actionClient == null || inputClient == null) {
             if (actionClient != null) actionClient.close();
-            System.err.println(
-                "[DeviceController] subscribe failed: could not connect");
-            return;
+            return false;
         }
-        // muplard replies to a subscribe request with one ack frame carrying
-        // its current device_state/device_input_state snapshot (same opcode,
-        // REPLY_FLAG set) before any live DeviceActionChanged/
-        // DeviceInputChanged pushes. That ack must be consumed here, not
-        // left for the reader loop below to misparse as a brand new event --
-        // otherwise a freshly registered activity immediately replays
-        // muplard's last action/input as if it just happened.
         MuplarSocketClient.Frame actionAck;
         MuplarSocketClient.Frame inputAck;
         if (!actionClient.sendFrame(OPCODE_SUBSCRIBE_DEVICE_ACTIONS, "") ||
@@ -195,12 +318,12 @@ public final class FrameworkDeviceController {
                 (OPCODE_SUBSCRIBE_DEVICE_INPUTS | MuplarSocketClient.REPLY_FLAG)) {
             actionClient.close();
             inputClient.close();
-            System.err.println(
-                "[DeviceController] subscribe failed: could not subscribe");
-            return;
+            return false;
         }
-        subscriber = actionClient;
-        inputSubscriber = inputClient;
+        synchronized (FrameworkDeviceController.class) {
+            subscriber = actionClient;
+            inputSubscriber = inputClient;
+        }
         Thread reader = new Thread(new Runnable() {
             @Override public void run() {
                 readActions(actionClient);
@@ -224,6 +347,7 @@ public final class FrameworkDeviceController {
             }
         }, "muplar-device-actions-shutdown"));
         System.out.println("[DeviceController] subscribed");
+        return true;
     }
 
     private static void readActions(MuplarSocketClient client) {
@@ -512,6 +636,15 @@ public final class FrameworkDeviceController {
                 if (!isHostTab(next.tab)) {
                     finishTab(next.tab);
                 }
+            } else if ("package-installed".equals(next.action)) {
+                String pkg = next.packageName;
+                if (pkg == null || pkg.isEmpty()) {
+                    pkg = next.tab;
+                }
+                System.out.println("[DeviceController] package installed notification: " + pkg);
+                if (pkg != null && !pkg.isEmpty()) {
+                    MuplarServices.notifyPackageAdded(pkg);
+                }
             } else if ("settings".equals(next.action) ||
                        "install-apk".equals(next.action)) {
                 System.out.println("[DeviceController] host action=" +
@@ -661,9 +794,9 @@ public final class FrameworkDeviceController {
             next.tab + " apk=" + next.apkPath + " pkg=" + next.packageName +
             " act=" + next.activityName);
         ActivityRecord record = activityForTab(next.tab);
-        if (record != null &&
+        if (record != null && (next.activityName.isEmpty() ||
             sameActivity(record.packageName, record.activityName,
-                next.packageName, next.activityName)) {
+                next.packageName, next.activityName))) {
             focusRecord(record);
             return;
         }
@@ -678,6 +811,78 @@ public final class FrameworkDeviceController {
         if (!launched)
             System.err.println("[DeviceController] app launch ignored package="
                 + next.packageName + " activity=" + next.activityName);
+    }
+
+    public static void startActivityInCurrentTask(final ActivityRecord caller,
+                                                  final String apkPath,
+                                                  final String packageName,
+                                                  final String activityName,
+                                                  final String applicationName) {
+        android.os.Looper looper = android.os.Looper.getMainLooper();
+        if (looper == null) return;
+        android.os.Handler.createAsync(looper).post(new Runnable() {
+            @Override public void run() {
+                try {
+                    System.out.println("[DeviceController] startActivityInCurrentTask pkg="
+                        + packageName + " cls=" + activityName);
+                    ActivityRecord current = caller != null ? caller : activeRecord();
+                    if (current != null && current.foreground) {
+                        invokeLifecycle(current, "onUserLeaveHint");
+                        invokeLifecycle(current, "onPause");
+                        invokeLifecycle(current, "onStop");
+                        current.foreground = false;
+                    }
+                    String tab = current != null ? current.tab : packageName;
+                    boolean launched = ArtApkMain.launchActivity(tab, apkPath,
+                        packageName, activityName, applicationName);
+                    if (!launched) {
+                        System.err.println("[DeviceController] failed to launch " + activityName);
+                        if (current != null) focusRecord(current);
+                    }
+                } catch (Throwable t) {
+                    System.err.println("[DeviceController] startActivityInCurrentTask error: " + t);
+                }
+            }
+        });
+    }
+
+    public static void finishActivityByToken(final android.os.IBinder token) {
+        android.os.Looper looper = android.os.Looper.getMainLooper();
+        if (looper == null) return;
+        android.os.Handler.createAsync(looper).post(new Runnable() {
+            @Override public void run() {
+                try {
+                    ActivityRecord record = findActivityByToken(token);
+                    if (record == null) {
+                        record = activeRecord();
+                    }
+                    if (record != null) {
+                        System.out.println("[DeviceController] finishActivityByToken: " + record.activityName);
+                        finishAndRemoveActivity(record);
+                    }
+                } catch (Throwable t) {
+                    System.err.println("[DeviceController] finishActivityByToken error: " + t);
+                }
+            }
+        });
+    }
+
+    public static void finishActiveActivity() {
+        android.os.Looper looper = android.os.Looper.getMainLooper();
+        if (looper == null) return;
+        android.os.Handler.createAsync(looper).post(new Runnable() {
+            @Override public void run() {
+                try {
+                    ActivityRecord record = activeRecord();
+                    if (record != null) {
+                        System.out.println("[DeviceController] finishActiveActivity: " + record.activityName);
+                        finishAndRemoveActivity(record);
+                    }
+                } catch (Throwable t) {
+                    System.err.println("[DeviceController] finishActiveActivity error: " + t);
+                }
+            }
+        });
     }
 
     private static void performBack() throws Exception {
@@ -695,8 +900,7 @@ public final class FrameworkDeviceController {
         } catch (Throwable t) {
             System.err.println("[DeviceController] onBackPressed error: " + t.getMessage());
         }
-        finishRecord(record);
-        removeRecord(record);
+        finishAndRemoveActivity(record);
         System.out.println("[DeviceController] back dispatched");
     }
 
@@ -730,24 +934,31 @@ public final class FrameworkDeviceController {
 
     private static void toggleRecents() throws Exception {
         synchronized (lock) {
-            System.out.println("[DeviceController] recents stack=" + activityStack);
-            if (activityStack.size() >= 2) {
-                String previousTab = activityStack.get(activityStack.size() - 2);
-                ActivityRecord record = activities.get(previousTab);
-                if (record != null) {
-                    focusRecord(record);
+            System.out.println("[DeviceController] recents taskStack=" + taskStack);
+            if (taskStack.size() >= 2) {
+                TaskRecord previousTask = taskStack.get(taskStack.size() - 2);
+                ActivityRecord top = previousTask.topActivity();
+                if (top != null) {
+                    focusRecord(top);
                     return;
                 }
             }
-            ActivityRecord launcher = activities.get("launcher");
-            if (launcher != null) {
-                focusRecord(launcher);
+            TaskRecord launcherTask = tasksByTab.get("launcher");
+            if (launcherTask != null && launcherTask.topActivity() != null) {
+                focusRecord(launcherTask.topActivity());
             }
         }
     }
 
     private static void focusRecord(ActivityRecord record) throws Exception {
         if (record == null || record.activity == null) return;
+        TaskRecord task = record.task;
+        if (task != null) {
+            synchronized (lock) {
+                taskStack.remove(task);
+                taskStack.add(task);
+            }
+        }
         pushTaskStack(record.tab);
         ActivityRecord previous = activeRecord();
         if (previous != null && previous != record)
@@ -760,18 +971,57 @@ public final class FrameworkDeviceController {
         record.foreground = true;
         scheduleFrame(record);
         System.out.println("[DeviceController] activity resumed tab=" +
-            record.tab);
+            record.tab + " activity=" + record.activityName);
     }
 
     private static void finishTab(String tabValue) throws Exception {
+        TaskRecord task;
+        synchronized (lock) {
+            task = tasksByTab.get(clean(tabValue));
+        }
+        if (task != null) {
+            ArrayList<ActivityRecord> stackCopy = new ArrayList<ActivityRecord>(task.activityStack);
+            for (int i = stackCopy.size() - 1; i >= 0; i--) {
+                ActivityRecord rec = stackCopy.get(i);
+                finishRecord(rec);
+            }
+            String newActiveTab;
+            synchronized (lock) {
+                for (ActivityRecord rec : stackCopy) {
+                    if (rec.token != null) recordsByToken.remove(rec.token);
+                }
+                task.activityStack.clear();
+                tasks.remove(task.taskId);
+                tasksByTab.remove(task.tab);
+                taskStack.remove(task);
+                activities.remove(task.tab);
+                activityStack.remove(task.tab);
+                TaskRecord prev = !taskStack.isEmpty() ? taskStack.get(taskStack.size() - 1) : tasksByTab.get("launcher");
+                newActiveTab = prev != null ? prev.tab : (activities.containsKey("launcher") ? "launcher" : "");
+                if (tabValue.equals(activeTab)) {
+                    activeTab = newActiveTab;
+                }
+            }
+            if (!"launcher".equals(tabValue)) {
+                System.out.println("[DeviceController] finishTab: tab-finished for " + tabValue);
+                FrameworkServiceClient.request("tab-finished", tabValue);
+            }
+            ActivityRecord next = activityForTab(newActiveTab);
+            if (next != null) {
+                focusRecord(next);
+            } else {
+                MuplarFramePresenter.clear();
+            }
+            return;
+        }
         ActivityRecord record = activityForTab(tabValue);
         if (record == null) return;
-        finishRecord(record);
-        removeRecord(record);
+        finishAndRemoveActivity(record);
     }
 
     private static void finishRecord(ActivityRecord record) throws Exception {
-        if (record == null || record.activity == null) return;
+        if (record == null || record.activity == null || record.finishing) return;
+        record.finishing = true;
         try {
             java.lang.reflect.Method finish =
                 record.activity.getClass().getMethod("finish");
@@ -788,35 +1038,75 @@ public final class FrameworkDeviceController {
         record.activity = null;
         record.activityClass = null;
         System.out.println("[DeviceController] activity finished tab=" +
-            record.tab);
+            record.tab + " activity=" + record.activityName);
     }
 
-    private static void removeRecord(ActivityRecord record) throws Exception {
-        String tabValue = record.tab;
-        boolean wasActive;
-        String newActiveTab;
+    private static void finishAndRemoveActivity(ActivityRecord record) throws Exception {
+        if (record == null) return;
+        TaskRecord task = record.task;
+
+        finishRecord(record);
+
         synchronized (lock) {
-            activities.remove(tabValue);
-            wasActive = tabValue.equals(activeTab);
-            newActiveTab = popTaskStack(tabValue);
+            if (record.token != null) {
+                recordsByToken.remove(record.token);
+            }
+            if (task != null) {
+                task.removeActivity(record);
+            }
+        }
+
+        if (task != null && !task.isEmpty()) {
+            ActivityRecord newTop = task.topActivity();
+            synchronized (lock) {
+                activities.put(task.tab, newTop);
+            }
+            System.out.println("[DeviceController] task " + task.taskId +
+                " (" + task.tab + ") still active with " + task.size() +
+                " activities, resuming top=" + newTop.activityName);
+            focusRecord(newTop);
+        } else {
+            String tabValue = record.tab;
+            boolean wasActive;
+            String newActiveTab;
+            synchronized (lock) {
+                activities.remove(tabValue);
+                if (task != null) {
+                    tasks.remove(task.taskId);
+                    tasksByTab.remove(task.tab);
+                    taskStack.remove(task);
+                }
+                wasActive = tabValue.equals(activeTab);
+                newActiveTab = popTaskStack(tabValue);
+                if (newActiveTab.isEmpty()) {
+                    TaskRecord prev = !taskStack.isEmpty() ? taskStack.get(taskStack.size() - 1) : tasksByTab.get("launcher");
+                    newActiveTab = prev != null ? prev.tab : (activities.containsKey("launcher") ? "launcher" : "");
+                }
+                if (wasActive) {
+                    activeTab = newActiveTab;
+                }
+            }
+            if (!"launcher".equals(tabValue)) {
+                System.out.println("[DeviceController] task empty, requesting tab-finished for " + tabValue);
+                FrameworkServiceClient.request("tab-finished", tabValue);
+            }
             if (wasActive) {
-                activeTab = newActiveTab;
-            }
-        }
-        if (!"launcher".equals(tabValue))
-            FrameworkServiceClient.request("tab-finished", tabValue);
-        if (wasActive) {
-            ActivityRecord next = activityForTab(newActiveTab);
-            if (next != null) {
-                focusRecord(next);
-            } else {
-                MuplarFramePresenter.clear();
+                ActivityRecord next = activityForTab(newActiveTab);
+                if (next != null) {
+                    focusRecord(next);
+                } else {
+                    MuplarFramePresenter.clear();
+                }
             }
         }
     }
 
-    private static ActivityRecord activeRecord() {
+    public static ActivityRecord activeRecord() {
         synchronized (lock) {
+            TaskRecord task = tasksByTab.get(activeTab);
+            if (task != null && task.topActivity() != null) {
+                return task.topActivity();
+            }
             return activities.get(activeTab);
         }
     }
@@ -839,8 +1129,12 @@ public final class FrameworkDeviceController {
         }
     }
 
-    private static ActivityRecord activityForTab(String tabValue) {
+    public static ActivityRecord activityForTab(String tabValue) {
         synchronized (lock) {
+            TaskRecord task = tasksByTab.get(clean(tabValue));
+            if (task != null && task.topActivity() != null) {
+                return task.topActivity();
+            }
             return activities.get(clean(tabValue));
         }
     }

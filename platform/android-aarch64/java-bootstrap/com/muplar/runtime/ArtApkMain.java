@@ -80,8 +80,9 @@ public final class ArtApkMain {
                         onCreateMethod.invoke(activityObj, bundleObj);
                         System.out.println("[Muplar/ART] onCreate completed successfully");
                         driveActivityLifecycle(activityObj, activityClass, loader);
+                        android.os.IBinder token = attachToken(activityObj);
                         FrameworkDeviceController.registerActivity(activityObj,
-                            packageName, activityClassName, activityClass);
+                            packageName, activityClassName, activityClass, token);
                         runMainLooper();
                     } else {
                         System.out.println("[Muplar/ART] onCreate method not found");
@@ -155,9 +156,10 @@ public final class ArtApkMain {
                 onCreateMethod.invoke(activityObj, bundleObj);
             }
             driveActivityLifecycle(activityObj, activityClass, loader);
+            android.os.IBinder token = attachToken(activityObj);
             FrameworkDeviceController.registerActivityForTab(tabIdentifier,
                 apkPath, packageName, activityClassName, activityObj,
-                activityClass);
+                activityClass, token);
             System.out.println("[Muplar/ART] launched activity class="
                 + activityClassName);
             return true;
@@ -599,21 +601,43 @@ public final class ArtApkMain {
         }
     }
 
+    private static final java.util.Map<String, ClassLoader> packageClassLoaders =
+        new java.util.concurrent.ConcurrentHashMap<String, ClassLoader>();
+    private static final java.util.Map<String, Object> packageApplications =
+        new java.util.concurrent.ConcurrentHashMap<String, Object>();
+
+    private static android.os.IBinder attachToken(Object activityObj) {
+        try {
+            android.os.IBinder token = new android.os.Binder();
+            setField(activityObj, "mToken", token);
+            System.out.println("[Muplar/ART] token attached: " + token);
+            return token;
+        } catch (Throwable t) {
+            System.err.println("[Muplar/ART] token attach failed: " + t.getMessage());
+            return null;
+        }
+    }
+
     private static void attachApplication(Object activityObj,
                                           String packageName,
                                           String apkPath,
                                           ClassLoader loader,
                                           String applicationClass) {
         try {
-            if (applicationClass == null || applicationClass.isEmpty()) {
-                MuplarServices.InstalledPackage pkg = MuplarServices.findInstalledPackage(packageName);
-                if (pkg != null && pkg.application != null && !pkg.application.isEmpty()) {
-                    applicationClass = pkg.application;
+            Object application = packageApplications.get(packageName);
+            Object context = null;
+            if (application == null) {
+                if (applicationClass == null || applicationClass.isEmpty()) {
+                    MuplarServices.InstalledPackage pkg = MuplarServices.findInstalledPackage(packageName);
+                    if (pkg != null && pkg.application != null && !pkg.application.isEmpty()) {
+                        applicationClass = pkg.application;
+                    }
                 }
+                context = new MuplarContext(packageName, apkPath, loader);
+                application = createApplication(packageName, context, loader,
+                    applicationClass);
+                packageApplications.put(packageName, application);
             }
-            Object context = new MuplarContext(packageName, apkPath, loader);
-            Object application = createApplication(packageName, context, loader,
-                applicationClass);
             if (context instanceof MuplarContext && application instanceof android.content.Context) {
                 ((MuplarContext) context).setApplicationContext((android.content.Context) application);
             }
@@ -767,10 +791,16 @@ public final class ArtApkMain {
                             Class.forName("android.os.IBinder"),
                             String.class,
                             Boolean.TYPE);
+                    Object token = null;
+                    try {
+                        token = getField(activityObj, "mToken");
+                    } catch (Throwable ignored) {
+                    }
+                    if (token == null) token = new android.os.Binder();
                     setWindowManager.invoke(
                         window,
                         windowManager,
-                        new android.os.Binder(),
+                        token,
                         packageName,
                         Boolean.FALSE);
                 } catch (Throwable t) {
@@ -935,6 +965,9 @@ public final class ArtApkMain {
         if (apkPath.isEmpty()) {
             throw new IllegalArgumentException("APK path is required");
         }
+        if (!packageName.isEmpty() && packageClassLoaders.containsKey(packageName)) {
+            return packageClassLoaders.get(packageName);
+        }
 
         ClassLoader parent = Thread.currentThread().getContextClassLoader();
         if (parent == null) {
@@ -951,6 +984,9 @@ public final class ArtApkMain {
                 apkPath, ensureDexOptDir(packageName), null, parent);
             System.out.println("[Muplar/ART] classLoader="
                 + dexClassLoader.getName());
+            if (!packageName.isEmpty()) {
+                packageClassLoaders.put(packageName, loader);
+            }
             return loader;
         } catch (ClassNotFoundException ignored) {
             // Not running in ART — fall through.
@@ -966,6 +1002,9 @@ public final class ArtApkMain {
                 (ClassLoader) ctor.newInstance(apkPath, parent);
             System.out.println("[Muplar/ART] classLoader="
                 + pathClassLoader.getName());
+            if (!packageName.isEmpty()) {
+                packageClassLoaders.put(packageName, loader);
+            }
             return loader;
         } catch (ClassNotFoundException ignored) {
             // Not running in ART — fall through.
