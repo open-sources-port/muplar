@@ -53,10 +53,12 @@ usable user experience?"
 ## User-Visible Problem
 
 The device window session/tab UI, Home/Recents/Settings dispatch, `LauncherApps`
-installed-app query, and touch input dispatch all work now. Two primary items
-remain to achieve a seamless "Android device" feel: Back button hangs on
-apps driving un-ticked animations, and continuous frame rendering needs
-optimization under interpreter performance.
+installed-app query, touch input dispatch, secondary app launch, and Back
+navigation all work now. The end-to-end product loop (Launcher3 → launch app
+→ Back to Launcher) is verified by `test-app-launch.sh`. Two primary items
+remain to achieve a seamless "Android device" feel: JIT instability forces
+`-Xint` (making everything slow), and frame rendering is still a 200ms-polled
+software-bitmap bridge rather than a proper HWUI/Surface path.
 
 The product target is documented in:
 
@@ -64,7 +66,17 @@ The product target is documented in:
 
 ## Main Blockers
 
-- Back button animation & Choreographer looper hangs: **Resolved (2026-08-31)**. `Java_android_view_DisplayEventReceiver_nativeGetLatestVsyncEventData` now constructs a valid `VsyncEventData` instance with a 7-element `FrameTimeline` array, and `MuplarVsyncScheduler` dispatches `VsyncEventData` overloads cleanly. `FrameworkDeviceController.performBack()` includes a 250ms delayed fallback check to finish activities trapped in transition animations.
+## Main Blockers
+
+- Back button animation & Choreographer looper hangs: **Resolved (2026-09-05)**.
+  `FrameworkDeviceController.performBack()` now unconditionally calls
+  `onBackPressed` then `finishRecord`+`removeRecord`. No more `isFinishing()`
+  polling or delayed fallback. `IActivityTaskManager.finishActivity` stubbed to
+  return `Boolean.TRUE`. All `Handler` usage in device-action dispatch and frame
+  scheduling uses `Handler.createAsync(looper)` to bypass the MessageQueue sync
+  barrier (inserted by Choreographer/ViewRootImpl during vsync). End-to-end
+  `test-app-launch.sh` passes: focus-tab launches secondary app, Back returns
+  cleanly to Launcher3 (`activity resumed tab=launcher`).
 - Touch input dispatch: **Resolved (2026-08-31)**. Touch input dispatch now
   executes cleanly through `dispatchTouchEvent` and `recycle()` without native
   crashes. Automated test coverage is added in `test-touch-smoke.sh`.
@@ -171,11 +183,14 @@ The product target is documented in:
   (`build/launcher3/verification/all-apps.png`, captured 2026-07-29) — a
   separate, likely pre-existing bug in that capture path worth a look on
   its own, unrelated to interpreter speed.
-- Android task/back-stack state is host-simulated (simple tab list), not
-  backed by real ActivityManager task tracking.
-- The Java View frame path is still the software bitmap bridge
-  (`MuplarFramePresenter` writing raw MHR frames); it should move to
-  framework/HWUI-backed presentation.
+- Android task/back-stack state: **P2 next step**. Currently host-simulated
+  (a `LinkedHashMap` + stack in `FrameworkDeviceController`). True
+  `ActivityManager` task tracking, intent resolution, and
+  `startActivity`-from-app are needed for apps to launch each other correctly.
+- The Java View frame path (`MuplarFramePresenter` → raw MHR bitmap) is a
+  **P4 next step**. It should move to framework/HWUI-backed presentation via
+  real `ViewRootImpl` / `Surface` semantics for smooth, choreographer-timed
+  frame delivery and to remove the 200ms polling loop.
 
 ## Verification Commands
 

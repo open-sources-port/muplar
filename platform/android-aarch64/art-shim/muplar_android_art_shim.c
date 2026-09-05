@@ -1666,6 +1666,341 @@ jlong Java_android_graphics_ColorSpace_00024Rgb_00024Native_nativeGetNativeFinal
     return 0;
 }
 
+static void muplar_color_rgb_to_hsv(jint red, jint green, jint blue, jfloat *hsv)
+{
+    float r = (float) red / 255.0f;
+    float g = (float) green / 255.0f;
+    float b = (float) blue / 255.0f;
+
+    float max = r > g ? (r > b ? r : b) : (g > b ? g : b);
+    float min = r < g ? (r < b ? r : b) : (g < b ? g : b);
+    float delta = max - min;
+
+    hsv[2] = max;
+    if (max > 0.0f) {
+        hsv[1] = delta / max;
+    } else {
+        hsv[1] = 0.0f;
+        hsv[0] = 0.0f;
+        return;
+    }
+
+    if (delta > 0.0f) {
+        if (max == r) {
+            hsv[0] = 60.0f * ((g - b) / delta);
+        } else if (max == g) {
+            hsv[0] = 60.0f * (2.0f + (b - r) / delta);
+        } else {
+            hsv[0] = 60.0f * (4.0f + (r - g) / delta);
+        }
+        if (hsv[0] < 0.0f) {
+            hsv[0] += 360.0f;
+        }
+    } else {
+        hsv[0] = 0.0f;
+    }
+}
+
+static jint muplar_color_hsv_to_color(jint alpha, const jfloat *hsv)
+{
+    float h = hsv[0];
+    float s = hsv[1];
+    float v = hsv[2];
+
+    if (s <= 0.0f) {
+        int val = (int) (v * 255.0f + 0.5f);
+        if (val < 0) val = 0;
+        if (val > 255) val = 255;
+        return ((alpha & 0xff) << 24) | (val << 16) | (val << 8) | val;
+    }
+
+    if (h >= 360.0f) h = 0.0f;
+    h /= 60.0f;
+    int i = (int) h;
+    float f = h - (float) i;
+    float p = v * (1.0f - s);
+    float q = v * (1.0f - s * f);
+    float t = v * (1.0f - s * (1.0f - f));
+
+    float r = 0.0f, g = 0.0f, b = 0.0f;
+    switch (i) {
+        case 0: r = v; g = t; b = p; break;
+        case 1: r = q; g = v; b = p; break;
+        case 2: r = p; g = v; b = t; break;
+        case 3: r = p; g = q; b = v; break;
+        case 4: r = t; g = p; b = v; break;
+        default: r = v; g = p; b = q; break;
+    }
+
+    int ir = (int) (r * 255.0f + 0.5f);
+    int ig = (int) (g * 255.0f + 0.5f);
+    int ib = (int) (b * 255.0f + 0.5f);
+    if (ir < 0) ir = 0; else if (ir > 255) ir = 255;
+    if (ig < 0) ig = 0; else if (ig > 255) ig = 255;
+    if (ib < 0) ib = 0; else if (ib > 255) ib = 255;
+
+    return ((alpha & 0xff) << 24) | (ir << 16) | (ig << 8) | ib;
+}
+
+JNIEXPORT void JNICALL
+Java_android_graphics_Color_nativeRGBToHSV(JNIEnv *env,
+                                          jclass clazz,
+                                          jint red,
+                                          jint green,
+                                          jint blue,
+                                          jfloatArray hsvArray)
+{
+    (void) clazz;
+    if (!hsvArray)
+        return;
+    jfloat hsv[3] = {0.0f, 0.0f, 0.0f};
+    muplar_color_rgb_to_hsv(red, green, blue, hsv);
+    (*env)->SetFloatArrayRegion(env, hsvArray, 0, 3, hsv);
+}
+
+JNIEXPORT jint JNICALL
+Java_android_graphics_Color_nativeHSVToColor(JNIEnv *env,
+                                            jclass clazz,
+                                            jint alpha,
+                                            jfloatArray hsvArray)
+{
+    (void) clazz;
+    if (!hsvArray)
+        return 0;
+    jfloat hsv[3] = {0.0f, 0.0f, 0.0f};
+    (*env)->GetFloatArrayRegion(env, hsvArray, 0, 3, hsv);
+    return muplar_color_hsv_to_color(alpha, hsv);
+}
+
+static void muplar_bitmap_set_dummy_nine_patch(JNIEnv *env, jobject bitmap)
+{
+    jbyteArray chunk;
+    jclass bCls;
+    jfieldID fChunk;
+    if (!bitmap)
+        return;
+    chunk = (*env)->NewByteArray(env, 32);
+    if (!chunk) {
+        if ((*env)->ExceptionCheck(env))
+            (*env)->ExceptionClear(env);
+        return;
+    }
+    bCls = (*env)->GetObjectClass(env, bitmap);
+    if (bCls) {
+        fChunk = (*env)->GetFieldID(env, bCls, "mNinePatchChunk", "[B");
+        if (fChunk) {
+            (*env)->SetObjectField(env, bitmap, fChunk, chunk);
+        }
+    }
+    if ((*env)->ExceptionCheck(env))
+        (*env)->ExceptionClear(env);
+}
+
+static jobject muplar_image_decoder_new(JNIEnv *env, jclass clazz, jboolean isNinePatch)
+{
+    jmethodID ctor = (*env)->GetMethodID(env, clazz, "<init>", "(JIIZZ)V");
+    if (!ctor) {
+        if ((*env)->ExceptionCheck(env))
+            (*env)->ExceptionClear(env);
+        return NULL;
+    }
+    return (*env)->NewObject(env, clazz, ctor, (jlong) 1, (jint) 16, (jint) 16,
+                             (jboolean) JNI_FALSE, isNinePatch);
+}
+
+JNIEXPORT jobject JNICALL
+Java_android_graphics_ImageDecoder_nCreate__Ljava_io_InputStream_2_3BZLandroid_graphics_ImageDecoder_00024Source_2(
+    JNIEnv *env, jclass clazz, jobject is, jbyteArray storage, jboolean hasAlpha, jobject source)
+{
+    (void) is;
+    (void) storage;
+    (void) hasAlpha;
+    (void) source;
+    return muplar_image_decoder_new(env, clazz, JNI_FALSE);
+}
+
+JNIEXPORT jobject JNICALL
+Java_android_graphics_ImageDecoder_nCreate__JZLandroid_graphics_ImageDecoder_00024Source_2(
+    JNIEnv *env, jclass clazz, jlong asset, jboolean hasAlpha, jobject source)
+{
+    (void) asset;
+    (void) hasAlpha;
+    (void) source;
+    return muplar_image_decoder_new(env, clazz, JNI_FALSE);
+}
+
+JNIEXPORT jobject JNICALL
+Java_android_graphics_ImageDecoder_nCreate__Ljava_io_FileDescriptor_2JZLandroid_graphics_ImageDecoder_00024Source_2(
+    JNIEnv *env, jclass clazz, jobject fd, jlong length, jboolean hasAlpha, jobject source)
+{
+    (void) fd;
+    (void) length;
+    (void) hasAlpha;
+    (void) source;
+    return muplar_image_decoder_new(env, clazz, JNI_FALSE);
+}
+
+JNIEXPORT jobject JNICALL
+Java_android_graphics_ImageDecoder_nCreate__Ljava_nio_ByteBuffer_2IIZLandroid_graphics_ImageDecoder_00024Source_2(
+    JNIEnv *env, jclass clazz, jobject buf, jint pos, jint limit, jboolean hasAlpha, jobject source)
+{
+    (void) buf;
+    (void) pos;
+    (void) limit;
+    (void) hasAlpha;
+    (void) source;
+    return muplar_image_decoder_new(env, clazz, JNI_FALSE);
+}
+
+JNIEXPORT jobject JNICALL
+Java_android_graphics_ImageDecoder_nCreate___3BIIZLandroid_graphics_ImageDecoder_00024Source_2(
+    JNIEnv *env, jclass clazz, jbyteArray data, jint offset, jint length, jboolean hasAlpha, jobject source)
+{
+    (void) data;
+    (void) offset;
+    (void) length;
+    (void) hasAlpha;
+    (void) source;
+    return muplar_image_decoder_new(env, clazz, JNI_FALSE);
+}
+
+JNIEXPORT jobject JNICALL
+Java_android_graphics_ImageDecoder_nDecodeBitmap(
+    JNIEnv *env, jclass clazz,
+    jlong nativePtr, jobject decoder, jboolean doPostProcess,
+    jint width, jint height, jobject cropRect,
+    jboolean mutable, jint allocator, jboolean unpremul,
+    jboolean conserveMemory, jboolean decodeAsAlphaMask,
+    jlong colorSpacePtr, jboolean extended)
+{
+    (void) clazz;
+    (void) nativePtr;
+    (void) decoder;
+    (void) doPostProcess;
+    (void) cropRect;
+    (void) mutable;
+    (void) allocator;
+    (void) unpremul;
+    (void) conserveMemory;
+    (void) decodeAsAlphaMask;
+    (void) colorSpacePtr;
+    (void) extended;
+    jint w = width > 0 ? width : 16;
+    jint h = height > 0 ? height : 16;
+    if (muplar_graphics_class && muplar_graphics_create_bitmap) {
+        jobject obj = (*env)->CallStaticObjectMethod(env, muplar_graphics_class,
+                                                     muplar_graphics_create_bitmap, w, h);
+        struct muplar_bitmap_state *bitmap = muplar_alloc_bitmap(w, h);
+        if (obj && bitmap)
+            muplar_set_long_field(env, obj, "mNativePtr", bitmap->token);
+        if (obj)
+            muplar_bitmap_set_dummy_nine_patch(env, obj);
+        return obj;
+    }
+    return NULL;
+}
+
+JNIEXPORT void JNICALL
+Java_android_graphics_ImageDecoder_nClose(JNIEnv *env, jclass clazz, jlong nativePtr)
+{
+    (void) env;
+    (void) clazz;
+    (void) nativePtr;
+}
+
+JNIEXPORT void JNICALL
+Java_android_graphics_ImageDecoder_nGetPadding(JNIEnv *env, jclass clazz, jlong nativePtr, jobject rect)
+{
+    (void) clazz;
+    (void) nativePtr;
+    if (rect) {
+        jclass rectClass = (*env)->GetObjectClass(env, rect);
+        if (rectClass) {
+            jfieldID fLeft = (*env)->GetFieldID(env, rectClass, "left", "I");
+            jfieldID fTop = (*env)->GetFieldID(env, rectClass, "top", "I");
+            jfieldID fRight = (*env)->GetFieldID(env, rectClass, "right", "I");
+            jfieldID fBottom = (*env)->GetFieldID(env, rectClass, "bottom", "I");
+            if (fLeft) (*env)->SetIntField(env, rect, fLeft, 0);
+            if (fTop) (*env)->SetIntField(env, rect, fTop, 0);
+            if (fRight) (*env)->SetIntField(env, rect, fRight, 0);
+            if (fBottom) (*env)->SetIntField(env, rect, fBottom, 0);
+        }
+        if ((*env)->ExceptionCheck(env))
+            (*env)->ExceptionClear(env);
+    }
+}
+
+JNIEXPORT jobject JNICALL
+Java_android_graphics_ImageDecoder_nGetColorSpace(JNIEnv *env, jclass clazz, jlong nativePtr)
+{
+    (void) env;
+    (void) clazz;
+    (void) nativePtr;
+    return NULL;
+}
+
+JNIEXPORT jstring JNICALL
+Java_android_graphics_ImageDecoder_nGetMimeType(JNIEnv *env, jclass clazz, jlong nativePtr)
+{
+    (void) clazz;
+    (void) nativePtr;
+    return (*env)->NewStringUTF(env, "image/png");
+}
+
+JNIEXPORT jobject JNICALL
+Java_android_graphics_ImageDecoder_nGetSampledSize(JNIEnv *env, jclass clazz, jlong nativePtr, jint sampleSize)
+{
+    (void) clazz;
+    (void) nativePtr;
+    (void) sampleSize;
+    jclass sizeClass = (*env)->FindClass(env, "android/util/Size");
+    if (sizeClass) {
+        jmethodID ctor = (*env)->GetMethodID(env, sizeClass, "<init>", "(II)V");
+        if (ctor)
+            return (*env)->NewObject(env, sizeClass, ctor, 16, 16);
+    }
+    if ((*env)->ExceptionCheck(env))
+        (*env)->ExceptionClear(env);
+    return NULL;
+}
+
+JNIEXPORT jboolean JNICALL
+Java_android_graphics_NinePatch_isNinePatchChunk(JNIEnv *env, jclass clazz, jbyteArray chunk)
+{
+    (void) env;
+    (void) clazz;
+    return chunk ? JNI_TRUE : JNI_FALSE;
+}
+
+JNIEXPORT jlong JNICALL
+Java_android_graphics_NinePatch_validateNinePatchChunk(JNIEnv *env, jclass clazz, jbyteArray chunk)
+{
+    (void) env;
+    (void) clazz;
+    (void) chunk;
+    return 1;
+}
+
+JNIEXPORT void JNICALL
+Java_android_graphics_NinePatch_nativeFinalize(JNIEnv *env, jclass clazz, jlong chunk)
+{
+    (void) env;
+    (void) clazz;
+    (void) chunk;
+}
+
+JNIEXPORT jlong JNICALL
+Java_android_graphics_NinePatch_nativeGetTransparentRegion(JNIEnv *env, jclass clazz,
+                                                           jlong bitmap, jlong chunk, jobject rect)
+{
+    (void) env;
+    (void) clazz;
+    (void) bitmap;
+    (void) chunk;
+    (void) rect;
+    return 0;
+}
+
 jlong Java_android_graphics_Path_nInit(JNIEnv *env, jclass clazz)
 {
     (void) env;
@@ -2850,6 +3185,248 @@ void Java_android_graphics_drawable_VectorDrawable_nSetInt(JNIEnv *env,
     (void) clazz;
     (void) ptr;
     (void) value;
+}
+
+jlong Java_android_graphics_drawable_AnimatedVectorDrawable_nCreateAnimatorSet(
+    JNIEnv *env, jclass clazz)
+{
+    (void) env;
+    (void) clazz;
+    return 1;
+}
+
+void Java_android_graphics_drawable_AnimatedVectorDrawable_nAddAnimator(
+    JNIEnv *env, jclass clazz, jlong setPtr, jlong propPtr, jlong interpPtr,
+    jlong startDelay, jlong duration, jint repeatCount, jint repeatMode)
+{
+    (void) env; (void) clazz; (void) setPtr; (void) propPtr; (void) interpPtr;
+    (void) startDelay; (void) duration; (void) repeatCount; (void) repeatMode;
+}
+
+jlong Java_android_graphics_drawable_AnimatedVectorDrawable_nCreateGroupPropertyHolder(
+    JNIEnv *env, jclass clazz, jlong targetPtr, jint propertyId, jfloat startValue, jfloat endValue)
+{
+    (void) env; (void) clazz; (void) targetPtr; (void) propertyId;
+    (void) startValue; (void) endValue;
+    return 1;
+}
+
+jlong Java_android_graphics_drawable_AnimatedVectorDrawable_nCreatePathColorPropertyHolder(
+    JNIEnv *env, jclass clazz, jlong targetPtr, jint propertyId, jint startValue, jint endValue)
+{
+    (void) env; (void) clazz; (void) targetPtr; (void) propertyId;
+    (void) startValue; (void) endValue;
+    return 1;
+}
+
+jlong Java_android_graphics_drawable_AnimatedVectorDrawable_nCreatePathDataPropertyHolder(
+    JNIEnv *env, jclass clazz, jlong targetPtr, jlong startPathData, jlong endPathData)
+{
+    (void) env; (void) clazz; (void) targetPtr; (void) startPathData; (void) endPathData;
+    return 1;
+}
+
+jlong Java_android_graphics_drawable_AnimatedVectorDrawable_nCreatePathPropertyHolder(
+    JNIEnv *env, jclass clazz, jlong targetPtr, jint propertyId, jfloat startValue, jfloat endValue)
+{
+    (void) env; (void) clazz; (void) targetPtr; (void) propertyId;
+    (void) startValue; (void) endValue;
+    return 1;
+}
+
+jlong Java_android_graphics_drawable_AnimatedVectorDrawable_nCreateRootAlphaPropertyHolder(
+    JNIEnv *env, jclass clazz, jlong targetPtr, jfloat startValue, jfloat endValue)
+{
+    (void) env; (void) clazz; (void) targetPtr; (void) startValue; (void) endValue;
+    return 1;
+}
+
+void Java_android_graphics_drawable_AnimatedVectorDrawable_nEnd(
+    JNIEnv *env, jclass clazz, jlong setPtr)
+{
+    (void) env; (void) clazz; (void) setPtr;
+}
+
+void Java_android_graphics_drawable_AnimatedVectorDrawable_nReset(
+    JNIEnv *env, jclass clazz, jlong setPtr)
+{
+    (void) env; (void) clazz; (void) setPtr;
+}
+
+void Java_android_graphics_drawable_AnimatedVectorDrawable_nReverse(
+    JNIEnv *env, jclass clazz, jlong setPtr, jobject callback, jint id)
+{
+    (void) env; (void) clazz; (void) setPtr; (void) callback; (void) id;
+}
+
+void Java_android_graphics_drawable_AnimatedVectorDrawable_nSetPropertyHolderData__J_3FI(
+    JNIEnv *env, jclass clazz, jlong propPtr, jfloatArray data, jint length)
+{
+    (void) env; (void) clazz; (void) propPtr; (void) data; (void) length;
+}
+
+void Java_android_graphics_drawable_AnimatedVectorDrawable_nSetPropertyHolderData__J_3II(
+    JNIEnv *env, jclass clazz, jlong propPtr, jintArray data, jint length)
+{
+    (void) env; (void) clazz; (void) propPtr; (void) data; (void) length;
+}
+
+void Java_android_graphics_drawable_AnimatedVectorDrawable_nSetVectorDrawableTarget(
+    JNIEnv *env, jclass clazz, jlong setPtr, jlong targetPtr)
+{
+    (void) env; (void) clazz; (void) setPtr; (void) targetPtr;
+}
+
+void Java_android_graphics_drawable_AnimatedVectorDrawable_nStart(
+    JNIEnv *env, jclass clazz, jlong setPtr, jobject callback, jint id)
+{
+    (void) env; (void) clazz; (void) setPtr; (void) callback; (void) id;
+}
+
+JNIEXPORT jlong JNICALL
+Java_android_graphics_animation_NativeInterpolatorFactory_createAccelerateDecelerateInterpolator(
+    JNIEnv *env, jclass clazz)
+{
+    (void) env; (void) clazz;
+    return 1;
+}
+
+JNIEXPORT jlong JNICALL
+Java_android_graphics_animation_NativeInterpolatorFactory_createAccelerateInterpolator(
+    JNIEnv *env, jclass clazz, jfloat factor)
+{
+    (void) env; (void) clazz; (void) factor;
+    return 1;
+}
+
+JNIEXPORT jlong JNICALL
+Java_android_graphics_animation_NativeInterpolatorFactory_createAnticipateInterpolator(
+    JNIEnv *env, jclass clazz, jfloat tension)
+{
+    (void) env; (void) clazz; (void) tension;
+    return 1;
+}
+
+JNIEXPORT jlong JNICALL
+Java_android_graphics_animation_NativeInterpolatorFactory_createAnticipateOvershootInterpolator(
+    JNIEnv *env, jclass clazz, jfloat tension)
+{
+    (void) env; (void) clazz; (void) tension;
+    return 1;
+}
+
+JNIEXPORT jlong JNICALL
+Java_android_graphics_animation_NativeInterpolatorFactory_createBounceInterpolator(
+    JNIEnv *env, jclass clazz)
+{
+    (void) env; (void) clazz;
+    return 1;
+}
+
+JNIEXPORT jlong JNICALL
+Java_android_graphics_animation_NativeInterpolatorFactory_createCycleInterpolator(
+    JNIEnv *env, jclass clazz, jfloat cycles)
+{
+    (void) env; (void) clazz; (void) cycles;
+    return 1;
+}
+
+JNIEXPORT jlong JNICALL
+Java_android_graphics_animation_NativeInterpolatorFactory_createDecelerateInterpolator(
+    JNIEnv *env, jclass clazz, jfloat factor)
+{
+    (void) env; (void) clazz; (void) factor;
+    return 1;
+}
+
+JNIEXPORT jlong JNICALL
+Java_android_graphics_animation_NativeInterpolatorFactory_createLinearInterpolator(
+    JNIEnv *env, jclass clazz)
+{
+    (void) env; (void) clazz;
+    return 1;
+}
+
+JNIEXPORT jlong JNICALL
+Java_android_graphics_animation_NativeInterpolatorFactory_createLutInterpolator(
+    JNIEnv *env, jclass clazz, jfloatArray values)
+{
+    (void) env; (void) clazz; (void) values;
+    return 1;
+}
+
+JNIEXPORT jlong JNICALL
+Java_android_graphics_animation_NativeInterpolatorFactory_createOvershootInterpolator(
+    JNIEnv *env, jclass clazz, jfloat tension)
+{
+    (void) env; (void) clazz; (void) tension;
+    return 1;
+}
+
+JNIEXPORT jlong JNICALL
+Java_android_graphics_animation_NativeInterpolatorFactory_createPathInterpolator(
+    JNIEnv *env, jclass clazz, jfloatArray x, jfloatArray y)
+{
+    (void) env; (void) clazz; (void) x; (void) y;
+    return 1;
+}
+
+JNIEXPORT jlong JNICALL
+Java_android_graphics_Interpolator_nativeConstructor(
+    JNIEnv *env, jclass clazz, jint valueCount, jint frameCount)
+{
+    (void) env; (void) clazz; (void) valueCount; (void) frameCount;
+    return 1;
+}
+
+JNIEXPORT void JNICALL
+Java_android_graphics_Interpolator_nativeDestructor(
+    JNIEnv *env, jclass clazz, jlong native_instance)
+{
+    (void) env; (void) clazz; (void) native_instance;
+}
+
+JNIEXPORT void JNICALL
+Java_android_graphics_Interpolator_nativeReset(
+    JNIEnv *env, jclass clazz, jlong native_instance, jint valueCount, jint frameCount)
+{
+    (void) env; (void) clazz; (void) native_instance; (void) valueCount; (void) frameCount;
+}
+
+JNIEXPORT void JNICALL
+Java_android_graphics_Interpolator_nativeSetKeyFrame(
+    JNIEnv *env, jclass clazz, jlong native_instance, jint index, jint msec,
+    jfloatArray values, jfloatArray blend)
+{
+    (void) env; (void) clazz; (void) native_instance; (void) index; (void) msec;
+    (void) values; (void) blend;
+}
+
+JNIEXPORT void JNICALL
+Java_android_graphics_Interpolator_nativeSetRepeatMirror(
+    JNIEnv *env, jclass clazz, jlong native_instance, jfloat repeatCount, jboolean mirror)
+{
+    (void) env; (void) clazz; (void) native_instance; (void) repeatCount; (void) mirror;
+}
+
+JNIEXPORT jint JNICALL
+Java_android_graphics_Interpolator_nativeTimeToValues(
+    JNIEnv *env, jclass clazz, jlong native_instance, jint msec, jfloatArray values)
+{
+    (void) env; (void) clazz; (void) native_instance; (void) msec;
+    if (values) {
+        jsize len = (*env)->GetArrayLength(env, values);
+        if (len > 0) {
+            jfloat *elems = (*env)->GetFloatArrayElements(env, values, NULL);
+            if (elems) {
+                jsize i;
+                for (i = 0; i < len; ++i)
+                    elems[i] = 1.0f;
+                (*env)->ReleaseFloatArrayElements(env, values, elems, 0);
+            }
+        }
+    }
+    return 0; /* NORMAL */
 }
 
 void Java_com_android_internal_util_VirtualRefBasePtr_nIncStrong(JNIEnv *env,
@@ -4127,6 +4704,40 @@ void Java_android_graphics_BaseCanvas_nDrawBitmapRect(JNIEnv *env,
     }
 }
 
+void Java_android_graphics_BaseCanvas_nDrawNinePatch(
+    JNIEnv *env,
+    jclass clazz,
+    jlong canvas,
+    jlong bitmap_handle,
+    jlong chunk_handle,
+    jfloat dst_left,
+    jfloat dst_top,
+    jfloat dst_right,
+    jfloat dst_bottom,
+    jlong paint,
+    jint dst_density,
+    jint src_density)
+{
+    struct muplar_bitmap_state *dst = muplar_canvas_bitmap(canvas);
+    struct muplar_bitmap_state *src = muplar_find_bitmap(bitmap_handle);
+    (void) env;
+    (void) clazz;
+    (void) chunk_handle;
+    (void) paint;
+    (void) dst_density;
+    (void) src_density;
+    if (!src || !dst)
+        return;
+    muplar_draw_bitmap_count++;
+    {
+        int dx = muplar_floor_to_int(dst_left);
+        int dy = muplar_floor_to_int(dst_top);
+        int dw = muplar_ceil_to_int(dst_right) - dx;
+        int dh = muplar_ceil_to_int(dst_bottom) - dy;
+        muplar_blit_bitmap(dst, src, dx, dy, dw, dh, 0, 0, src->width, src->height);
+    }
+}
+
 jlong Java_android_graphics_text_LineBreaker_nInit(JNIEnv *env,
                                                    jclass clazz,
                                                    jint break_strategy,
@@ -4496,6 +5107,16 @@ void Java_android_graphics_HardwareRenderer_preInitBufferAllocator(JNIEnv *env,
     (void) clazz;
 }
 
+void Java_android_graphics_HardwareRenderer_nSetContextPriority(
+    JNIEnv *env,
+    jclass clazz,
+    jint priority)
+{
+    (void) env;
+    (void) clazz;
+    (void) priority;
+}
+
 jlong Java_android_view_InputChannel_nativeGetFinalizer(JNIEnv *env,
                                                         jclass clazz)
 {
@@ -4658,6 +5279,131 @@ void Java_android_graphics_Bitmap_nativeSetHasAlpha(JNIEnv *env,
     (void) native_bitmap;
     (void) has_alpha;
     (void) request_premul;
+}
+
+jboolean Java_android_graphics_Bitmap_nativeHasAlpha(JNIEnv *env,
+                                                    jclass clazz,
+                                                    jlong native_bitmap)
+{
+    (void) env;
+    (void) clazz;
+    (void) native_bitmap;
+    return JNI_TRUE;
+}
+
+jint Java_android_graphics_Bitmap_nativeRowBytes(JNIEnv *env,
+                                                jclass clazz,
+                                                jlong native_bitmap)
+{
+    struct muplar_bitmap_state *b = muplar_find_bitmap(native_bitmap);
+    (void) env;
+    (void) clazz;
+    return b ? b->width * 4 : 64;
+}
+
+jint Java_android_graphics_Bitmap_nativeGenerationId(JNIEnv *env,
+                                                    jclass clazz,
+                                                    jlong native_bitmap)
+{
+    (void) env;
+    (void) clazz;
+    (void) native_bitmap;
+    return 1;
+}
+
+jint Java_android_graphics_Bitmap_nativeGetAllocationByteCount(JNIEnv *env,
+                                                            jclass clazz,
+                                                            jlong native_bitmap)
+{
+    struct muplar_bitmap_state *b = muplar_find_bitmap(native_bitmap);
+    (void) env;
+    (void) clazz;
+    return b ? b->width * b->height * 4 : 256;
+}
+
+jint Java_android_graphics_Bitmap_nativeGetPixel(JNIEnv *env,
+                                                jclass clazz,
+                                                jlong native_bitmap,
+                                                jint x,
+                                                jint y)
+{
+    struct muplar_bitmap_state *b = muplar_find_bitmap(native_bitmap);
+    (void) env;
+    (void) clazz;
+    if (b && b->pixels && x >= 0 && x < b->width && y >= 0 && y < b->height)
+        return (jint) b->pixels[y * b->width + x];
+    return 0;
+}
+
+void Java_android_graphics_Bitmap_nativeSetPixel(JNIEnv *env,
+                                                jclass clazz,
+                                                jlong native_bitmap,
+                                                jint x,
+                                                jint y,
+                                                jint color)
+{
+    struct muplar_bitmap_state *b = muplar_find_bitmap(native_bitmap);
+    (void) env;
+    (void) clazz;
+    if (b && b->pixels && x >= 0 && x < b->width && y >= 0 && y < b->height)
+        b->pixels[y * b->width + x] = (uint32_t) color;
+}
+
+jboolean Java_android_graphics_Bitmap_nativeHasMipMap(JNIEnv *env,
+                                                     jclass clazz,
+                                                     jlong native_bitmap)
+{
+    (void) env;
+    (void) clazz;
+    (void) native_bitmap;
+    return JNI_FALSE;
+}
+
+void Java_android_graphics_Bitmap_nativeSetHasMipMap(JNIEnv *env,
+                                                    jclass clazz,
+                                                    jlong native_bitmap,
+                                                    jboolean has_mip_map)
+{
+    (void) env;
+    (void) clazz;
+    (void) native_bitmap;
+    (void) has_mip_map;
+}
+
+jboolean Java_android_graphics_Bitmap_nativeHasGainmap(JNIEnv *env,
+                                                      jclass clazz,
+                                                      jlong native_bitmap)
+{
+    (void) env;
+    (void) clazz;
+    (void) native_bitmap;
+    return JNI_FALSE;
+}
+
+jlong Java_android_graphics_Bitmap_nativeGetNativeFinalizer(JNIEnv *env,
+                                                          jclass clazz)
+{
+    (void) env;
+    (void) clazz;
+    return 0;
+}
+
+void Java_android_graphics_Bitmap_nativePrepareToDraw(JNIEnv *env,
+                                                    jclass clazz,
+                                                    jlong native_bitmap)
+{
+    (void) env;
+    (void) clazz;
+    (void) native_bitmap;
+}
+
+void Java_android_graphics_Bitmap_nativeSetImmutable(JNIEnv *env,
+                                                    jclass clazz,
+                                                    jlong native_bitmap)
+{
+    (void) env;
+    (void) clazz;
+    (void) native_bitmap;
 }
 
 jboolean Java_android_graphics_Bitmap_nativeIsImmutable(JNIEnv *env,
@@ -8623,6 +9369,64 @@ JNIEXPORT jint JNICALL JNI_OnLoad(JavaVM *vm, void *reserved)
         (void *)
             Java_android_graphics_ColorSpace_00024Rgb_00024Native_nativeGetNativeFinalizer);
 
+    cls = (*env)->FindClass(env, "android/graphics/Color");
+    if ((*env)->ExceptionCheck(env)) {
+        (*env)->ExceptionClear(env);
+    } else if (cls) {
+        muplar_register_one(env, cls, "nativeRGBToHSV", "(III[F)V",
+                            (void *) Java_android_graphics_Color_nativeRGBToHSV);
+        muplar_register_one(env, cls, "nativeHSVToColor", "(I[F)I",
+                            (void *) Java_android_graphics_Color_nativeHSVToColor);
+    }
+
+    cls = (*env)->FindClass(env, "android/graphics/ImageDecoder");
+    if ((*env)->ExceptionCheck(env)) {
+        (*env)->ExceptionClear(env);
+    } else if (cls) {
+        muplar_register_one(env, cls, "nCreate",
+                            "(Ljava/io/InputStream;[BZLandroid/graphics/ImageDecoder$Source;)Landroid/graphics/ImageDecoder;",
+                            (void *) Java_android_graphics_ImageDecoder_nCreate__Ljava_io_InputStream_2_3BZLandroid_graphics_ImageDecoder_00024Source_2);
+        muplar_register_one(env, cls, "nCreate",
+                            "(JZLandroid/graphics/ImageDecoder$Source;)Landroid/graphics/ImageDecoder;",
+                            (void *) Java_android_graphics_ImageDecoder_nCreate__JZLandroid_graphics_ImageDecoder_00024Source_2);
+        muplar_register_one(env, cls, "nCreate",
+                            "(Ljava/io/FileDescriptor;JZLandroid/graphics/ImageDecoder$Source;)Landroid/graphics/ImageDecoder;",
+                            (void *) Java_android_graphics_ImageDecoder_nCreate__Ljava_io_FileDescriptor_2JZLandroid_graphics_ImageDecoder_00024Source_2);
+        muplar_register_one(env, cls, "nCreate",
+                            "(Ljava/nio/ByteBuffer;IIZLandroid/graphics/ImageDecoder$Source;)Landroid/graphics/ImageDecoder;",
+                            (void *) Java_android_graphics_ImageDecoder_nCreate__Ljava_nio_ByteBuffer_2IIZLandroid_graphics_ImageDecoder_00024Source_2);
+        muplar_register_one(env, cls, "nCreate",
+                            "([BIIZLandroid/graphics/ImageDecoder$Source;)Landroid/graphics/ImageDecoder;",
+                            (void *) Java_android_graphics_ImageDecoder_nCreate___3BIIZLandroid_graphics_ImageDecoder_00024Source_2);
+        muplar_register_one(env, cls, "nDecodeBitmap",
+                            "(JLandroid/graphics/ImageDecoder;ZIILandroid/graphics/Rect;ZIZZZJZ)Landroid/graphics/Bitmap;",
+                            (void *) Java_android_graphics_ImageDecoder_nDecodeBitmap);
+        muplar_register_one(env, cls, "nClose", "(J)V",
+                            (void *) Java_android_graphics_ImageDecoder_nClose);
+        muplar_register_one(env, cls, "nGetPadding", "(JLandroid/graphics/Rect;)V",
+                            (void *) Java_android_graphics_ImageDecoder_nGetPadding);
+        muplar_register_one(env, cls, "nGetColorSpace", "(J)Landroid/graphics/ColorSpace;",
+                            (void *) Java_android_graphics_ImageDecoder_nGetColorSpace);
+        muplar_register_one(env, cls, "nGetMimeType", "(J)Ljava/lang/String;",
+                            (void *) Java_android_graphics_ImageDecoder_nGetMimeType);
+        muplar_register_one(env, cls, "nGetSampledSize", "(JI)Landroid/util/Size;",
+                            (void *) Java_android_graphics_ImageDecoder_nGetSampledSize);
+    }
+
+    cls = (*env)->FindClass(env, "android/graphics/NinePatch");
+    if ((*env)->ExceptionCheck(env)) {
+        (*env)->ExceptionClear(env);
+    } else if (cls) {
+        muplar_register_one(env, cls, "isNinePatchChunk", "([B)Z",
+                            (void *) Java_android_graphics_NinePatch_isNinePatchChunk);
+        muplar_register_one(env, cls, "validateNinePatchChunk", "([B)J",
+                            (void *) Java_android_graphics_NinePatch_validateNinePatchChunk);
+        muplar_register_one(env, cls, "nativeFinalize", "(J)V",
+                            (void *) Java_android_graphics_NinePatch_nativeFinalize);
+        muplar_register_one(env, cls, "nativeGetTransparentRegion", "(JJLandroid/graphics/Rect;)J",
+                            (void *) Java_android_graphics_NinePatch_nativeGetTransparentRegion);
+    }
+
     cls = (*env)->FindClass(env, "android/graphics/Bitmap");
     if ((*env)->ExceptionCheck(env)) {
         (*env)->ExceptionClear(env);
@@ -8633,6 +9437,42 @@ JNIEXPORT jint JNICALL JNI_OnLoad(JavaVM *vm, void *reserved)
         muplar_register_one(
             env, cls, "nativeSetHasAlpha", "(JZZ)V",
             (void *) Java_android_graphics_Bitmap_nativeSetHasAlpha);
+        muplar_register_one(
+            env, cls, "nativeHasAlpha", "(J)Z",
+            (void *) Java_android_graphics_Bitmap_nativeHasAlpha);
+        muplar_register_one(
+            env, cls, "nativeRowBytes", "(J)I",
+            (void *) Java_android_graphics_Bitmap_nativeRowBytes);
+        muplar_register_one(
+            env, cls, "nativeGenerationId", "(J)I",
+            (void *) Java_android_graphics_Bitmap_nativeGenerationId);
+        muplar_register_one(
+            env, cls, "nativeGetAllocationByteCount", "(J)I",
+            (void *) Java_android_graphics_Bitmap_nativeGetAllocationByteCount);
+        muplar_register_one(
+            env, cls, "nativeGetPixel", "(JII)I",
+            (void *) Java_android_graphics_Bitmap_nativeGetPixel);
+        muplar_register_one(
+            env, cls, "nativeSetPixel", "(JIII)V",
+            (void *) Java_android_graphics_Bitmap_nativeSetPixel);
+        muplar_register_one(
+            env, cls, "nativeHasMipMap", "(J)Z",
+            (void *) Java_android_graphics_Bitmap_nativeHasMipMap);
+        muplar_register_one(
+            env, cls, "nativeSetHasMipMap", "(JZ)V",
+            (void *) Java_android_graphics_Bitmap_nativeSetHasMipMap);
+        muplar_register_one(
+            env, cls, "nativeHasGainmap", "(J)Z",
+            (void *) Java_android_graphics_Bitmap_nativeHasGainmap);
+        muplar_register_one(
+            env, cls, "nativeGetNativeFinalizer", "()J",
+            (void *) Java_android_graphics_Bitmap_nativeGetNativeFinalizer);
+        muplar_register_one(
+            env, cls, "nativePrepareToDraw", "(J)V",
+            (void *) Java_android_graphics_Bitmap_nativePrepareToDraw);
+        muplar_register_one(
+            env, cls, "nativeSetImmutable", "(J)V",
+            (void *) Java_android_graphics_Bitmap_nativeSetImmutable);
         muplar_register_one(
             env, cls, "nativeIsImmutable", "(J)Z",
             (void *) Java_android_graphics_Bitmap_nativeIsImmutable);
@@ -9221,6 +10061,86 @@ JNIEXPORT jint JNICALL JNI_OnLoad(JavaVM *vm, void *reserved)
         (*env)->ExceptionClear(env);
     }
 
+    cls = (*env)->FindClass(env, "android/graphics/drawable/AnimatedVectorDrawable");
+    if ((*env)->ExceptionCheck(env)) {
+        (*env)->ExceptionClear(env);
+    } else if (cls) {
+        muplar_register_one(env, cls, "nCreateAnimatorSet", "()J",
+            (void *) Java_android_graphics_drawable_AnimatedVectorDrawable_nCreateAnimatorSet);
+        muplar_register_one(env, cls, "nAddAnimator", "(JJJJJII)V",
+            (void *) Java_android_graphics_drawable_AnimatedVectorDrawable_nAddAnimator);
+        muplar_register_one(env, cls, "nCreateGroupPropertyHolder", "(JIFF)J",
+            (void *) Java_android_graphics_drawable_AnimatedVectorDrawable_nCreateGroupPropertyHolder);
+        muplar_register_one(env, cls, "nCreatePathColorPropertyHolder", "(JIII)J",
+            (void *) Java_android_graphics_drawable_AnimatedVectorDrawable_nCreatePathColorPropertyHolder);
+        muplar_register_one(env, cls, "nCreatePathDataPropertyHolder", "(JJJ)J",
+            (void *) Java_android_graphics_drawable_AnimatedVectorDrawable_nCreatePathDataPropertyHolder);
+        muplar_register_one(env, cls, "nCreatePathPropertyHolder", "(JIFF)J",
+            (void *) Java_android_graphics_drawable_AnimatedVectorDrawable_nCreatePathPropertyHolder);
+        muplar_register_one(env, cls, "nCreateRootAlphaPropertyHolder", "(JFF)J",
+            (void *) Java_android_graphics_drawable_AnimatedVectorDrawable_nCreateRootAlphaPropertyHolder);
+        muplar_register_one(env, cls, "nEnd", "(J)V",
+            (void *) Java_android_graphics_drawable_AnimatedVectorDrawable_nEnd);
+        muplar_register_one(env, cls, "nReset", "(J)V",
+            (void *) Java_android_graphics_drawable_AnimatedVectorDrawable_nReset);
+        muplar_register_one(env, cls, "nReverse", "(JLandroid/graphics/drawable/AnimatedVectorDrawable$VectorDrawableAnimatorRT;I)V",
+            (void *) Java_android_graphics_drawable_AnimatedVectorDrawable_nReverse);
+        muplar_register_one(env, cls, "nSetPropertyHolderData", "(J[FI)V",
+            (void *) Java_android_graphics_drawable_AnimatedVectorDrawable_nSetPropertyHolderData__J_3FI);
+        muplar_register_one(env, cls, "nSetPropertyHolderData", "(J[II)V",
+            (void *) Java_android_graphics_drawable_AnimatedVectorDrawable_nSetPropertyHolderData__J_3II);
+        muplar_register_one(env, cls, "nSetVectorDrawableTarget", "(JJ)V",
+            (void *) Java_android_graphics_drawable_AnimatedVectorDrawable_nSetVectorDrawableTarget);
+        muplar_register_one(env, cls, "nStart", "(JLandroid/graphics/drawable/AnimatedVectorDrawable$VectorDrawableAnimatorRT;I)V",
+            (void *) Java_android_graphics_drawable_AnimatedVectorDrawable_nStart);
+    }
+
+    cls = (*env)->FindClass(env, "android/graphics/animation/NativeInterpolatorFactory");
+    if ((*env)->ExceptionCheck(env)) {
+        (*env)->ExceptionClear(env);
+    } else if (cls) {
+        muplar_register_one(env, cls, "createAccelerateDecelerateInterpolator", "()J",
+            (void *) Java_android_graphics_animation_NativeInterpolatorFactory_createAccelerateDecelerateInterpolator);
+        muplar_register_one(env, cls, "createAccelerateInterpolator", "(F)J",
+            (void *) Java_android_graphics_animation_NativeInterpolatorFactory_createAccelerateInterpolator);
+        muplar_register_one(env, cls, "createAnticipateInterpolator", "(F)J",
+            (void *) Java_android_graphics_animation_NativeInterpolatorFactory_createAnticipateInterpolator);
+        muplar_register_one(env, cls, "createAnticipateOvershootInterpolator", "(F)J",
+            (void *) Java_android_graphics_animation_NativeInterpolatorFactory_createAnticipateOvershootInterpolator);
+        muplar_register_one(env, cls, "createBounceInterpolator", "()J",
+            (void *) Java_android_graphics_animation_NativeInterpolatorFactory_createBounceInterpolator);
+        muplar_register_one(env, cls, "createCycleInterpolator", "(F)J",
+            (void *) Java_android_graphics_animation_NativeInterpolatorFactory_createCycleInterpolator);
+        muplar_register_one(env, cls, "createDecelerateInterpolator", "(F)J",
+            (void *) Java_android_graphics_animation_NativeInterpolatorFactory_createDecelerateInterpolator);
+        muplar_register_one(env, cls, "createLinearInterpolator", "()J",
+            (void *) Java_android_graphics_animation_NativeInterpolatorFactory_createLinearInterpolator);
+        muplar_register_one(env, cls, "createLutInterpolator", "([F)J",
+            (void *) Java_android_graphics_animation_NativeInterpolatorFactory_createLutInterpolator);
+        muplar_register_one(env, cls, "createOvershootInterpolator", "(F)J",
+            (void *) Java_android_graphics_animation_NativeInterpolatorFactory_createOvershootInterpolator);
+        muplar_register_one(env, cls, "createPathInterpolator", "([F[F)J",
+            (void *) Java_android_graphics_animation_NativeInterpolatorFactory_createPathInterpolator);
+    }
+
+    cls = (*env)->FindClass(env, "android/graphics/Interpolator");
+    if ((*env)->ExceptionCheck(env)) {
+        (*env)->ExceptionClear(env);
+    } else if (cls) {
+        muplar_register_one(env, cls, "nativeConstructor", "(II)J",
+            (void *) Java_android_graphics_Interpolator_nativeConstructor);
+        muplar_register_one(env, cls, "nativeDestructor", "(J)V",
+            (void *) Java_android_graphics_Interpolator_nativeDestructor);
+        muplar_register_one(env, cls, "nativeReset", "(JII)V",
+            (void *) Java_android_graphics_Interpolator_nativeReset);
+        muplar_register_one(env, cls, "nativeSetKeyFrame", "(JII[F[F)V",
+            (void *) Java_android_graphics_Interpolator_nativeSetKeyFrame);
+        muplar_register_one(env, cls, "nativeSetRepeatMirror", "(JFZ)V",
+            (void *) Java_android_graphics_Interpolator_nativeSetRepeatMirror);
+        muplar_register_one(env, cls, "nativeTimeToValues", "(JI[F)I",
+            (void *) Java_android_graphics_Interpolator_nativeTimeToValues);
+    }
+
     cls = (*env)->FindClass(env, "com/android/internal/util/VirtualRefBasePtr");
     if (cls) {
         muplar_register_one(
@@ -9368,6 +10288,9 @@ JNIEXPORT jint JNICALL JNI_OnLoad(JavaVM *vm, void *reserved)
         muplar_register_one(
             env, cls, "nDrawBitmap", "(JJFFFFFFFFJII)V",
             (void *) Java_android_graphics_BaseCanvas_nDrawBitmapRect);
+        muplar_register_one(
+            env, cls, "nDrawNinePatch", "(JJJFFFFJII)V",
+            (void *) Java_android_graphics_BaseCanvas_nDrawNinePatch);
         muplar_register_one(
             env, cls, "nDrawText", "(JLjava/lang/String;IIFFIJ)V",
             (void *) Java_android_graphics_BaseCanvas_nDrawTextString);
@@ -9758,6 +10681,9 @@ JNIEXPORT jint JNICALL JNI_OnLoad(JavaVM *vm, void *reserved)
     muplar_register_one(
         env, cls, "preInitBufferAllocator", "()V",
         (void *) Java_android_graphics_HardwareRenderer_preInitBufferAllocator);
+    muplar_register_one(
+        env, cls, "nSetContextPriority", "(I)V",
+        (void *) Java_android_graphics_HardwareRenderer_nSetContextPriority);
 
     cls = (*env)->FindClass(env, "android/view/InputChannel");
     if (cls) {

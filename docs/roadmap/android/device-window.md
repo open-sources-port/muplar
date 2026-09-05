@@ -56,13 +56,15 @@ Implementation notes:
 
 ## Step 3: Route App Launches Into Tabs
 
-Status: partially implemented. `AndroidDeviceShell` now owns a host-managed tab
-strip, starts with a persistent Launcher tab, focuses existing tabs on repeated
-launches, and lets app tabs close back to Launcher or the previous tab. App tab
-focus now sends staged APK path, package, and launch Activity metadata through
-`muplard`; the Java bootstrap can load that APK and start its Activity inside
-the existing ART process. Full Android task/back-stack modeling is still
-pending.
+Status: **implemented** (2026-09-05). `AndroidDeviceShell` owns a host-managed
+tab strip with a persistent Launcher tab. App tab focus sends APK path, package,
+and Activity metadata through `muplard`; `FrameworkDeviceController` loads the
+APK, instantiates `Application` + `Activity`, drives the full lifecycle
+(`onCreate`/`onStart`/`onResume`/`makeVisible`), and registers the Activity in
+the managed tab map. Secondary APK launch (`muplar-ui-test.apk`) is verified
+end-to-end including `ListView` layout inflation. Full Android task/back-stack
+modeling remains host-simulated (simple tab list), not backed by real
+ActivityManager task tracking.
 
 Apps should appear as tabs inside the Android device window.
 
@@ -81,17 +83,18 @@ Implementation notes:
 
 ## Step 4: Add Back, Home, And Recents Controls
 
-Status: partially implemented. The device toolbar now has host-side Back,
-Home, Recents, Settings, Install APK, Turn Off, and Close Active Tab actions.
-Home and Recents operate on the host tab model, Settings opens a host tab, and
-all actions are reported back to Instance Manager, appended to the per-prefix
-log, and sent to `muplard` through the `DeviceAction` protocol. `muplard`
-validates and records the latest requested action so the runtime has a
-prefix-scoped control bridge. The Java bootstrap subscribes to that action
-stream once per APK process and applies actions to the current Activity: Back
-invokes app back handling, Home pauses/stops the activity, app-tab focus loads
-or resumes the requested app Activity, and app-tab close finishes/destroys the
-current Activity. True Android task/back-stack semantics are still pending.
+Status: **implemented** (2026-09-05). All toolbar actions (Back, Home, Recents,
+Settings, Install APK, Close Tab) flow through the `DeviceAction` protocol via
+`muplard`. The Java bootstrap subscribes and applies them on the main looper via
+`Handler.createAsync` (async handlers bypass the MessageQueue sync barrier
+inserted by Choreographer/ViewRootImpl — critical for reliable action delivery
+under `-Xint`). Back now unconditionally calls `onBackPressed` then
+`finishRecord`+`removeRecord`, restoring focus to the previous tab (Launcher3).
+`IActivityTaskManager.finishActivity` is stubbed to return `Boolean.TRUE` so
+`Activity.finish()` IPC does not silently no-op. End-to-end test
+(`test-app-launch.sh`) verifies: Launcher3 starts → focus-tab launches secondary
+app → `onResume` confirmed → back restores Launcher3. True Android
+task/back-stack semantics are still host-simulated.
 
 The toolbar should provide basic device navigation before all rendering is
 perfect.
@@ -112,19 +115,28 @@ Implementation notes:
 
 ## Step 5: Connect Rendering To The Device Window
 
-Status: implemented for the current software-rendered Launcher3 path.
-`HostWindow` can stream rendered RGBA frames over a per-prefix Unix socket when
-launched from Instance Manager, and `AndroidDeviceShell` receives those frames
-inside its reserved phone screen area. Native/EGL and Java software-presented
-frames no longer need a separate standalone host window in this path. Java
-Views render through `MuplarFramePresenter`: the active decor view is drawn to
-a software `Bitmap`, serialized as a raw MHR frame in the prefix rootfs, then
-picked up by `HostWindow` and forwarded into the embedded device screen. Basic
-pointer/key forwarding from the embedded screen back into the runtime is
-implemented, including macOS to Android key-code translation for common
-keyboard input. The device shell also forwards those events through `muplard`
-to the Java bootstrap, where they are dispatched on the main looper to the
-active Activity as `MotionEvent` and `KeyEvent` objects.
+Status: **implemented** for the software-rendered path (2026-09-05).
+`HostWindow` streams rendered RGBA frames over a per-prefix Unix socket;
+`AndroidDeviceShell` receives them in the embedded phone screen area. Java Views
+render through `MuplarFramePresenter`: the active decor view is drawn to a
+software `Bitmap`, serialized as an MHR frame in the prefix rootfs, then picked
+up by `HostWindow`. All `Handler` usage in `MuplarFramePresenter`,
+`MuplarVsyncScheduler`, and `FrameworkDeviceController` now uses
+`Handler.createAsync` to avoid blocking on the MessageQueue sync barrier.
+The frame loop guard prevents unnecessary CPU burn when
+`MUPLAR_ANDROID_SOFTWARE_FRAME_PATH` is not set. Basic pointer/key forwarding
+from the embedded screen is implemented including macOS→Android key-code
+translation. Touch dispatch (`test-touch-smoke.sh`) and visual capture
+(`visual-smoke.sh`, 1080×1920) both pass.
+
+Known remaining issues in this step:
+- Frame rate feels slow under `-Xint` (pure interpreter): the main thread is
+  too backlogged to service 200ms frame-loop runnables at full rate. JIT would
+  help but is currently disabled due to elfuse/HVF instability (see
+  [Launcher3 Status](./launcher3.md)).
+- The Java View frame path (`MuplarFramePresenter` → raw MHR bitmap) should
+  eventually move to framework/HWUI-backed presentation via real
+  `ViewRootImpl` / `Surface` semantics.
 
 Make Java and native Android UI draw into the same device window content area.
 
@@ -148,16 +160,37 @@ Implementation notes:
 
 ## Current Priority
 
-Touch input is the top priority: it reaches `MotionEvent`/`dispatchTouchEvent`
-on the real Launcher3 but crashes the guest natively before returning — see
-"Main Blockers" in [Launcher3 Status](./launcher3.md) for the current
-diagnosis. A device that can't reliably take touch input doesn't feel like
-BlueStacks/MuMuPlayer no matter how solid the surrounding tab/session UI is,
-so this blocks the core product goal directly.
+Steps 1–5 are now functionally complete for the software-rendered path.
+All smoke tests pass (`smoke-launch.sh`, `test-touch-smoke.sh`,
+`test-app-launch.sh`, `visual-smoke.sh`). The core product loop —
+Launcher3 as Home → launch secondary app → Back returns to Launcher —
+works end-to-end.
 
-After that: Android task/back-stack handling and Step 5. The host shell,
-prefix-scoped process ownership, tab UI, toolbar action callbacks, `muplard`
-action/input delivery, Java-side current-activity control, and in-process APK
-Activity launching now exist. Next priorities are Android task/back-stack
-state, app install UX, and replacing the software Java frame bridge with
-framework/HWUI-backed presentation.
+Next priorities, in order:
+
+### P1 — JIT Stability (elfuse/HVF crash)
+The guest runs `-Xint` (pure interpreter) because enabling JIT triggers a
+native crash via an elfuse/HVF `mmap`/`mprotect(PROT_EXEC)` bug in ART's
+jit-code-cache allocation. Under `-Xint` everything works but is slow:
+touches are sluggish, frame rate is poor, and sustained CPU can hit ~500%
+during touch-backlog draining. Root-causing and fixing the JIT crash is the
+highest-leverage single fix available. See [Launcher3 Status](./launcher3.md)
+for the crash diagnosis (anonymous executable region, tombstoned-null-deref).
+
+### P2 — Real Android Task / Back-Stack
+The tab model is currently host-simulated (a `LinkedHashMap` + stack in
+`FrameworkDeviceController`). True `ActivityManager` task tracking, intent
+resolution, and `startActivity`-from-app should be wired up so that apps can
+launch each other and the back stack behaves correctly across all cases.
+
+### P3 — App Install UX
+APKs can be copied into `packages_dir` and registered in Instance Manager,
+but there is no in-session install flow (drag-and-drop, file picker, or
+`adb install`-equivalent). An install sheet inside the device window that
+triggers APK copy + re-scan is the next user-visible feature.
+
+### P4 — HWUI / Framework-Backed Rendering
+Replace the `MuplarFramePresenter` software-bitmap bridge with real
+`ViewRootImpl` / `Surface` semantics so framework rendering naturally posts
+frames into `HostWindow`. This removes the 200ms polling loop and enables
+smooth, choreographer-timed frame delivery.

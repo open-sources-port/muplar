@@ -38,7 +38,7 @@ public final class MuplarServices {
             }
             Class<?> iface = Class.forName("android.os.IServiceManager");
             Object proxy = Proxy.newProxyInstance(
-                iface.getClassLoader(),
+                getSafeClassLoader(iface),
                 new Class<?>[] { iface },
                 new ServiceManagerHandler());
             field.set(null, proxy);
@@ -68,8 +68,9 @@ public final class MuplarServices {
         try {
             Class<?> type = resolveInterfaceClass(iface);
             Binder binder = new Binder();
+            ClassLoader loader = getSafeClassLoader(type);
             IInterface owner = (IInterface)Proxy.newProxyInstance(
-                type.getClassLoader(),
+                loader,
                 new Class<?>[] { type },
                 new LocalInterfaceHandler(binder, iface));
             binder.attachInterface(owner, iface);
@@ -78,6 +79,7 @@ public final class MuplarServices {
             System.err.println("[Muplar/ART] service binder fallback name="
                 + name + " iface=" + iface + " error="
                 + t.getClass().getName() + ": " + t.getMessage());
+            t.printStackTrace(System.err);
             return new NoNativeBinder(iface);
         }
     }
@@ -130,6 +132,12 @@ public final class MuplarServices {
         }
         if ("input".equals(name)) {
             return "android.hardware.input.IInputManager";
+        }
+        if ("vibrator_manager".equals(name)) {
+            return "android.os.IVibratorManagerService";
+        }
+        if ("vibrator".equals(name)) {
+            return "android.os.IVibratorService";
         }
         return null;
     }
@@ -209,10 +217,24 @@ public final class MuplarServices {
         return null;
     }
 
+    private static ClassLoader getSafeClassLoader(Class<?> type) {
+        if (type != null && type.getClassLoader() != null) {
+            return type.getClassLoader();
+        }
+        if (MuplarServices.class.getClassLoader() != null) {
+            return MuplarServices.class.getClassLoader();
+        }
+        ClassLoader cl = Thread.currentThread().getContextClassLoader();
+        if (cl != null) {
+            return cl;
+        }
+        return ClassLoader.getSystemClassLoader();
+    }
+
     private static IInterface createLocalInterface(Class<?> type) {
         Binder binder = new Binder();
         IInterface owner = (IInterface)Proxy.newProxyInstance(
-            type.getClassLoader(),
+            getSafeClassLoader(type),
             new Class<?>[] { type },
             new LocalInterfaceHandler(binder, type.getName()));
         binder.attachInterface(owner, type.getName());
@@ -258,7 +280,105 @@ public final class MuplarServices {
                     return value;
                 }
             }
+            if ("android.hardware.input.IInputManager".equals(descriptor)) {
+                Object value = inputManagerValue(method, args);
+                if (value != null) {
+                    return value;
+                }
+            }
+            if ("android.os.IVibratorManagerService".equals(descriptor)) {
+                Object value = vibratorManagerValue(method, args);
+                if (value != null) {
+                    return value;
+                }
+            }
+            if ("android.app.IActivityTaskManager".equals(descriptor)
+                || "android.app.IActivityManager".equals(descriptor)) {
+                Object value = activityTaskManagerValue(method, args);
+                if (value != null) {
+                    return value;
+                }
+            }
             return defaultValue(method.getReturnType());
+        }
+
+        private Object activityTaskManagerValue(Method method, Object[] args) {
+            String name = method.getName();
+            if ("finishActivity".equals(name) || "finishActivityAffinity".equals(name)) {
+                return Boolean.TRUE;
+            }
+            if ("startActivity".equals(name) || "startActivityAsUser".equals(name)) {
+                android.content.Intent intent = null;
+                if (args != null) {
+                    for (Object arg : args) {
+                        if (arg instanceof android.content.Intent) {
+                            intent = (android.content.Intent) arg;
+                            break;
+                        }
+                    }
+                }
+                if (intent != null) {
+                    android.content.ComponentName cn = intent.getComponent();
+                    String pkgName = cn != null ? cn.getPackageName() : intent.getPackage();
+                    String clsName = cn != null ? cn.getClassName() : "";
+                    InstalledPackage pkg = findInstalledPackage(pkgName);
+                    String apkPath = pkg != null ? pkg.apk : "";
+                    String appClass = pkg != null ? pkg.application : "";
+                    if ((clsName == null || clsName.isEmpty()) && pkg != null) {
+                        clsName = pkg.activity;
+                    }
+                    if (pkgName != null && !pkgName.isEmpty()
+                        && !pkgName.equals("com.android.launcher3")
+                        && apkPath != null && !apkPath.isEmpty()) {
+                        System.out.println("[Muplar/ART] activityTaskManager " + name + " launching pkg="
+                            + pkgName + " cls=" + clsName + " apk=" + apkPath);
+                        FrameworkDeviceController.launchApp(apkPath, pkgName, clsName, appClass);
+                    }
+                }
+                return Integer.valueOf(0);
+            }
+            return null;
+        }
+
+        private Object vibratorManagerValue(Method method, Object[] args) {
+            String name = method.getName();
+            if ("getVibratorIds".equals(name)) {
+                return new int[0];
+            }
+            if ("hasVibrator".equals(name) || "isVibrating".equals(name)) {
+                return Boolean.FALSE;
+            }
+            return null;
+        }
+
+        private Object inputManagerValue(Method method, Object[] args) {
+            String name = method.getName();
+            if ("getInputDeviceIds".equals(name)) {
+                return new int[] { 1 };
+            }
+            if ("hasKeys".equals(name)) {
+                int[] keys = args != null && args.length > 2 && args[2] instanceof int[]
+                    ? (int[]) args[2] : null;
+                boolean[] keyExists = args != null && args.length > 3 && args[3] instanceof boolean[]
+                    ? (boolean[]) args[3] : null;
+                if (keys != null && keyExists != null) {
+                    int len = Math.min(keys.length, keyExists.length);
+                    for (int i = 0; i < len; i++) {
+                        keyExists[i] = true;
+                    }
+                }
+                return Boolean.TRUE;
+            }
+            if ("isInTabletMode".equals(name) || "getMicMuted".equals(name)) {
+                return Integer.valueOf(0);
+            }
+            if ("getKeyCodeState".equals(name) || "getScanCodeState".equals(name)) {
+                return Integer.valueOf(1);
+            }
+            if ("verifyInputEvent".equals(name)) {
+                return null;
+            }
+            return null;
         }
 
         private Object wallpaperManagerValue(Method method, Object[] args) {
@@ -362,6 +482,23 @@ public final class MuplarServices {
                     || "isPackageEnabled".equals(name)) {
                     return Boolean.TRUE;
                 }
+                if ("startActivityAsUser".equals(name)) {
+                    android.content.ComponentName component = null;
+                    if (args != null && args.length > 3 && args[3] instanceof android.content.ComponentName) {
+                        component = (android.content.ComponentName) args[3];
+                    }
+                    if (component != null) {
+                        String pkgName = component.getPackageName();
+                        String clsName = component.getClassName();
+                        InstalledPackage pkg = findInstalledPackage(pkgName);
+                        String apkPath = pkg != null ? pkg.apk : "";
+                        String appClass = pkg != null ? pkg.application : "";
+                        System.out.println("[Muplar/ART] launcherApps startActivityAsUser pkg="
+                            + pkgName + " cls=" + clsName + " apk=" + apkPath);
+                        FrameworkDeviceController.launchApp(apkPath, pkgName, clsName, appClass);
+                    }
+                    return null;
+                }
             } catch (Throwable t) {
                 System.err.println(
                     "[Muplar/ART] launcherAppsValue " + name + " failed: "
@@ -380,6 +517,18 @@ public final class MuplarServices {
         } catch (Throwable ignored) {
             return null;
         }
+    }
+
+    static InstalledPackage findInstalledPackage(String packageName) {
+        if (packageName == null || packageName.isEmpty()) {
+            return null;
+        }
+        for (InstalledPackage pkg : queryInstalledPackages()) {
+            if (packageName.equals(pkg.packageName)) {
+                return pkg;
+            }
+        }
+        return null;
     }
 
     private static List<Object> buildLauncherActivities(String packageFilter) {
@@ -402,11 +551,12 @@ public final class MuplarServices {
         return result;
     }
 
-    private static final class InstalledPackage {
+    static final class InstalledPackage {
         String packageName = "";
         String activity = "";
         String label = "";
         String apk = "";
+        String application = "";
     }
 
     /**
@@ -440,6 +590,9 @@ public final class MuplarServices {
                 any = true;
             } else if (line.startsWith("apk=")) {
                 current.apk = line.substring(4);
+                any = true;
+            } else if (line.startsWith("application=")) {
+                current.application = line.substring(12);
                 any = true;
             }
         }

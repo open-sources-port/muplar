@@ -8,8 +8,24 @@ public final class FrameworkServiceClient {
 
     private FrameworkServiceClient() {}
 
-    public static String request(String operation, String payload) {
+    public static String getServiceSocket() {
         String socket = System.getProperty("muplar.service.socket", "");
+        if (socket != null && !socket.isEmpty()) return socket;
+        socket = System.getenv("MUPLAR_SERVICE_SOCKET");
+        if (socket != null && !socket.isEmpty()) return socket;
+        String userHome = System.getProperty("user.home", "");
+        if (userHome != null && !userHome.isEmpty()) {
+            java.io.File candidate = new java.io.File(
+                userHome + "/.muplar/prefixes/android-arm64/run/muplard.sock");
+            if (candidate.exists()) {
+                return candidate.getAbsolutePath();
+            }
+        }
+        return "";
+    }
+
+    public static String request(String operation, String payload) {
+        String socket = getServiceSocket();
         if (socket.isEmpty())
             return null;
         int opcode = opcodeFor(operation);

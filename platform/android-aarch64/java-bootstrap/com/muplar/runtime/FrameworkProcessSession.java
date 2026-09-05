@@ -11,7 +11,7 @@ public final class FrameworkProcessSession {
     public static synchronized void start(String packageName,
                                           String activityName) {
         if (session != null || packageName == null || packageName.isEmpty()) return;
-        String socket = System.getProperty("muplar.service.socket", "");
+        String socket = FrameworkServiceClient.getServiceSocket();
         if (socket.isEmpty()) return;
         MuplarSocketClient client = MuplarSocketClient.connect(socket);
         if (client == null) {

@@ -30,8 +30,22 @@ final class MuplarScreenshot {
             return;
         }
         captured = true;
-        int width = Math.max(1, root.getWidth());
-        int height = Math.max(1, root.getHeight());
+        int width = root.getWidth();
+        int height = root.getHeight();
+        if (width <= 0 || height <= 0) {
+            width = 1080;
+            height = 1920;
+            try {
+                int wSpec = View.MeasureSpec.makeMeasureSpec(width, View.MeasureSpec.EXACTLY);
+                int hSpec = View.MeasureSpec.makeMeasureSpec(height, View.MeasureSpec.EXACTLY);
+                root.measure(wSpec, hSpec);
+                root.layout(0, 0, width, height);
+            } catch (Throwable t) {
+                System.err.println("[Muplar/Window] measure/layout fallback failed: " + t);
+            }
+        }
+        width = Math.max(1, root.getWidth());
+        height = Math.max(1, root.getHeight());
         dumpViewTree(root, 0);
         try {
             File file = new File(path);

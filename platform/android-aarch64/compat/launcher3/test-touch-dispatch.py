@@ -10,7 +10,7 @@ def send_request(sock_path, opcode, payload):
     version = 1
     req_id = 1
     payload_bytes = payload.encode('utf-8')
-    header = struct.pack('<IHHIQ', magic, version, opcode, len(payload_bytes), req_id)
+    header = struct.pack('<IHHI4xQ', magic, version, opcode, len(payload_bytes), req_id)
     
     sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
     sock.connect(sock_path)
@@ -21,7 +21,7 @@ def send_request(sock_path, opcode, payload):
         print("Failed to receive response header", file=sys.stderr)
         sock.close()
         return None
-    r_magic, r_version, r_opcode, r_size, r_id = struct.unpack('<IHHIQ', resp_header_data)
+    r_magic, r_version, r_opcode, r_size, r_id = struct.unpack('<IHHI4xQ', resp_header_data)
     resp_payload = b''
     while len(resp_payload) < r_size:
         chunk = sock.recv(r_size - len(resp_payload))

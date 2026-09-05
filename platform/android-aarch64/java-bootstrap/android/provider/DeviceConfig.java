@@ -9,6 +9,10 @@ public final class DeviceConfig {
     private DeviceConfig() {
     }
 
+    public interface OnPropertiesChangedListener {
+        void onPropertiesChanged(Properties properties);
+    }
+
     public static Properties getProperties(String namespace, String... names) {
         return new Properties(namespace, Collections.<String, String>emptyMap());
     }
@@ -17,6 +21,55 @@ public final class DeviceConfig {
                                      String name,
                                      boolean defaultValue) {
         return defaultValue;
+    }
+
+    public static String getString(String namespace,
+                                   String name,
+                                   String defaultValue) {
+        return defaultValue;
+    }
+
+    public static int getInt(String namespace,
+                             String name,
+                             int defaultValue) {
+        return defaultValue;
+    }
+
+    public static long getLong(String namespace,
+                              String name,
+                              long defaultValue) {
+        return defaultValue;
+    }
+
+    public static float getFloat(String namespace,
+                                String name,
+                                float defaultValue) {
+        return defaultValue;
+    }
+
+    public static boolean setProperty(String namespace,
+                                      String name,
+                                      String value,
+                                      boolean makeDefault) {
+        return true;
+    }
+
+    public static boolean setProperties(Properties properties) {
+        return true;
+    }
+
+    public static boolean deleteProperty(String namespace, String name) {
+        return true;
+    }
+
+    public static void addOnPropertiesChangedListener(
+            String namespace,
+            java.util.concurrent.Executor executor,
+            OnPropertiesChangedListener onPropertiesChangedListener) {
+    }
+
+    public static void removeOnPropertiesChangedListener(
+            OnPropertiesChangedListener onPropertiesChangedListener) {
     }
 
     public static final class Properties {

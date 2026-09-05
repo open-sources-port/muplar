@@ -48,7 +48,13 @@ fi
 echo "Launcher3 is running. Finding muplard.sock..."
 SOCK_PATH=""
 for _ in {1..50}; do
-    candidate="$(find "$ROOT_DIR/build" "${TMPDIR:-/tmp}" "$HOME/.local/share/muplar" -name "muplard.sock" 2>/dev/null | head -n 1 || true)"
+    for dir in "$HOME/.muplar/prefixes/android-arm64/run" "$HOME/.muplar" "$HOME/.local/share/muplar" "${TMPDIR:-/tmp}"; do
+        if [[ -S "$dir/muplard.sock" ]]; then
+            SOCK_PATH="$dir/muplard.sock"
+            break 2
+        fi
+    done
+    candidate="$(find "$HOME/.muplar" "$HOME/.local/share/muplar" "${TMPDIR:-/tmp}" "$ROOT_DIR/build" -name "muplard.sock" 2>/dev/null | head -n 1 || true)"
     if [[ -n "$candidate" && -S "$candidate" ]]; then
         SOCK_PATH="$candidate"
         break

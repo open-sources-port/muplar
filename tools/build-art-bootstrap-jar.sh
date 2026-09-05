@@ -171,6 +171,7 @@ $SRC_DIR/android/window/TaskSnapshot.java
 $SRC_DIR/android/view/autofill/AutofillManager.java
 $SRC_DIR/android/content/ContentCaptureOptions.java
 $SRC_DIR/android/content/AutofillOptions.java
+$SRC_DIR/android/bluetooth/BluetoothDevice.java
 EOF
 
 if "$JAVAC_BIN" --help 2>&1 | grep -q -- '--release'; then

@@ -407,6 +407,7 @@ ArtBootstrapPlan build_art_bootstrap_plan(const ArtBootstrapConfig &config)
             : std::filesystem::absolute(config.sysroot).lexically_normal();
     plan.package_name = config.apk_classification.manifest_package;
     plan.launch_activity = config.apk_classification.manifest_launch_activity;
+    plan.application_class = config.apk_classification.manifest_application_class;
     plan.dex_files = config.apk_classification.dex_files;
 
     if (plan.sysroot.empty()) {
@@ -661,7 +662,8 @@ ArtBootstrapPlan build_art_bootstrap_plan(const ArtBootstrapConfig &config)
         if (!guest_bootclasspath.empty())
             plan.argv.push_back("-Xbootclasspath:" +
                                 join_strings(guest_bootclasspath, ":"));
-        plan.argv.push_back("-Xusejit:true");
+        plan.argv.push_back("-Xint");
+        plan.argv.push_back("-Xusejit:false");
         for (const std::string &property_arg : service_property_args)
             plan.argv.push_back(property_arg);
         if (!guest_classpath.empty()) {
@@ -686,6 +688,8 @@ ArtBootstrapPlan build_art_bootstrap_plan(const ArtBootstrapConfig &config)
         plan.argv.push_back(*plan.package_name);
     if (plan.launch_activity)
         plan.argv.push_back(*plan.launch_activity);
+    if (plan.application_class)
+        plan.argv.push_back(*plan.application_class);
 
     return plan;
 }
@@ -700,6 +704,8 @@ void print_art_bootstrap_plan(const ArtBootstrapPlan &plan)
         std::cerr << "[ART] package=" << *plan.package_name << "\n";
     if (plan.launch_activity)
         std::cerr << "[ART] launch activity=" << *plan.launch_activity << "\n";
+    if (plan.application_class)
+        std::cerr << "[ART] application class=" << *plan.application_class << "\n";
     std::cerr << "[ART] dex files=" << plan.dex_files.size() << "\n";
     for (const std::string &dex : plan.dex_files)
         std::cerr << "[ART]   dex: " << dex << "\n";

@@ -48,6 +48,7 @@ public final class MuplarContext extends ContextWrapper {
     private final Object wallpaperManager;
     private final Object devicePolicyManager;
     private final Object vibrator;
+    private final Object vibratorManager;
     private final Object sensorManager;
     private final LayoutInflater layoutInflater;
     private final Object launcherApps;
@@ -85,6 +86,7 @@ public final class MuplarContext extends ContextWrapper {
         this.windowManager = createWindowManager(this);
         this.wallpaperManager = createWallpaperManager(this);
         this.devicePolicyManager = createDevicePolicyManager(this);
+        this.vibratorManager = createVibratorManager(this);
         this.vibrator = createVibrator(this);
         this.sensorManager = createSensorManager();
         this.layoutInflater = new MuplarLayoutInflater(this);
@@ -96,9 +98,15 @@ public final class MuplarContext extends ContextWrapper {
         this.inputMethodManager = createInputMethodManager(this);
     }
 
+    private Context applicationContext;
+
+    public void setApplicationContext(Context applicationContext) {
+        this.applicationContext = applicationContext;
+    }
+
     @Override
     public Context getApplicationContext() {
-        return this;
+        return applicationContext != null ? applicationContext : this;
     }
 
     @Override
@@ -326,6 +334,60 @@ public final class MuplarContext extends ContextWrapper {
     }
 
     @Override
+    public File getDataDir() {
+        File dir = new File(applicationInfo.dataDir);
+        if (!dir.exists()) {
+            dir.mkdirs();
+        }
+        return dir;
+    }
+
+    @Override
+    public File getFilesDir() {
+        File dir = new File(applicationInfo.dataDir, "files");
+        if (!dir.exists()) {
+            dir.mkdirs();
+        }
+        return dir;
+    }
+
+    @Override
+    public File getNoBackupFilesDir() {
+        File dir = new File(applicationInfo.dataDir, "no_backup");
+        if (!dir.exists()) {
+            dir.mkdirs();
+        }
+        return dir;
+    }
+
+    @Override
+    public File getCacheDir() {
+        File dir = new File(applicationInfo.dataDir, "cache");
+        if (!dir.exists()) {
+            dir.mkdirs();
+        }
+        return dir;
+    }
+
+    @Override
+    public File getCodeCacheDir() {
+        File dir = new File(applicationInfo.dataDir, "code_cache");
+        if (!dir.exists()) {
+            dir.mkdirs();
+        }
+        return dir;
+    }
+
+    @Override
+    public File getDir(String name, int mode) {
+        File dir = new File(applicationInfo.dataDir, "app_" + name);
+        if (!dir.exists()) {
+            dir.mkdirs();
+        }
+        return dir;
+    }
+
+    @Override
     public File getDatabasePath(String name) {
         File dir = new File(applicationInfo.dataDir, "databases");
         if (!dir.exists()) {
@@ -389,6 +451,9 @@ public final class MuplarContext extends ContextWrapper {
         }
         if (Context.VIBRATOR_SERVICE.equals(name)) {
             return vibrator;
+        }
+        if ("vibrator_manager".equals(name)) {
+            return vibratorManager;
         }
         if (Context.SENSOR_SERVICE.equals(name)) {
             return sensorManager;
@@ -524,6 +589,10 @@ public final class MuplarContext extends ContextWrapper {
         if (serviceClass != null &&
             "android.os.Vibrator".equals(serviceClass.getName())) {
             return Context.VIBRATOR_SERVICE;
+        }
+        if (serviceClass != null &&
+            "android.os.VibratorManager".equals(serviceClass.getName())) {
+            return "vibrator_manager";
         }
         if (serviceClass != null &&
             "android.hardware.SensorManager".equals(serviceClass.getName())) {
@@ -1047,6 +1116,20 @@ public final class MuplarContext extends ContextWrapper {
         }
     }
 
+    private static Object createVibratorManager(Context context) {
+        try {
+            Class<?> type = Class.forName("android.os.SystemVibratorManager");
+            java.lang.reflect.Constructor<?> ctor =
+                type.getDeclaredConstructor(Context.class);
+            ctor.setAccessible(true);
+            return ctor.newInstance(context);
+        } catch (Throwable t) {
+            System.err.println("[Muplar/ART] SystemVibratorManager unavailable: "
+                + t.getClass().getName() + ": " + t.getMessage());
+            return null;
+        }
+    }
+
     private static Object createSensorManager() {
         try {
             return Class.forName("android.hardware.MuplarSensorManager")
@@ -1184,23 +1267,6 @@ public final class MuplarContext extends ContextWrapper {
     private static Object createUserManager(final Context context) {
         try {
             Class<?> type = Class.forName("android.os.UserManager");
-            Object allocated = allocateWithoutConstructor(type);
-            if (allocated != null) {
-                initializeUserManager(allocated, context);
-                return allocated;
-            }
-            java.lang.reflect.Constructor<?> ctor = type.getDeclaredConstructor();
-            ctor.setAccessible(true);
-            Object constructed = ctor.newInstance();
-            initializeUserManager(constructed, context);
-            return constructed;
-        } catch (Throwable ignored) {
-            return null;
-        }
-    }
-
-    private static void initializeUserManager(Object manager, Context context) {
-        try {
             Class<?> serviceType = Class.forName("android.os.IUserManager");
             Object service = java.lang.reflect.Proxy.newProxyInstance(
                 serviceType.getClassLoader(),
@@ -1210,13 +1276,35 @@ public final class MuplarContext extends ContextWrapper {
                     public Object invoke(Object proxy,
                                          java.lang.reflect.Method method,
                                          Object[] args) {
+                        String name = method.getName();
+                        if ("getProfileType".equals(name)) {
+                            return "android.os.usertype.full.SYSTEM";
+                        }
+                        if ("isUserRunning".equals(name) || "isUserUnlocked".equals(name)) {
+                            return Boolean.TRUE;
+                        }
                         return defaultValue(method.getReturnType());
                     }
                 });
-            setFieldIfPresent(manager, "mService", service);
-            setFieldIfPresent(manager, "mContext", context);
+            try {
+                java.lang.reflect.Constructor<?> ctor =
+                    type.getDeclaredConstructor(Context.class, serviceType);
+                ctor.setAccessible(true);
+                Object constructed = ctor.newInstance(context, service);
+                setFieldIfPresent(constructed, "mProfileTypeOfProcessUser", "android.os.usertype.full.SYSTEM");
+                return constructed;
+            } catch (Throwable t) {
+                Object allocated = allocateWithoutConstructor(type);
+                if (allocated != null) {
+                    setFieldIfPresent(allocated, "mService", service);
+                    setFieldIfPresent(allocated, "mContext", context);
+                    setFieldIfPresent(allocated, "mProfileTypeOfProcessUser", "android.os.usertype.full.SYSTEM");
+                    return allocated;
+                }
+            }
         } catch (Throwable ignored) {
         }
+        return null;
     }
 
     private static void setFieldIfPresent(Object target, String name, Object value) {

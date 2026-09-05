@@ -93,6 +93,7 @@ public final class FrameworkDeviceController {
     private static volatile MuplarSocketClient subscriber;
     private static volatile MuplarSocketClient inputSubscriber;
     private static volatile long generation;
+    private static volatile long lastFocusGeneration;
     private static volatile long inputGeneration;
     private static volatile String activeTab = "launcher";
     private static volatile boolean mainReady;
@@ -133,6 +134,8 @@ public final class FrameworkDeviceController {
             activities.put(normalizedTab, record);
             activeTab = normalizedTab;
             mainReady = true;
+            activityStack.remove(normalizedTab);
+            activityStack.add(normalizedTab);
         }
         System.out.println("[DeviceController] registered activity tab=" +
             normalizedTab + " package=" + normalizedPackage + " activity=" +
@@ -140,9 +143,29 @@ public final class FrameworkDeviceController {
         flushPendingActions();
     }
 
+    public static void launchApp(String apkPath,
+                                 String packageName,
+                                 String activityName,
+                                 String applicationName) {
+        if (packageName == null || packageName.isEmpty()) {
+            return;
+        }
+        long nextGen;
+        synchronized (lock) {
+            nextGen = ++generation;
+            lastFocusGeneration = nextGen;
+        }
+        String tab = packageName;
+        DeviceAction action = new DeviceAction(
+            nextGen, "focus-tab", tab, apkPath, packageName, activityName, applicationName);
+        System.out.println("[DeviceController] launchApp tab=" + tab
+            + " package=" + packageName + " activity=" + activityName);
+        dispatchAction(action);
+    }
+
     public static synchronized void start() {
         if (subscriber != null) return;
-        String socket = System.getProperty("muplar.service.socket", "");
+        String socket = FrameworkServiceClient.getServiceSocket();
         if (socket.isEmpty()) return;
         MuplarSocketClient actionClient = MuplarSocketClient.connect(socket);
         MuplarSocketClient inputClient =
@@ -334,6 +357,9 @@ public final class FrameworkDeviceController {
         synchronized (lock) {
             if (next.generation <= generation) return;
             generation = next.generation;
+            if ("focus-tab".equals(next.action)) {
+                lastFocusGeneration = next.generation;
+            }
         }
         System.out.println("[DeviceController] action=" + next.action +
             " tab=" + next.tab + " generation=" + next.generation);
@@ -351,13 +377,19 @@ public final class FrameworkDeviceController {
     private static void dispatchAction(final DeviceAction next) {
         try {
             android.os.Looper looper = android.os.Looper.getMainLooper();
+            System.out.println("[DeviceController] dispatchAction action=" + next.action +
+                " tab=" + next.tab + " looper=" + (looper != null));
             if (looper == null) {
+                System.out.println("[DeviceController] dispatchAction: queuing because looper is null");
                 queueAction(next);
                 return;
             }
-            new android.os.Handler(looper).post(new Runnable() {
+            boolean posted = android.os.Handler.createAsync(looper).post(new Runnable() {
                 @Override public void run() {
-                    if (!isReadyFor(next)) {
+                    boolean ready = isReadyFor(next);
+                    System.out.println("[DeviceController] dispatchAction run on main: ready=" + ready +
+                        " action=" + next.action + " tab=" + next.tab);
+                    if (!ready) {
                         queueAction(next);
                         return;
                     }
@@ -365,6 +397,8 @@ public final class FrameworkDeviceController {
                     flushPendingActions();
                 }
             });
+            System.out.println("[DeviceController] dispatchAction posted=" + posted +
+                " action=" + next.action);
         } catch (Throwable error) {
             System.err.println("[DeviceController] dispatch failed: " +
                 error.getClass().getName() + ": " + error.getMessage());
@@ -378,7 +412,7 @@ public final class FrameworkDeviceController {
                 queueInput(next);
                 return;
             }
-            new android.os.Handler(looper).post(new Runnable() {
+            android.os.Handler.createAsync(looper).post(new Runnable() {
                 @Override public void run() {
                     if (!mainReady) {
                         queueInput(next);
@@ -417,7 +451,7 @@ public final class FrameworkDeviceController {
     private static void flushPendingActions() {
         android.os.Looper looper = android.os.Looper.getMainLooper();
         if (looper == null) return;
-        new android.os.Handler(looper).post(new Runnable() {
+        android.os.Handler.createAsync(looper).post(new Runnable() {
             @Override public void run() {
                 ArrayList<DeviceAction> actions;
                 synchronized (lock) {
@@ -436,7 +470,7 @@ public final class FrameworkDeviceController {
     private static void flushPendingInputs() {
         android.os.Looper looper = android.os.Looper.getMainLooper();
         if (looper == null) return;
-        new android.os.Handler(looper).post(new Runnable() {
+        android.os.Handler.createAsync(looper).post(new Runnable() {
             @Override public void run() {
                 ArrayList<DeviceInput> inputs;
                 synchronized (lock) {
@@ -453,7 +487,10 @@ public final class FrameworkDeviceController {
 
     private static void applyActionOnMain(DeviceAction next) {
         try {
-            if (isStale(next)) return;
+            boolean stale = isStale(next);
+            System.out.println("[DeviceController] applyActionOnMain action=" +
+                next.action + " tab=" + next.tab + " isStale=" + stale);
+            if (stale) return;
             if ("back".equals(next.action)) {
                 performBack();
             } else if ("home".equals(next.action)) {
@@ -610,13 +647,19 @@ public final class FrameworkDeviceController {
     }
 
     private static boolean isStale(DeviceAction next) {
-        synchronized (lock) {
-            return next.generation < generation;
+        if ("focus-tab".equals(next.action)) {
+            synchronized (lock) {
+                return next.generation < lastFocusGeneration;
+            }
         }
+        return false;
     }
 
     private static void focusOrLaunchActivity(DeviceAction next)
         throws Exception {
+        System.out.println("[DeviceController] focusOrLaunchActivity tab=" +
+            next.tab + " apk=" + next.apkPath + " pkg=" + next.packageName +
+            " act=" + next.activityName);
         ActivityRecord record = activityForTab(next.tab);
         if (record != null &&
             sameActivity(record.packageName, record.activityName,
@@ -640,36 +683,21 @@ public final class FrameworkDeviceController {
     private static void performBack() throws Exception {
         final ActivityRecord record = activeRecord();
         if (record == null || record.activity == null) return;
+        if ("launcher".equals(record.tab)) {
+            System.out.println("[DeviceController] back on launcher ignored");
+            return;
+        }
         try {
             java.lang.reflect.Method onBackPressed =
                 record.activity.getClass().getMethod("onBackPressed");
             onBackPressed.setAccessible(true);
             onBackPressed.invoke(record.activity);
-            if (isFinishing(record.activity)) {
-                finishRecord(record);
-                removeRecord(record);
-            } else {
-                android.os.Looper looper = android.os.Looper.getMainLooper();
-                if (looper != null) {
-                    new android.os.Handler(looper).postDelayed(new Runnable() {
-                        @Override public void run() {
-                            try {
-                                if (record.activity != null && isFinishing(record.activity)) {
-                                    finishRecord(record);
-                                    removeRecord(record);
-                                }
-                            } catch (Throwable ignored) {
-                            }
-                        }
-                    }, 250);
-                }
-            }
-            System.out.println("[DeviceController] back dispatched");
-            return;
-        } catch (NoSuchMethodException ignored) {
+        } catch (Throwable t) {
+            System.err.println("[DeviceController] onBackPressed error: " + t.getMessage());
         }
         finishRecord(record);
         removeRecord(record);
+        System.out.println("[DeviceController] back dispatched");
     }
 
     private static void moveActiveActivityToBackground() throws Exception {

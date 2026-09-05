@@ -364,6 +364,29 @@ public final class ArtApkMain {
                 java.util.List.class);
         change.setAccessible(true);
         change.invoke(null, defaults, generics);
+        for (String fieldName : new String[]{"DEFAULT", "DEFAULT_BOLD", "sDefaultFlipfont"}) {
+            try {
+                java.lang.reflect.Field f = typeface.getDeclaredField(fieldName);
+                f.setAccessible(true);
+                Object val = f.get(null);
+                System.out.println("[Muplar/ART] Typeface." + fieldName + "=" + val);
+                if (val == null) {
+                    f.set(null, fieldName.contains("BOLD") ? bold : sans);
+                    System.out.println("[Muplar/ART] Initialized Typeface." + fieldName);
+                }
+            } catch (Throwable t) {
+                System.err.println("[Muplar/ART] Typeface." + fieldName + " setup failed: " + t);
+            }
+        }
+        try {
+            java.lang.reflect.Field flipFontPath = typeface.getDeclaredField("FlipFontPath");
+            flipFontPath.setAccessible(true);
+            System.out.println("[Muplar/ART] FlipFontPath before=" + flipFontPath.get(null));
+            flipFontPath.set(null, "default");
+            System.out.println("[Muplar/ART] FlipFontPath set to default");
+        } catch (Throwable t) {
+            System.err.println("[Muplar/ART] FlipFontPath setup failed: " + t);
+        }
         System.out.println("[Muplar/ART] system font defaults repaired");
     }
 
@@ -582,15 +605,36 @@ public final class ArtApkMain {
                                           ClassLoader loader,
                                           String applicationClass) {
         try {
+            if (applicationClass == null || applicationClass.isEmpty()) {
+                MuplarServices.InstalledPackage pkg = MuplarServices.findInstalledPackage(packageName);
+                if (pkg != null && pkg.application != null && !pkg.application.isEmpty()) {
+                    applicationClass = pkg.application;
+                }
+            }
             Object context = new MuplarContext(packageName, apkPath, loader);
             Object application = createApplication(packageName, context, loader,
                 applicationClass);
+            if (context instanceof MuplarContext && application instanceof android.content.Context) {
+                ((MuplarContext) context).setApplicationContext((android.content.Context) application);
+            }
+            try {
+                Object baseContext = getField(activityObj, "mBase");
+                if (baseContext instanceof MuplarContext && application instanceof android.content.Context) {
+                    ((MuplarContext) baseContext).setApplicationContext((android.content.Context) application);
+                }
+            } catch (Throwable ignored) {
+            }
             setField(activityObj, "mApplication", application);
             attachApplicationToActivityThread(application);
             System.out.println("[Muplar/ART] application attached");
         } catch (Throwable t) {
+            Throwable cause = t instanceof java.lang.reflect.InvocationTargetException
+                ? ((java.lang.reflect.InvocationTargetException)t).getCause()
+                : t;
             System.err.println("[Muplar/ART] application attach failed: "
-                + t.getClass().getName() + ": " + t.getMessage());
+                + (cause != null ? cause.getClass().getName() + ": " + cause.getMessage() : t.getMessage()));
+            if (cause != null) cause.printStackTrace(System.err);
+            else t.printStackTrace(System.err);
         }
     }
 
@@ -613,6 +657,9 @@ public final class ArtApkMain {
             application = constructor.newInstance();
         }
         attachApplicationBaseContext(application, context);
+        if (context instanceof MuplarContext && application instanceof android.content.Context) {
+            ((MuplarContext) context).setApplicationContext((android.content.Context) application);
+        }
         if (!className.isEmpty()) {
             java.lang.reflect.Method onCreate =
                 application.getClass().getMethod("onCreate");

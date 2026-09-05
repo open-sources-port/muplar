@@ -34,7 +34,7 @@ final class MuplarVsyncScheduler {
             if (looper == null) {
                 return;
             }
-            new android.os.Handler(looper).postDelayed(new Runnable() {
+            android.os.Handler.createAsync(looper).postDelayed(new Runnable() {
                 @Override public void run() {
                     dispatch(receiver);
                 }

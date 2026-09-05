@@ -22,6 +22,7 @@ struct ArtBootstrapPlan {
     std::filesystem::path sysroot;
     std::optional<std::string> package_name;
     std::optional<std::string> launch_activity;
+    std::optional<std::string> application_class;
     std::vector<std::string> dex_files;
 
     std::filesystem::path app_process64;
