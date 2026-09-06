@@ -159,6 +159,8 @@ public final class FrameworkDeviceController {
     private static volatile String activeTab = "launcher";
     private static volatile boolean mainReady;
     private static volatile long pointerDownTime;
+    private static volatile float pointerDownX;
+    private static volatile float pointerDownY;
 
     private FrameworkDeviceController() {}
 
@@ -363,6 +365,9 @@ public final class FrameworkDeviceController {
         } finally {
             client.close();
             subscriber = null;
+            // Auto-reconnect: muplard may have restarted; retry connection.
+            System.out.println("[DeviceController] action stream ended, reconnecting...");
+            start();
         }
     }
 
@@ -415,6 +420,7 @@ public final class FrameworkDeviceController {
         } finally {
             client.close();
             inputSubscriber = null;
+            // Auto-reconnect handled by the action stream's finally block.
         }
     }
 
@@ -620,10 +626,13 @@ public final class FrameworkDeviceController {
             } else if ("home".equals(next.action)) {
                 ActivityRecord launcher = activityForTab("launcher");
                 if (launcher != null) {
+                    goToNormalState(launcher);
                     focusRecord(launcher);
                 } else {
                     moveActiveActivityToBackground();
                 }
+            } else if ("all-apps".equals(next.action) || "apps".equals(next.action)) {
+                toggleAllApps();
             } else if ("recents".equals(next.action)) {
                 toggleRecents();
             } else if ("focus-tab".equals(next.action)) {
@@ -690,6 +699,8 @@ public final class FrameworkDeviceController {
         if (input.action == android.view.MotionEvent.ACTION_DOWN ||
             pointerDownTime == 0) {
             pointerDownTime = now;
+            pointerDownX = input.x;
+            pointerDownY = input.y;
         }
         System.out.println("[DeviceController] motion trace: before obtain");
         System.out.flush();
@@ -710,11 +721,23 @@ public final class FrameworkDeviceController {
             0 /* metaState */, 0 /* buttonState */,
             1.0f /* xPrecision */, 1.0f /* yPrecision */, input.deviceId,
             0 /* edgeFlags */, input.source, 0 /* flags */);
-        System.out.println("[DeviceController] motion trace: after obtain");
+        try {
+            java.lang.reflect.Field f = android.view.MotionEvent.class.getDeclaredField("mNativePtr");
+            f.setAccessible(true);
+            long ptr = f.getLong(event);
+            System.out.println("[DeviceController] reflection mNativePtr = 0x" + Long.toHexString(ptr));
+        } catch (Throwable t) {
+            t.printStackTrace();
+        }
+        System.out.println("[DeviceController] motion trace: after obtain event=" + event);
         System.out.flush();
         try {
+            System.out.println("[DeviceController] motion trace: before invokeInputDispatch target=" + record.activity);
+            System.out.flush();
             if (!invokeInputDispatch(record.activity, "dispatchTouchEvent",
                     android.view.MotionEvent.class, event)) {
+                System.out.println("[DeviceController] motion trace: trying decor view");
+                System.out.flush();
                 dispatchToDecorView(record.activity, "dispatchTouchEvent",
                     android.view.MotionEvent.class, event);
             }
@@ -726,6 +749,17 @@ public final class FrameworkDeviceController {
             System.out.flush();
             if (input.action == android.view.MotionEvent.ACTION_UP ||
                 input.action == android.view.MotionEvent.ACTION_CANCEL) {
+                if ("launcher".equals(record.tab) && pointerDownTime > 0) {
+                    float dy = input.y - pointerDownY;
+                    float dx = Math.abs(input.x - pointerDownX);
+                    if (dy < -60.0f && Math.abs(dy) > dx) {
+                        System.out.println("[DeviceController] launcher upward swipe detected: dy=" + dy);
+                        openAllApps(record);
+                    } else if (dy > 60.0f && Math.abs(dy) > dx) {
+                        System.out.println("[DeviceController] launcher downward swipe detected: dy=" + dy);
+                        goToNormalState(record);
+                    }
+                }
                 pointerDownTime = 0;
             }
         }
@@ -749,10 +783,16 @@ public final class FrameworkDeviceController {
                                                Object event)
         throws Exception {
         try {
+            System.out.println("[DeviceController] invokeInputDispatch: target=" + target + " method=" + methodName);
+            System.out.flush();
             java.lang.reflect.Method method =
                 target.getClass().getMethod(methodName, eventClass);
             method.setAccessible(true);
+            System.out.println("[DeviceController] invokeInputDispatch: calling invoke...");
+            System.out.flush();
             Object result = method.invoke(target, event);
+            System.out.println("[DeviceController] invokeInputDispatch: invoke returned " + result);
+            System.out.flush();
             return Boolean.TRUE.equals(result);
         } catch (NoSuchMethodException ignored) {
             return dispatchToDecorView(target, methodName, eventClass, event);
@@ -902,6 +942,112 @@ public final class FrameworkDeviceController {
         }
         finishAndRemoveActivity(record);
         System.out.println("[DeviceController] back dispatched");
+    }
+
+    private static void openAllApps(ActivityRecord launcher) {
+        if (launcher == null || launcher.activity == null) return;
+        try {
+            Object activity = launcher.activity;
+            ClassLoader loader = activity.getClass().getClassLoader();
+            Class<?> launcherStateClass = Class.forName("com.android.launcher3.LauncherState", false, loader);
+            java.lang.reflect.Field allAppsField = launcherStateClass.getField("ALL_APPS");
+            Object allAppsState = allAppsField.get(null);
+
+            java.lang.reflect.Method getStateManagerMethod = activity.getClass().getMethod("getStateManager");
+            Object stateManager = getStateManagerMethod.invoke(activity);
+
+            boolean invoked = false;
+            for (java.lang.reflect.Method m : stateManager.getClass().getMethods()) {
+                if ("goToState".equals(m.getName())) {
+                    Class<?>[] params = m.getParameterTypes();
+                    if (params.length == 2 && params[0].isAssignableFrom(launcherStateClass) && params[1] == boolean.class) {
+                        m.invoke(stateManager, allAppsState, Boolean.FALSE);
+                        invoked = true;
+                        break;
+                    } else if (params.length == 1 && params[0].isAssignableFrom(launcherStateClass)) {
+                        m.invoke(stateManager, allAppsState);
+                        invoked = true;
+                    }
+                }
+            }
+            if (!invoked) {
+                try {
+                    java.lang.reflect.Method showAll = activity.getClass().getMethod("showAllAppsFromIntent", boolean.class);
+                    showAll.invoke(activity, Boolean.TRUE);
+                    invoked = true;
+                } catch (Throwable ignored) {
+                }
+            }
+            System.out.println("[DeviceController] openAllApps invoked=" + invoked);
+            focusRecord(launcher);
+            scheduleFrame(launcher);
+            MuplarFramePresenter.requestBurst();
+        } catch (Throwable t) {
+            System.err.println("[DeviceController] openAllApps error: " + t);
+        }
+    }
+
+    private static void goToNormalState(ActivityRecord launcher) {
+        if (launcher == null || launcher.activity == null) return;
+        try {
+            Object activity = launcher.activity;
+            ClassLoader loader = activity.getClass().getClassLoader();
+            Class<?> launcherStateClass = Class.forName("com.android.launcher3.LauncherState", false, loader);
+            java.lang.reflect.Field normalField = launcherStateClass.getField("NORMAL");
+            Object normalState = normalField.get(null);
+
+            java.lang.reflect.Method getStateManagerMethod = activity.getClass().getMethod("getStateManager");
+            Object stateManager = getStateManagerMethod.invoke(activity);
+
+            boolean invoked = false;
+            for (java.lang.reflect.Method m : stateManager.getClass().getMethods()) {
+                if ("goToState".equals(m.getName())) {
+                    Class<?>[] params = m.getParameterTypes();
+                    if (params.length == 2 && params[0].isAssignableFrom(launcherStateClass) && params[1] == boolean.class) {
+                        m.invoke(stateManager, normalState, Boolean.FALSE);
+                        invoked = true;
+                        break;
+                    } else if (params.length == 1 && params[0].isAssignableFrom(launcherStateClass)) {
+                        m.invoke(stateManager, normalState);
+                        invoked = true;
+                    }
+                }
+            }
+            System.out.println("[DeviceController] goToNormalState invoked=" + invoked);
+            focusRecord(launcher);
+            scheduleFrame(launcher);
+            MuplarFramePresenter.requestBurst();
+        } catch (Throwable t) {
+            System.err.println("[DeviceController] goToNormalState error: " + t);
+        }
+    }
+
+    private static void toggleAllApps() {
+        ActivityRecord launcher = activityForTab("launcher");
+        if (launcher == null) {
+            launcher = activeRecord();
+        }
+        if (launcher == null || launcher.activity == null) return;
+        try {
+            Object activity = launcher.activity;
+            ClassLoader loader = activity.getClass().getClassLoader();
+            Class<?> launcherStateClass = Class.forName("com.android.launcher3.LauncherState", false, loader);
+            java.lang.reflect.Field allAppsField = launcherStateClass.getField("ALL_APPS");
+            Object allAppsState = allAppsField.get(null);
+
+            java.lang.reflect.Method getStateManagerMethod = activity.getClass().getMethod("getStateManager");
+            Object stateManager = getStateManagerMethod.invoke(activity);
+            java.lang.reflect.Method getStateMethod = stateManager.getClass().getMethod("getState");
+            Object currentState = getStateMethod.invoke(stateManager);
+
+            if (currentState == allAppsState) {
+                goToNormalState(launcher);
+            } else {
+                openAllApps(launcher);
+            }
+        } catch (Throwable t) {
+            System.err.println("[DeviceController] toggleAllApps error: " + t);
+        }
     }
 
     private static void moveActiveActivityToBackground() throws Exception {
@@ -1107,7 +1253,23 @@ public final class FrameworkDeviceController {
             if (task != null && task.topActivity() != null) {
                 return task.topActivity();
             }
-            return activities.get(activeTab);
+            ActivityRecord record = activities.get(activeTab);
+            if (record != null) {
+                return record;
+            }
+            if (!taskStack.isEmpty()) {
+                TaskRecord topTask = taskStack.get(taskStack.size() - 1);
+                if (topTask != null && topTask.topActivity() != null) {
+                    return topTask.topActivity();
+                }
+            }
+            if (activities.containsKey("launcher")) {
+                return activities.get("launcher");
+            }
+            if (!activities.isEmpty()) {
+                return activities.values().iterator().next();
+            }
+            return null;
         }
     }
 

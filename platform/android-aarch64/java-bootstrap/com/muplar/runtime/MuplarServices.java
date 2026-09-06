@@ -139,6 +139,9 @@ public final class MuplarServices {
         if ("vibrator".equals(name)) {
             return "android.os.IVibratorService";
         }
+        if ("audio".equals(name)) {
+            return "android.media.IAudioService";
+        }
         return null;
     }
 
@@ -258,6 +261,12 @@ public final class MuplarServices {
             }
             if ("android.view.IWindowManager".equals(descriptor)) {
                 Object value = windowManagerValue(method, args);
+                if (value != null) {
+                    return value;
+                }
+            }
+            if ("android.view.IWindowSession".equals(descriptor)) {
+                Object value = windowSessionValue(method, args);
                 if (value != null) {
                     return value;
                 }
@@ -447,6 +456,19 @@ public final class MuplarServices {
         private Object windowManagerValue(Method method, Object[] args)
             throws Exception {
             String name = method.getName();
+            if ("openSession".equals(name)) {
+                try {
+                    Class<?> sessionInterface = Class.forName("android.view.IWindowSession");
+                    IBinder sessionBinder = new Binder();
+                    return Proxy.newProxyInstance(
+                        sessionInterface.getClassLoader(),
+                        new Class<?>[] { sessionInterface },
+                        new LocalInterfaceHandler(sessionBinder, "android.view.IWindowSession")
+                    );
+                } catch (Throwable t) {
+                    return null;
+                }
+            }
             if ("getPossibleDisplayInfo".equals(name)) {
                 int displayId = args != null && args.length > 0
                     ? ((Integer)args[0]).intValue() : 0;
@@ -459,6 +481,94 @@ public final class MuplarServices {
                 return Boolean.TRUE;
             }
             return null;
+        }
+
+        private Object windowSessionValue(Method method, Object[] args) {
+            String name = method.getName();
+            if ("relayout".equals(name)) {
+                if (args != null && args.length > 0) {
+                    Object outResult = args[args.length - 1];
+                    if (outResult != null) {
+                        populateWindowRelayoutResult(outResult);
+                    }
+                }
+                return Integer.valueOf(0); // RELAYOUT_RES_FIRST_TIME / SUCCESS
+            }
+            if ("relayoutAsync".equals(name)) {
+                return null;
+            }
+            if ("addToDisplay".equals(name) || "addToDisplayAsUser".equals(name)
+                || "addToDisplayWithoutInputChannel".equals(name)) {
+                // Return ADD_OKAY (0) | ADD_FLAG_APP_VISIBLE (0x2) | ADD_FLAG_IN_TOUCH_MODE (0x1) = 3
+                return Integer.valueOf(3);
+            }
+            if ("finishDrawing".equals(name)) {
+                return null;
+            }
+            if ("performDrag".equals(name) || "performDragWithArea".equals(name)) {
+                return Boolean.FALSE;
+            }
+            return null;
+        }
+
+        private void populateWindowRelayoutResult(Object outResult) {
+            try {
+                // Populate frames: ClientWindowFrames
+                Object frames = getFieldIfPresent(outResult, "frames");
+                if (frames == null) {
+                    Class<?> framesCls = Class.forName("android.window.ClientWindowFrames");
+                    try {
+                        java.lang.reflect.Constructor<?> ctor = framesCls.getDeclaredConstructor();
+                        ctor.setAccessible(true);
+                        frames = ctor.newInstance();
+                    } catch (Throwable t) {
+                        frames = allocateWithoutConstructor(framesCls);
+                    }
+                    setFieldIfPresent(outResult, "frames", frames);
+                }
+                if (frames != null) {
+                    android.graphics.Rect rect = new android.graphics.Rect(0, 0, 1080, 1920);
+                    setFieldIfPresent(frames, "frame", rect);
+                    setFieldIfPresent(frames, "displayFrame", rect);
+                    setFieldIfPresent(frames, "parentFrame", rect);
+                    setFieldIfPresent(frames, "compatScale", Float.valueOf(1.0f));
+                }
+
+                Object insets = getFieldIfPresent(outResult, "insetsState");
+                if (insets == null) {
+                    try {
+                        Class<?> insetsCls = Class.forName("android.view.InsetsState");
+                        java.lang.reflect.Constructor<?> insetsCtor = insetsCls.getDeclaredConstructor();
+                        insetsCtor.setAccessible(true);
+                        insets = insetsCtor.newInstance();
+                        setFieldIfPresent(outResult, "insetsState", insets);
+                    } catch (Throwable ignored) {
+                    }
+                }
+
+                // Populate surfaceControl: SurfaceControl
+                Object sc = getFieldIfPresent(outResult, "surfaceControl");
+                if (sc == null) {
+                    Class<?> scCls = Class.forName("android.view.SurfaceControl");
+                    try {
+                        java.lang.reflect.Constructor<?> ctor = scCls.getDeclaredConstructor();
+                        ctor.setAccessible(true);
+                        sc = ctor.newInstance();
+                    } catch (Throwable t) {
+                        sc = allocateWithoutConstructor(scCls);
+                    }
+                    if (sc != null) {
+                        setFieldIfPresent(sc, "mNativeObject", Long.valueOf(1001L));
+                        setFieldIfPresent(sc, "mName", "muplar-window");
+                        setFieldIfPresent(outResult, "surfaceControl", sc);
+                    }
+                } else {
+                    setFieldIfPresent(sc, "mNativeObject", Long.valueOf(1001L));
+                    setFieldIfPresent(sc, "mName", "muplar-window");
+                }
+            } catch (Throwable error) {
+                System.err.println("[Muplar/Window] populateWindowRelayoutResult failed: " + error);
+            }
         }
 
         private Object userManagerValue(Method method, Object[] args) {
@@ -503,8 +613,11 @@ public final class MuplarServices {
                     String packageFilter = args != null && args.length > 1
                         && args[1] instanceof String
                         ? (String) args[1] : null;
-                    return createParceledListSlice(
-                        buildLauncherActivities(packageFilter));
+                    List<Object> activities =
+                        buildLauncherActivities(packageFilter);
+                    System.out.println("[Muplar/ART] getLauncherActivities filter="
+                        + packageFilter + " count=" + activities.size());
+                    return createParceledListSlice(activities);
                 }
                 if ("addOnAppsChangedListener".equals(name)) {
                     System.out.println("[Muplar/ART] addOnAppsChangedListener args length=" + (args != null ? args.length : "null")
@@ -662,7 +775,7 @@ public final class MuplarServices {
      * installed, non-launcher APK, "---"-separated, each a block of
      * "key=value" lines (package/activity/label/apk).
      */
-    private static List<InstalledPackage> queryInstalledPackages() {
+    static List<InstalledPackage> queryInstalledPackages() {
         List<InstalledPackage> result = new ArrayList<>();
         String text = FrameworkServiceClient.request("query-packages", "");
         if (text == null || text.isEmpty()) return result;
@@ -792,6 +905,36 @@ public final class MuplarServices {
             } catch (Throwable ignored) {
                 return;
             }
+        }
+    }
+
+    private static Object getFieldIfPresent(Object target, String name) {
+        if (target == null) return null;
+        Class<?> type = target.getClass();
+        while (type != null) {
+            try {
+                Field field = type.getDeclaredField(name);
+                field.setAccessible(true);
+                return field.get(target);
+            } catch (NoSuchFieldException ignored) {
+                type = type.getSuperclass();
+            } catch (Throwable ignored) {
+                return null;
+            }
+        }
+        return null;
+    }
+
+    private static Object allocateWithoutConstructor(Class<?> type) {
+        try {
+            Class<?> unsafeClass = Class.forName("sun.misc.Unsafe");
+            Field field = unsafeClass.getDeclaredField("theUnsafe");
+            field.setAccessible(true);
+            Object unsafe = field.get(null);
+            Method allocateInstance = unsafeClass.getMethod("allocateInstance", Class.class);
+            return allocateInstance.invoke(unsafe, type);
+        } catch (Throwable ignored) {
+            return null;
         }
     }
 

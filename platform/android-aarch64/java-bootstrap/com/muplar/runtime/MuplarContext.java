@@ -54,6 +54,7 @@ public final class MuplarContext extends ContextWrapper {
     private final Object launcherApps;
     private final Object statsManager;
     private final Object inputMethodManager;
+    private final Object audioManager;
     private final ContentResolver contentResolver;
     private final PackageManager packageManager;
     private final IBinder activityToken = new Binder();
@@ -96,6 +97,7 @@ public final class MuplarContext extends ContextWrapper {
             new MuplarPackageManager(this.packageName, applicationInfo, resources);
         this.statsManager = new android.app.StatsManager();
         this.inputMethodManager = createInputMethodManager(this);
+        this.audioManager = createAudioManager(this);
     }
 
     private Context applicationContext;
@@ -470,6 +472,9 @@ public final class MuplarContext extends ContextWrapper {
         if ("stats".equals(name)) {
             return statsManager;
         }
+        if (Context.AUDIO_SERVICE.equals(name) || "audio".equals(name)) {
+            return audioManager;
+        }
         return null;
     }
 
@@ -618,7 +623,39 @@ public final class MuplarContext extends ContextWrapper {
             "android.app.admin.DevicePolicyManager".equals(serviceClass.getName())) {
             return Context.DEVICE_POLICY_SERVICE;
         }
+        if (serviceClass != null &&
+            "android.media.AudioManager".equals(serviceClass.getName())) {
+            return Context.AUDIO_SERVICE;
+        }
         return serviceClass == null ? null : serviceClass.getName();
+    }
+
+    private static Object createAudioManager(Context context) {
+        try {
+            Class<?> type = Class.forName("android.media.AudioManager");
+            Object am = null;
+            try {
+                java.lang.reflect.Constructor<?> ctor = type.getDeclaredConstructor(Context.class);
+                ctor.setAccessible(true);
+                am = ctor.newInstance(context);
+            } catch (Throwable t1) {
+                try {
+                    java.lang.reflect.Constructor<?> ctor = type.getDeclaredConstructor();
+                    ctor.setAccessible(true);
+                    am = ctor.newInstance();
+                } catch (Throwable t2) {
+                    am = allocateWithoutConstructor(type);
+                }
+            }
+            if (am != null) {
+                setFieldIfPresent(am, "mContext", context);
+                setFieldIfPresent(am, "mOriginalContext", context);
+            }
+            return am;
+        } catch (Throwable t) {
+            System.err.println("[Muplar/ART] failed to create AudioManager: " + t);
+            return null;
+        }
     }
 
     private static Object createInputMethodManager(Context context) {

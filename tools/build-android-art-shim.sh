@@ -63,3 +63,15 @@ mkdir -p "$(dirname "$OUT")"
 
 echo "[ART] Built Android ART shim: $OUT"
 file "$OUT"
+
+# Sync to known deployment locations so runtime prefix and sysroots always stay updated
+for target in \
+    "$ROOT_DIR/build/builtin-android/libmuplar_android_art_shim.so" \
+    "$HOME/.muplar/sysroots/android-arm64/api-35/sysroot/data/local/tmp/muplar/art/libmuplar_android_art_shim.so" \
+    "$HOME/.muplar/prefixes/android-arm64/rootfs/data/local/tmp/muplar/art/libmuplar_android_art_shim.so" \
+    "$ROOT_DIR/build/bin/Muplar Instance Manager.app/Contents/Resources/android/libmuplar_android_art_shim.so"; do
+    if [ -d "$(dirname "$target")" ]; then
+        cp -f "$OUT" "$target"
+        echo "[ART] Synced shim to $target"
+    fi
+done

@@ -367,6 +367,9 @@ static NSView* AndroidDeviceTabChipView(NSString* title,
                                     @"circle", @"Home", self,
                                     @selector(deviceHome:))];
     [toolbar addArrangedSubview:AndroidDeviceIconButton(
+                                    @"circle.grid.3x3.fill", @"All Apps", self,
+                                    @selector(deviceAllApps:))];
+    [toolbar addArrangedSubview:AndroidDeviceIconButton(
                                     @"rectangle.stack", @"Recents", self,
                                     @selector(deviceRecents:))];
 
@@ -629,82 +632,91 @@ static NSView* AndroidDeviceTabChipView(NSString* title,
     self.frameServerFd = fd;
     __weak AndroidDeviceShell* weakSelf = self;
     dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INTERACTIVE, 0), ^{
-        int client = accept(fd, nullptr, nullptr);
-        if (client < 0)
-            return;
+        while (fd >= 0) {
+            int client = accept(fd, nullptr, nullptr);
+            if (client < 0)
+                break;
 #ifdef SO_NOSIGPIPE
-        int noSigpipe = 1;
-        setsockopt(client, SOL_SOCKET, SO_NOSIGPIPE, &noSigpipe,
-                   sizeof(noSigpipe));
+            int noSigpipe = 1;
+            setsockopt(client, SOL_SOCKET, SO_NOSIGPIPE, &noSigpipe,
+                       sizeof(noSigpipe));
 #endif
-        dispatch_async(dispatch_get_main_queue(), ^{
-            AndroidDeviceShell* strongSelf = weakSelf;
-            if (!strongSelf) {
-                close(client);
-                return;
-            }
-            if (strongSelf.frameClientFd >= 0)
-                close(strongSelf.frameClientFd);
-            strongSelf.frameClientFd = client;
-        });
-        for (;;) {
-            AndroidDeviceFrameHeader header{};
-            if (!AndroidDeviceReadAll(client, &header, sizeof(header)))
-                break;
-            if (header.magic != AndroidDeviceFrameMagic || header.width == 0 ||
-                header.height == 0 || header.bytes == 0 ||
-                header.bytes > 64ULL * 1024ULL * 1024ULL) {
-                break;
-            }
-            NSMutableData* frameData =
-                [NSMutableData dataWithLength:(NSUInteger)header.bytes];
-            if (!AndroidDeviceReadAll(client, frameData.mutableBytes,
-                                      (size_t)header.bytes)) {
-                break;
-            }
-            NSUInteger width = (NSUInteger)header.width;
-            NSUInteger height = (NSUInteger)header.height;
             dispatch_async(dispatch_get_main_queue(), ^{
                 AndroidDeviceShell* strongSelf = weakSelf;
-                if (!strongSelf)
+                if (!strongSelf) {
+                    close(client);
                     return;
-                strongSelf.framePixelWidth = width;
-                strongSelf.framePixelHeight = height;
-                NSBitmapImageRep* rep = [[NSBitmapImageRep alloc]
-                    initWithBitmapDataPlanes:nullptr
-                                  pixelsWide:width
-                                  pixelsHigh:height
-                               bitsPerSample:8
-                             samplesPerPixel:4
-                                    hasAlpha:YES
-                                    isPlanar:NO
-                              colorSpaceName:NSDeviceRGBColorSpace
-                                 bytesPerRow:width * 4
-                                bitsPerPixel:32];
-                memcpy(rep.bitmapData, frameData.bytes, frameData.length);
-                NSImage* image =
-                    [[NSImage alloc] initWithSize:NSMakeSize(width, height)];
-                [image addRepresentation:rep];
-                strongSelf.frameView.image = image;
-                strongSelf.titleLabel.hidden = YES;
-                strongSelf.statusLabel.hidden = YES;
-                [strongSelf.spinner stopAnimation:nil];
+                }
+                if (strongSelf.frameClientFd >= 0)
+                    close(strongSelf.frameClientFd);
+                strongSelf.frameClientFd = client;
             });
+            for (;;) {
+                AndroidDeviceFrameHeader header{};
+                if (!AndroidDeviceReadAll(client, &header, sizeof(header)))
+                    break;
+                if (header.magic != AndroidDeviceFrameMagic || header.width == 0 ||
+                    header.height == 0 || header.bytes == 0 ||
+                    header.bytes > 64ULL * 1024ULL * 1024ULL) {
+                    break;
+                }
+                NSMutableData* frameData =
+                    [NSMutableData dataWithLength:(NSUInteger)header.bytes];
+                if (!AndroidDeviceReadAll(client, frameData.mutableBytes,
+                                          (size_t)header.bytes)) {
+                    break;
+                }
+                NSUInteger width = (NSUInteger)header.width;
+                NSUInteger height = (NSUInteger)header.height;
+                dispatch_async(dispatch_get_main_queue(), ^{
+                    AndroidDeviceShell* strongSelf = weakSelf;
+                    if (!strongSelf)
+                        return;
+                    strongSelf.framePixelWidth = width;
+                    strongSelf.framePixelHeight = height;
+                    NSBitmapImageRep* rep = [[NSBitmapImageRep alloc]
+                        initWithBitmapDataPlanes:nullptr
+                                      pixelsWide:width
+                                      pixelsHigh:height
+                                   bitsPerSample:8
+                                 samplesPerPixel:4
+                                        hasAlpha:YES
+                                        isPlanar:NO
+                                  colorSpaceName:NSDeviceRGBColorSpace
+                                     bytesPerRow:width * 4
+                                    bitsPerPixel:32];
+                    memcpy(rep.bitmapData, frameData.bytes, frameData.length);
+                    NSImage* image =
+                        [[NSImage alloc] initWithSize:NSMakeSize(width, height)];
+                    [image addRepresentation:rep];
+                    strongSelf.frameView.image = image;
+                    strongSelf.frameView.needsDisplay = YES;
+                    strongSelf.frameView.layer.needsDisplayOnBoundsChange = YES;
+                    [strongSelf.frameView setNeedsDisplay:YES];
+                    [strongSelf.frameView displayIfNeeded];
+                    [strongSelf.window displayIfNeeded];
+                    strongSelf.titleLabel.hidden = YES;
+                    strongSelf.statusLabel.hidden = YES;
+                    [strongSelf.spinner stopAnimation:nil];
+                });
+            }
+            dispatch_async(dispatch_get_main_queue(), ^{
+                AndroidDeviceShell* strongSelf = weakSelf;
+                if (strongSelf && strongSelf.frameClientFd == client)
+                    strongSelf.frameClientFd = -1;
+            });
+            close(client);
         }
-        dispatch_async(dispatch_get_main_queue(), ^{
-            AndroidDeviceShell* strongSelf = weakSelf;
-            if (strongSelf && strongSelf.frameClientFd == client)
-                strongSelf.frameClientFd = -1;
-        });
-        close(client);
     });
 }
 
 - (void)sendPointerEvent:(NSEvent*)event action:(int32_t)action
 {
-    if (self.frameClientFd < 0 || !event) {
+    if (!event)
+        return;
+    if (self.frameClientFd < 0 && !self.inputHandler) {
 #ifdef DEBUG
-        NSLog(@"[PointerDebug] drop: frameClientFd=%d event=%@", (int)self.frameClientFd, event);
+        NSLog(@"[PointerDebug] drop: no client and no inputHandler");
 #endif
         return;
     }
@@ -742,20 +754,24 @@ static NSView* AndroidDeviceTabChipView(NSString* title,
         self.inputHandler(self.activeTabIdentifier, packet.type, packet.action,
                           packet.source, packet.deviceId, packet.keyCode,
                           packet.x, packet.y);
-    BOOL wrote = AndroidDeviceWriteAll(self.frameClientFd, &packet, sizeof(packet));
+    if (self.frameClientFd >= 0) {
+        BOOL wrote = AndroidDeviceWriteAll(self.frameClientFd, &packet, sizeof(packet));
 #ifdef DEBUG
-    NSLog(@"[PointerDebug] send action=%d x=%.1f y=%.1f fd=%d wrote=%d",
-          action, packet.x, packet.y, (int)self.frameClientFd, (int)wrote);
+        NSLog(@"[PointerDebug] send action=%d x=%.1f y=%.1f fd=%d wrote=%d",
+              action, packet.x, packet.y, (int)self.frameClientFd, (int)wrote);
 #endif
-    if (!wrote) {
-        close(self.frameClientFd);
-        self.frameClientFd = -1;
+        if (!wrote) {
+            close(self.frameClientFd);
+            self.frameClientFd = -1;
+        }
     }
 }
 
 - (void)sendKeyEvent:(NSEvent*)event action:(int32_t)action
 {
-    if (self.frameClientFd < 0 || !event)
+    if (!event)
+        return;
+    if (self.frameClientFd < 0 && !self.inputHandler)
         return;
     AndroidDeviceInputPacket packet{};
     packet.magic = AndroidDeviceInputMagic;
@@ -771,9 +787,11 @@ static NSView* AndroidDeviceTabChipView(NSString* title,
         self.inputHandler(self.activeTabIdentifier, packet.type, packet.action,
                           packet.source, packet.deviceId, packet.keyCode,
                           packet.x, packet.y);
-    if (!AndroidDeviceWriteAll(self.frameClientFd, &packet, sizeof(packet))) {
-        close(self.frameClientFd);
-        self.frameClientFd = -1;
+    if (self.frameClientFd >= 0) {
+        if (!AndroidDeviceWriteAll(self.frameClientFd, &packet, sizeof(packet))) {
+            close(self.frameClientFd);
+            self.frameClientFd = -1;
+        }
     }
 }
 
@@ -844,6 +862,14 @@ static NSView* AndroidDeviceTabChipView(NSString* title,
         self.actionHandler(@"home", self.activeTabIdentifier);
 }
 
+- (void)deviceAllApps:(id)sender
+{
+    (void)sender;
+    [self focusLauncherTab];
+    if (self.actionHandler)
+        self.actionHandler(@"all-apps", self.activeTabIdentifier);
+}
+
 - (void)deviceRecents:(id)sender
 {
     (void)sender;
@@ -901,7 +927,9 @@ static NSView* AndroidDeviceTabChipView(NSString* title,
 - (void)deviceSettings:(id)sender
 {
     (void)sender;
-    [self focusOrCreateTabWithIdentifier:@"settings" title:@"Settings"];
+    if ([self indexOfTabWithIdentifier:@"settings"] != NSNotFound) {
+        [self focusOrCreateTabWithIdentifier:@"settings" title:@"Settings"];
+    }
     if (self.actionHandler)
         self.actionHandler(@"settings", self.activeTabIdentifier);
 }

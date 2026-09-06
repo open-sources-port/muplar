@@ -42,4 +42,5 @@ target_compile_options(muplar_runtime_elf PRIVATE
     -Wall
     -Wextra
     -Wno-language-extension-token
+    -Wno-reorder-init-list
 )

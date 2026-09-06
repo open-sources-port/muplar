@@ -56,6 +56,7 @@ target_compile_options(muplar_runtime_android PRIVATE
     -Wall
     -Wextra
     -Wno-language-extension-token
+    -Wno-reorder-init-list
 )
 
 target_compile_definitions(muplar_runtime_android PRIVATE

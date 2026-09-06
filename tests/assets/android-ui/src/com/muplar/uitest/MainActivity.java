@@ -26,6 +26,19 @@ public class MainActivity extends Activity {
                 System.out.println("[UiTest] button input received");
             }
         });
+        action.setOnTouchListener(new View.OnTouchListener() {
+            @Override public boolean onTouch(View v, android.view.MotionEvent ev) {
+                System.out.println("[UiTest] button onTouch: action=" + ev.getAction() + " x=" + ev.getX() + " y=" + ev.getY());
+                return false;
+            }
+        });
+        action.post(new Runnable() {
+            @Override public void run() {
+                int[] loc = new int[2];
+                action.getLocationOnScreen(loc);
+                System.out.println("[UiTest] button screen coords: x=" + loc[0] + ", y=" + loc[1] + ", w=" + action.getWidth() + ", h=" + action.getHeight());
+            }
+        });
         ListView list = (ListView) findViewById(R.id.list);
         list.setAdapter(new ArrayAdapter<String>(this,
             android.R.layout.simple_list_item_1,
@@ -42,6 +55,13 @@ public class MainActivity extends Activity {
     public void launchSecondActivity() {
         System.out.println("[UiTest] launching SecondActivity");
         startActivity(new android.content.Intent(this, SecondActivity.class));
+    }
+
+    @Override public boolean dispatchTouchEvent(android.view.MotionEvent ev) {
+        System.out.println("[UiTest] dispatchTouchEvent: action=" + ev.getAction() + " x=" + ev.getX() + " y=" + ev.getY());
+        boolean res = super.dispatchTouchEvent(ev);
+        System.out.println("[UiTest] dispatchTouchEvent: res=" + res);
+        return res;
     }
 
     @Override public boolean onKeyDown(int keyCode, android.view.KeyEvent event) {

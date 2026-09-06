@@ -422,6 +422,7 @@ bool valid_device_action(const std::string &action)
     static const std::unordered_set<std::string> actions = {
         "back",        "home",      "recents",   "settings",
         "install-apk", "focus-tab", "close-tab", "package-installed",
+        "all-apps",
     };
     return actions.count(action) != 0;
 }

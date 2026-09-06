@@ -5145,6 +5145,24 @@ static NSString* MapLinuxIconToSFSymbol(NSString* icon)
             }
             return;
         }
+        if ([action isEqualToString:@"settings"]) {
+            MuplarAppShortcut* settingsApp = nil;
+            for (MuplarAppShortcut* app in strongSelf->_appsList) {
+                if ([app.name.lowercaseString containsString:@"setting"]) {
+                    settingsApp = app;
+                    break;
+                }
+            }
+            if (settingsApp) {
+                [strongSelf launchShortcut:settingsApp];
+            } else {
+                AndroidDeviceShell* strongShell = weakShell;
+                if (strongShell) {
+                    [strongShell showInstallSuccess:@"Settings app is not installed in this prefix."];
+                }
+            }
+            return;
+        }
         [strongSelf sendAndroidDeviceAction:action
                               tabIdentifier:tabIdentifier
                                  socketPath:capturedSocketPath

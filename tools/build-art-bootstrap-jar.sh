@@ -194,3 +194,16 @@ xargs "$D8_BIN" --min-api 35 --output "$DEX_DIR" < "$BUILD_DIR/class-files.txt"
 
 echo "[ART] Built bootstrap jar: $OUT"
 file "$OUT"
+
+# Sync to known deployment locations so runtime prefix and sysroots always stay updated
+for target in \
+    "$ROOT_DIR/build/builtin-android/muplar-art-bootstrap.jar" \
+    "$HOME/.muplar/sysroots/android-arm64/api-35/sysroot/data/local/tmp/muplar/art/muplar-art-bootstrap.jar" \
+    "$HOME/.muplar/sysroots/android-arm64/api-35/sysroot/system/framework/muplar-art-bootstrap.jar" \
+    "$HOME/.muplar/prefixes/android-arm64/rootfs/data/local/tmp/muplar/art/muplar-art-bootstrap.jar" \
+    "$ROOT_DIR/build/bin/Muplar Instance Manager.app/Contents/Resources/android/muplar-art-bootstrap.jar"; do
+    if [ -d "$(dirname "$target")" ]; then
+        cp -f "$OUT" "$target"
+        echo "[ART] Synced bootstrap jar to $target"
+    fi
+done

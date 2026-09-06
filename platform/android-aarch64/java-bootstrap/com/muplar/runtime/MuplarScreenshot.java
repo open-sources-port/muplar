@@ -65,7 +65,7 @@ final class MuplarScreenshot {
     }
 
     private static void dumpViewTree(View view, int depth) {
-        if (view == null || depth > 3) {
+        if (view == null || depth > 8) {
             return;
         }
         StringBuilder line = new StringBuilder("[Muplar/Window] view ");

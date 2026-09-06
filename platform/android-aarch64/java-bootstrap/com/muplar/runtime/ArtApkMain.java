@@ -451,7 +451,35 @@ public final class ArtApkMain {
             makeVisible.setAccessible(true);
             makeVisible.invoke(activityObj);
             System.out.println("[Muplar/ART] makeVisible completed successfully");
+            try {
+                java.lang.reflect.Method onWindowFocusChanged =
+                    Class.forName("android.app.Activity").getDeclaredMethod("onWindowFocusChanged", boolean.class);
+                onWindowFocusChanged.setAccessible(true);
+                onWindowFocusChanged.invoke(activityObj, Boolean.TRUE);
+            } catch (Throwable ignored) {
+            }
             if (decor instanceof android.view.View) {
+                try {
+                    java.lang.reflect.Method getViewRootImpl =
+                        android.view.View.class.getDeclaredMethod("getViewRootImpl");
+                    getViewRootImpl.setAccessible(true);
+                    Object vri = getViewRootImpl.invoke(decor);
+                    if (vri != null) {
+                        try {
+                            java.lang.reflect.Method dispatchAppVis =
+                                vri.getClass().getMethod("dispatchAppVisibility", boolean.class);
+                            dispatchAppVis.invoke(vri, Boolean.TRUE);
+                        } catch (Throwable ignored) {
+                        }
+                        try {
+                            java.lang.reflect.Method winFocus =
+                                vri.getClass().getMethod("windowFocusChanged", boolean.class);
+                            winFocus.invoke(vri, Boolean.TRUE);
+                        } catch (Throwable ignored) {
+                        }
+                    }
+                } catch (Throwable ignored) {
+                }
                 MuplarFramePresenter.schedule((android.view.View) decor);
                 MuplarScreenshot.captureIfRequested((android.view.View) decor);
             }

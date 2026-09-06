@@ -60,7 +60,19 @@ public final class MuplarPackageManager extends PackageManager {
     @Override public Drawable getActivityIcon(ComponentName activity) { return null; }
     @Override public Drawable getActivityIcon(Intent intent) { return null; }
     @Override public ActivityInfo getActivityInfo(ComponentName component, int flags)
-            throws NameNotFoundException { throw new NameNotFoundException(); }
+            throws NameNotFoundException {
+        if (component != null) {
+            for (MuplarServices.InstalledPackage pkg :
+                    MuplarServices.queryInstalledPackages()) {
+                if (component.getPackageName().equals(pkg.packageName)
+                    && component.getClassName().equals(pkg.activity)) {
+                    return createActivityInfo(pkg);
+                }
+            }
+        }
+        throw new NameNotFoundException(component != null
+            ? component.flattenToShortString() : "");
+    }
     @Override public Drawable getActivityLogo(ComponentName activity) { return null; }
     @Override public Drawable getActivityLogo(Intent intent) { return null; }
     @Override public List<PermissionGroupInfo> getAllPermissionGroups(int flags) {
@@ -76,6 +88,12 @@ public final class MuplarPackageManager extends PackageManager {
     @Override public ApplicationInfo getApplicationInfo(String packageName, int flags)
             throws NameNotFoundException {
         if (this.packageName.equals(packageName)) return applicationInfo;
+        for (MuplarServices.InstalledPackage pkg :
+                MuplarServices.queryInstalledPackages()) {
+            if (packageName.equals(pkg.packageName)) {
+                return createApplicationInfo(pkg);
+            }
+        }
         throw new NameNotFoundException(packageName);
     }
     @Override public CharSequence getApplicationLabel(ApplicationInfo info) {
@@ -92,7 +110,14 @@ public final class MuplarPackageManager extends PackageManager {
         try { return resources.getDrawable(resId, null); } catch (Throwable ignored) { return null; }
     }
     @Override public List<ApplicationInfo> getInstalledApplications(int flags) {
-        return Collections.singletonList(applicationInfo);
+        java.util.ArrayList<ApplicationInfo> result =
+            new java.util.ArrayList<ApplicationInfo>();
+        result.add(applicationInfo);
+        for (MuplarServices.InstalledPackage pkg :
+                MuplarServices.queryInstalledPackages()) {
+            result.add(createApplicationInfo(pkg));
+        }
+        return result;
     }
     @Override public List<PackageInfo> getInstalledPackages(int flags) {
         return Collections.emptyList();
@@ -182,7 +207,20 @@ public final class MuplarPackageManager extends PackageManager {
         return Collections.emptyList();
     }
     @Override public List<ResolveInfo> queryIntentActivities(Intent intent, int flags) {
-        return Collections.singletonList(createResolveInfo());
+        java.util.ArrayList<ResolveInfo> result =
+            new java.util.ArrayList<ResolveInfo>();
+        for (MuplarServices.InstalledPackage pkg :
+                MuplarServices.queryInstalledPackages()) {
+            if (pkg.activity != null && !pkg.activity.isEmpty()) {
+                result.add(createResolveInfo(pkg));
+            }
+        }
+        if (result.isEmpty()) {
+            result.add(createResolveInfo());
+        }
+        System.out.println("[Muplar/ART] PackageManager.queryIntentActivities count="
+            + result.size());
+        return result;
     }
     @Override public List<ResolveInfo> queryIntentActivityOptions(ComponentName caller,
             Intent[] specifics, Intent intent, int flags) { return Collections.emptyList(); }
@@ -219,6 +257,41 @@ public final class MuplarPackageManager extends PackageManager {
 
         ResolveInfo info = new ResolveInfo();
         info.activityInfo = activity;
+        return info;
+    }
+
+    private ResolveInfo createResolveInfo(MuplarServices.InstalledPackage pkg) {
+        ResolveInfo info = new ResolveInfo();
+        info.activityInfo = createActivityInfo(pkg);
+        if (pkg.label != null && !pkg.label.isEmpty())
+            info.nonLocalizedLabel = pkg.label;
+        return info;
+    }
+
+    private ActivityInfo createActivityInfo(MuplarServices.InstalledPackage pkg) {
+        ActivityInfo activity = new ActivityInfo();
+        activity.packageName = pkg.packageName;
+        activity.name = pkg.activity;
+        activity.processName = pkg.packageName;
+        activity.applicationInfo = createApplicationInfo(pkg);
+        activity.enabled = true;
+        activity.exported = true;
+        if (pkg.label != null && !pkg.label.isEmpty())
+            activity.nonLocalizedLabel = pkg.label;
+        return activity;
+    }
+
+    private ApplicationInfo createApplicationInfo(
+            MuplarServices.InstalledPackage pkg) {
+        ApplicationInfo info = new ApplicationInfo();
+        info.packageName = pkg.packageName;
+        info.processName = pkg.packageName;
+        info.sourceDir = pkg.apk;
+        info.publicSourceDir = pkg.apk;
+        info.uid = applicationInfo != null ? applicationInfo.uid : 10000;
+        info.targetSdkVersion = 35;
+        if (pkg.label != null && !pkg.label.isEmpty())
+            info.nonLocalizedLabel = pkg.label;
         return info;
     }
 }
