@@ -16,6 +16,7 @@ final class MuplarFramePresenter {
     private static boolean loopStarted;
     private static volatile int burstFrames;
     private static volatile boolean frameRequested;
+    private static volatile boolean hasPresentedAny;
     private static Bitmap reusableBitmap;
     private static Canvas reusableCanvas;
 
@@ -35,7 +36,7 @@ final class MuplarFramePresenter {
             return;
         }
         currentRoot = new WeakReference<>(root);
-        burstFrames = 3;
+        burstFrames = 30;
         try {
             java.lang.reflect.Method getViewRootImpl =
                 View.class.getDeclaredMethod("getViewRootImpl");
@@ -143,6 +144,7 @@ final class MuplarFramePresenter {
         currentRoot = null;
         burstFrames = 0;
         frameRequested = false;
+        hasPresentedAny = false;
         if (reusableBitmap != null && !reusableBitmap.isRecycled()) {
             try {
                 reusableBitmap.recycle();
@@ -174,7 +176,7 @@ final class MuplarFramePresenter {
                         dirty = root.isDirty();
                     } catch (Throwable ignored) {
                     }
-                    if (burstFrames > 0 || dirty) {
+                    if (burstFrames > 0 || dirty || !hasPresentedAny) {
                         if (burstFrames > 0) {
                             burstFrames--;
                         }
@@ -213,18 +215,9 @@ final class MuplarFramePresenter {
             int hSpec = View.MeasureSpec.makeMeasureSpec(height, View.MeasureSpec.EXACTLY);
             root.measure(wSpec, hSpec);
             root.layout(0, 0, width, height);
-        } catch (Throwable error) {
-            System.err.println("[Muplar/Window] layout error: " + error);
-        }
-        width = Math.max(1, root.getWidth());
-        height = Math.max(1, root.getHeight());
-        try {
-            File parent = new File(path).getParentFile();
-            if (parent != null) {
-                parent.mkdirs();
-            }
-            if (reusableBitmap == null || reusableBitmap.getWidth() != width ||
-                reusableBitmap.getHeight() != height || reusableBitmap.isRecycled()) {
+            if (reusableBitmap == null || reusableBitmap.isRecycled()
+                || reusableBitmap.getWidth() != width
+                || reusableBitmap.getHeight() != height) {
                 if (reusableBitmap != null && !reusableBitmap.isRecycled()) {
                     try {
                         reusableBitmap.recycle();
@@ -242,13 +235,11 @@ final class MuplarFramePresenter {
             reusableCanvas.drawColor(Color.rgb(238, 238, 238));
             root.draw(reusableCanvas);
             reusableCanvas.restoreToCount(saveCount);
-            if (isFallbackOnlyFrame(reusableBitmap)) {
-                return;
-            }
             nativeAvailable = writeBitmapNative(reusableBitmap, path);
             if (!nativeAvailable) {
                 System.err.println("[Muplar/Window] software frame bridge disabled");
             } else {
+                hasPresentedAny = true;
                 System.out.println("[Muplar/Window] software frame presented w="
                     + width + " h=" + height + " path=" + path);
             }
@@ -257,32 +248,4 @@ final class MuplarFramePresenter {
                 error.getClass().getName() + ": " + error.getMessage());
         }
     }
-
-    private static boolean isFallbackOnlyFrame(Bitmap bitmap) {
-        if (bitmap == null || bitmap.isRecycled()) {
-            return true;
-        }
-        try {
-            int width = bitmap.getWidth();
-            int height = bitmap.getHeight();
-            if (width <= 0 || height <= 0) {
-                return true;
-            }
-            int fallback = Color.rgb(238, 238, 238);
-            int[] xs = new int[] { 0, width / 4, width / 2, (width * 3) / 4, width - 1 };
-            int[] ys = new int[] { 0, height / 4, height / 2, (height * 3) / 4, height - 1 };
-            for (int y : ys) {
-                for (int x : xs) {
-                    if ((bitmap.getPixel(x, y) & 0x00ffffff) !=
-                        (fallback & 0x00ffffff)) {
-                        return false;
-                    }
-                }
-            }
-            return true;
-        } catch (Throwable ignored) {
-            return false;
-        }
-    }
-
 }

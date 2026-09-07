@@ -9,8 +9,10 @@ import android.content.pm.ChangedPackages;
 import android.content.pm.FeatureInfo;
 import android.content.pm.InstrumentationInfo;
 import android.content.pm.PackageInfo;
+import android.content.pm.PackageItemInfo;
 import android.content.pm.PackageInstaller;
 import android.content.pm.PackageManager;
+import android.content.pm.MuplarPackageManagerBridge;
 import android.content.pm.PermissionGroupInfo;
 import android.content.pm.PermissionInfo;
 import android.content.pm.ProviderInfo;
@@ -21,12 +23,14 @@ import android.content.pm.VersionedPackage;
 import android.content.res.Resources;
 import android.content.res.XmlResourceParser;
 import android.graphics.Rect;
+import android.graphics.Color;
+import android.graphics.drawable.ColorDrawable;
 import android.graphics.drawable.Drawable;
 import android.os.UserHandle;
 import java.util.Collections;
 import java.util.List;
 
-public final class MuplarPackageManager extends PackageManager {
+public final class MuplarPackageManager extends MuplarPackageManagerBridge {
     private final String packageName;
     private final ApplicationInfo applicationInfo;
     private final Resources resources;
@@ -57,8 +61,8 @@ public final class MuplarPackageManager extends PackageManager {
     @Override public void extendVerificationTimeout(int id, int codeAtTimeout, long timeout) {}
     @Override public Drawable getActivityBanner(ComponentName activity) { return null; }
     @Override public Drawable getActivityBanner(Intent intent) { return null; }
-    @Override public Drawable getActivityIcon(ComponentName activity) { return null; }
-    @Override public Drawable getActivityIcon(Intent intent) { return null; }
+    @Override public Drawable getActivityIcon(ComponentName activity) { return defaultIcon(); }
+    @Override public Drawable getActivityIcon(Intent intent) { return defaultIcon(); }
     @Override public ActivityInfo getActivityInfo(ComponentName component, int flags)
             throws NameNotFoundException {
         if (component != null) {
@@ -83,8 +87,8 @@ public final class MuplarPackageManager extends PackageManager {
     @Override public int getApplicationEnabledSetting(String packageName) {
         return COMPONENT_ENABLED_STATE_DEFAULT;
     }
-    @Override public Drawable getApplicationIcon(ApplicationInfo info) { return null; }
-    @Override public Drawable getApplicationIcon(String packageName) { return null; }
+    @Override public Drawable getApplicationIcon(ApplicationInfo info) { return defaultIcon(); }
+    @Override public Drawable getApplicationIcon(String packageName) { return defaultIcon(); }
     @Override public ApplicationInfo getApplicationInfo(String packageName, int flags)
             throws NameNotFoundException {
         if (this.packageName.equals(packageName)) return applicationInfo;
@@ -105,9 +109,23 @@ public final class MuplarPackageManager extends PackageManager {
     @Override public int getComponentEnabledSetting(ComponentName componentName) {
         return COMPONENT_ENABLED_STATE_DEFAULT;
     }
-    @Override public Drawable getDefaultActivityIcon() { return null; }
+    @Override public Drawable getDefaultActivityIcon() { return defaultIcon(); }
     @Override public Drawable getDrawable(String packageName, int resId, ApplicationInfo appInfo) {
         try { return resources.getDrawable(resId, null); } catch (Throwable ignored) { return null; }
+    }
+    @Override protected Drawable muplarLoadItemIcon(PackageItemInfo itemInfo,
+                                                    ApplicationInfo appInfo) {
+        Drawable drawable = null;
+        if (itemInfo != null && itemInfo.icon != 0) {
+            try {
+                drawable = getDrawable(itemInfo.packageName, itemInfo.icon, appInfo);
+                if (drawable instanceof android.graphics.drawable.AdaptiveIconDrawable) {
+                    drawable = null;
+                }
+            } catch (Throwable ignored) {
+            }
+        }
+        return drawable != null ? drawable : defaultIcon();
     }
     @Override public List<ApplicationInfo> getInstalledApplications(int flags) {
         java.util.ArrayList<ApplicationInfo> result =
@@ -239,6 +257,14 @@ public final class MuplarPackageManager extends PackageManager {
         return createResolveInfo();
     }
     @Override public ProviderInfo resolveContentProvider(String name, int flags) { return null; }
+    @Override public Property getProperty(String propertyName,
+            ComponentName componentName) throws NameNotFoundException {
+        throw new NameNotFoundException(propertyName);
+    }
+    @Override public Property getProperty(String propertyName,
+            String packageName) throws NameNotFoundException {
+        throw new NameNotFoundException(propertyName);
+    }
     @Override public ResolveInfo resolveService(Intent intent, int flags) { return null; }
     @Override public void setApplicationCategoryHint(String packageName, int categoryHint) {}
     @Override public void setApplicationEnabledSetting(String packageName, int newState, int flags) {}
@@ -293,5 +319,9 @@ public final class MuplarPackageManager extends PackageManager {
         if (pkg.label != null && !pkg.label.isEmpty())
             info.nonLocalizedLabel = pkg.label;
         return info;
+    }
+
+    private static Drawable defaultIcon() {
+        return new ColorDrawable(Color.rgb(33, 150, 243));
     }
 }

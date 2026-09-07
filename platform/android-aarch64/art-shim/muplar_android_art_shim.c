@@ -24,6 +24,7 @@ static uintptr_t muplar_next_path_token = 0x1c000;
 static uintptr_t muplar_next_path_measure_token = 0x1d000;
 static uintptr_t muplar_next_paint_token = 0x1e000;
 static uintptr_t muplar_next_shader_token = 0x20000;
+static uintptr_t muplar_next_draw_filter_token = 0x21000;
 static uintptr_t muplar_next_picture_token = 0x22000;
 static uintptr_t muplar_next_canvas_token = 0x24000;
 static uintptr_t muplar_next_render_node_token = 0x26000;
@@ -62,6 +63,7 @@ struct muplar_frame_header {
 struct muplar_sqlite_statement {
     jlong handle;
     jint parameter_count;
+    jint is_icon_query;
 };
 
 static struct muplar_sqlite_statement muplar_sqlite_statements[256];
@@ -70,6 +72,8 @@ struct muplar_bitmap_state {
     jlong token;
     jint width;
     jint height;
+    jint bytes_per_pixel;
+    jint config;
     uint32_t *pixels;
 };
 
@@ -158,6 +162,8 @@ static struct muplar_bitmap_state *muplar_alloc_bitmap(jint width, jint height)
         bitmap->token = (jlong) muplar_next_bitmap_token;
         bitmap->width = width;
         bitmap->height = height;
+        bitmap->bytes_per_pixel = 4;
+        bitmap->config = 5; /* ARGB_8888 */
         return bitmap;
     }
     return NULL;
@@ -183,6 +189,45 @@ static int muplar_write_all(int fd, const void *data, size_t size)
         offset += (size_t) written;
     }
     return 1;
+}
+
+static int muplar_bitmap_mostly_black(struct muplar_bitmap_state *bitmap)
+{
+    int black = 0;
+    int sampled = 0;
+    int step_x;
+    int step_y;
+
+    if (!bitmap || !bitmap->pixels || bitmap->width <= 0 || bitmap->height <= 0)
+        return 1;
+
+    step_x = bitmap->width / 8;
+    step_y = bitmap->height / 8;
+    if (step_x < 1)
+        step_x = 1;
+    if (step_y < 1)
+        step_y = 1;
+
+    for (int y = bitmap->height / 8; y < bitmap->height; y += step_y) {
+        for (int x = bitmap->width / 8; x < bitmap->width; x += step_x) {
+            uint32_t argb = bitmap->pixels[(size_t)y * (size_t)bitmap->width +
+                                           (size_t)x];
+            uint8_t a = (uint8_t)(argb >> 24);
+            uint8_t r = (uint8_t)(argb >> 16);
+            uint8_t g = (uint8_t)(argb >> 8);
+            uint8_t b = (uint8_t)argb;
+            if (a < 255) {
+                r = (uint8_t)(((uint32_t)r * a + 238u * (255u - a)) / 255u);
+                g = (uint8_t)(((uint32_t)g * a + 238u * (255u - a)) / 255u);
+                b = (uint8_t)(((uint32_t)b * a + 238u * (255u - a)) / 255u);
+            }
+            sampled++;
+            if (r < 8 && g < 8 && b < 8)
+                black++;
+        }
+    }
+
+    return sampled > 0 && black * 100 / sampled > 60;
 }
 
 static int muplar_frame_socket_fd = -1;
@@ -218,6 +263,7 @@ static int muplar_write_bitmap_frame(struct muplar_bitmap_state *bitmap,
     size_t count;
     size_t i;
     int sock_fd;
+    char tmp_path[512];
 
     if (!bitmap || !bitmap->pixels)
         return 0;
@@ -228,10 +274,19 @@ static int muplar_write_bitmap_frame(struct muplar_bitmap_state *bitmap,
         return 0;
     for (i = 0; i < count; i++) {
         uint32_t argb = bitmap->pixels[i];
-        rgba[i * 4 + 0] = (uint8_t) (argb >> 16);
-        rgba[i * 4 + 1] = (uint8_t) (argb >> 8);
-        rgba[i * 4 + 2] = (uint8_t) argb;
-        rgba[i * 4 + 3] = (uint8_t) (argb >> 24);
+        uint8_t a = (uint8_t)(argb >> 24);
+        uint8_t r = (uint8_t)(argb >> 16);
+        uint8_t g = (uint8_t)(argb >> 8);
+        uint8_t b = (uint8_t)argb;
+        if (a < 255) {
+            r = (uint8_t)(((uint32_t)r * a + 238u * (255u - a)) / 255u);
+            g = (uint8_t)(((uint32_t)g * a + 238u * (255u - a)) / 255u);
+            b = (uint8_t)(((uint32_t)b * a + 238u * (255u - a)) / 255u);
+        }
+        rgba[i * 4 + 0] = r;
+        rgba[i * 4 + 1] = g;
+        rgba[i * 4 + 2] = b;
+        rgba[i * 4 + 3] = 255;
     }
 
     header.magic = 0x4d485231u;
@@ -244,8 +299,11 @@ static int muplar_write_bitmap_frame(struct muplar_bitmap_state *bitmap,
     if (sock_fd >= 0) {
         if (muplar_write_all(sock_fd, &header, sizeof(header)) &&
             muplar_write_all(sock_fd, rgba, count * 4)) {
-            free(rgba);
-            return 1;
+            if (!path || !*path) {
+                free(rgba);
+                return 1;
+            }
+            goto write_file;
         }
         close(sock_fd);
         muplar_frame_socket_fd = -1;
@@ -256,7 +314,7 @@ static int muplar_write_bitmap_frame(struct muplar_bitmap_state *bitmap,
         return 0;
     }
 
-    char tmp_path[512];
+write_file:
     if (strlen(path) + 5 >= sizeof(tmp_path)) {
         free(rgba);
         return 0;
@@ -860,6 +918,18 @@ static const char *const muplar_sqlite_default_columns[] = {
     "usingLowResIcon",
 };
 
+static const char *const muplar_sqlite_icon_columns[] = {
+    "componentName",
+    "profileId",
+    "lastUpdated",
+    "version",
+    "icon",
+    "icon_color",
+    "label",
+    "system_state",
+    "keywords",
+};
+
 static void muplar_clear_exception(JNIEnv *env);
 
 static void *muplar_dlopen_android_library(const char *libpath, int flag)
@@ -1433,12 +1503,13 @@ static jint muplar_sqlite_count_parameters(const char *sql)
     return count;
 }
 
-static void muplar_sqlite_store_statement(jlong handle, jint parameter_count)
+static void muplar_sqlite_store_statement(jlong handle, jint parameter_count, jint is_icon_query)
 {
     size_t slot = (size_t) handle % (sizeof(muplar_sqlite_statements) /
                                      sizeof(muplar_sqlite_statements[0]));
     muplar_sqlite_statements[slot].handle = handle;
     muplar_sqlite_statements[slot].parameter_count = parameter_count;
+    muplar_sqlite_statements[slot].is_icon_query = is_icon_query;
 }
 
 static jint muplar_sqlite_statement_parameter_count(jlong handle)
@@ -1451,6 +1522,15 @@ static jint muplar_sqlite_statement_parameter_count(jlong handle)
     return 0;
 }
 
+static jint muplar_sqlite_is_icon_query(jlong handle)
+{
+    size_t slot = (size_t) handle % (sizeof(muplar_sqlite_statements) /
+                                     sizeof(muplar_sqlite_statements[0]));
+    if (muplar_sqlite_statements[slot].handle == handle)
+        return muplar_sqlite_statements[slot].is_icon_query;
+    return 0;
+}
+
 static jlong muplar_SQLite_nativePrepareStatement(JNIEnv *env,
                                                   jclass clazz,
                                                   jlong connection_ptr,
@@ -1459,17 +1539,21 @@ static jlong muplar_SQLite_nativePrepareStatement(JNIEnv *env,
     const char *chars;
     jlong handle;
     jint parameter_count;
+    jint is_icon_query = 0;
 
     (void) clazz;
     (void) connection_ptr;
 
     chars = sql ? (*env)->GetStringUTFChars(env, sql, NULL) : NULL;
+    if (chars && (strstr(chars, "componentName") || strstr(chars, "icons"))) {
+        is_icon_query = 1;
+    }
     parameter_count = muplar_sqlite_count_parameters(chars);
     if (sql && chars)
         (*env)->ReleaseStringUTFChars(env, sql, chars);
 
     handle = (jlong) ++muplar_next_sqlite_token;
-    muplar_sqlite_store_statement(handle, parameter_count);
+    muplar_sqlite_store_statement(handle, parameter_count, is_icon_query);
     return handle;
 }
 
@@ -1492,7 +1576,10 @@ static jint muplar_SQLite_nativeGetColumnCount(JNIEnv *env,
     (void) env;
     (void) clazz;
     (void) connection_ptr;
-    (void) statement_ptr;
+    if (muplar_sqlite_is_icon_query(statement_ptr)) {
+        return (jint) (sizeof(muplar_sqlite_icon_columns) /
+                       sizeof(muplar_sqlite_icon_columns[0]));
+    }
     return (jint) (sizeof(muplar_sqlite_default_columns) /
                    sizeof(muplar_sqlite_default_columns[0]));
 }
@@ -1503,11 +1590,17 @@ static jstring muplar_SQLite_nativeGetColumnName(JNIEnv *env,
                                                  jlong statement_ptr,
                                                  jint index)
 {
-    size_t count = sizeof(muplar_sqlite_default_columns) /
-                   sizeof(muplar_sqlite_default_columns[0]);
     (void) clazz;
     (void) connection_ptr;
-    (void) statement_ptr;
+    if (muplar_sqlite_is_icon_query(statement_ptr)) {
+        size_t count = sizeof(muplar_sqlite_icon_columns) /
+                       sizeof(muplar_sqlite_icon_columns[0]);
+        if (index < 0 || (size_t) index >= count)
+            return (*env)->NewStringUTF(env, "");
+        return (*env)->NewStringUTF(env, muplar_sqlite_icon_columns[index]);
+    }
+    size_t count = sizeof(muplar_sqlite_default_columns) /
+                   sizeof(muplar_sqlite_default_columns[0]);
     if (index < 0 || (size_t) index >= count)
         return (*env)->NewStringUTF(env, "");
     return (*env)->NewStringUTF(env, muplar_sqlite_default_columns[index]);
@@ -2722,6 +2815,16 @@ void Java_android_graphics_Paint_nSetString(JNIEnv *env,
     (void) clazz;
     (void) paint;
     (void) value;
+}
+
+jfloat Java_android_graphics_Paint_nGetLetterSpacing(JNIEnv *env,
+                                                     jclass clazz,
+                                                     jlong paint)
+{
+    (void) env;
+    (void) clazz;
+    (void) paint;
+    return 0.0f;
 }
 
 jlong Java_android_graphics_Paint_nSetTypeface(JNIEnv *env,
@@ -4590,6 +4693,20 @@ jfloat Java_android_graphics_Paint_nGetTextAdvances(JNIEnv *env,
     return width;
 }
 
+jboolean Java_android_graphics_Paint_nHasGlyph(JNIEnv *env,
+                                               jclass clazz,
+                                               jlong paint,
+                                               jint bidi_flags,
+                                               jstring string)
+{
+    (void) env;
+    (void) clazz;
+    (void) paint;
+    (void) bidi_flags;
+    (void) string;
+    return JNI_TRUE;
+}
+
 jlong Java_android_graphics_Picture_nativeConstructor(JNIEnv *env,
                                                       jclass clazz,
                                                       jlong src)
@@ -5057,6 +5174,28 @@ void Java_android_graphics_Canvas_nSetDrawFilter(JNIEnv *env,
     (void) filter;
 }
 
+jlong Java_android_graphics_PaintFlagsDrawFilter_nativeConstructor(
+    JNIEnv *env,
+    jclass clazz,
+    jint clear_bits,
+    jint set_bits)
+{
+    (void) env;
+    (void) clazz;
+    (void) clear_bits;
+    (void) set_bits;
+    return (jlong) ++muplar_next_draw_filter_token;
+}
+
+void Java_android_graphics_DrawFilter_nativeDestructor(JNIEnv *env,
+                                                       jclass clazz,
+                                                       jlong native_filter)
+{
+    (void) env;
+    (void) clazz;
+    (void) native_filter;
+}
+
 void Java_android_graphics_Canvas_nSetMatrix(JNIEnv *env,
                                              jclass clazz,
                                              jlong canvas,
@@ -5207,8 +5346,6 @@ void Java_android_graphics_Canvas_nDrawColor(JNIEnv *env,
     (void) clazz;
     (void) mode;
     muplar_draw_color_count++;
-    fprintf(stderr, "[Muplar/ART] nDrawColor canvas=0x%llx bmp=%s color=0x%08x\n",
-            (unsigned long long)canvas, bitmap ? "OK" : "NULL", (unsigned)color);
     if (bitmap && c) {
         muplar_fill_rect(bitmap, c->clip_left, c->clip_top, c->clip_right, c->clip_bottom,
                          (uint32_t) color);
@@ -6267,29 +6404,46 @@ jobject Java_android_graphics_Bitmap_nativeCreate(JNIEnv *env,
                                                   jboolean mutable_bitmap,
                                                   jlong colorspace)
 {
-    (void) config;
     (void) mutable_bitmap;
     (void) colorspace;
     jobject obj = Java_android_graphics_HardwareRenderer_nCreateHardwareBitmap(
         env, clazz, 0, width, height);
-    if (obj && colors && width > 0 && height > 0) {
+    if (obj) {
         jclass bitmap_class = (*env)->GetObjectClass(env, obj);
         if (bitmap_class) {
             jfieldID fid = (*env)->GetFieldID(env, bitmap_class, "mNativePtr", "J");
             if (fid) {
                 jlong token = (*env)->GetLongField(env, obj, fid);
                 struct muplar_bitmap_state *bitmap = muplar_find_bitmap(token);
-                if (bitmap && bitmap->pixels) {
-                    jint *src = (*env)->GetIntArrayElements(env, colors, NULL);
-                    if (src) {
-                        int y, x;
-                        for (y = 0; y < height; y++) {
-                            for (x = 0; x < width; x++) {
-                                jint src_idx = offset + y * stride + x;
-                                bitmap->pixels[y * width + x] = (uint32_t) src[src_idx];
+                if (bitmap) {
+                    bitmap->config = config ? config : 5;
+                    switch (config) {
+                    case 1: /* ALPHA_8 */
+                        bitmap->bytes_per_pixel = 1;
+                        break;
+                    case 3: /* RGB_565 */
+                    case 4: /* ARGB_4444 */
+                        bitmap->bytes_per_pixel = 2;
+                        break;
+                    case 6: /* RGBA_F16 */
+                        bitmap->bytes_per_pixel = 8;
+                        break;
+                    default:
+                        bitmap->bytes_per_pixel = 4;
+                        break;
+                    }
+                    if (colors && bitmap->pixels && width > 0 && height > 0) {
+                        jint *src = (*env)->GetIntArrayElements(env, colors, NULL);
+                        if (src) {
+                            int y, x;
+                            for (y = 0; y < height; y++) {
+                                for (x = 0; x < width; x++) {
+                                    jint src_idx = offset + y * stride + x;
+                                    bitmap->pixels[y * width + x] = (uint32_t) src[src_idx];
+                                }
                             }
+                            (*env)->ReleaseIntArrayElements(env, colors, src, JNI_ABORT);
                         }
-                        (*env)->ReleaseIntArrayElements(env, colors, src, JNI_ABORT);
                     }
                 }
             }
@@ -6312,8 +6466,8 @@ void Java_android_graphics_Bitmap_nativeSetHasAlpha(JNIEnv *env,
 }
 
 jboolean Java_android_graphics_Bitmap_nativeHasAlpha(JNIEnv *env,
-                                                    jclass clazz,
-                                                    jlong native_bitmap)
+                                                     jclass clazz,
+                                                     jlong native_bitmap)
 {
     (void) env;
     (void) clazz;
@@ -6328,12 +6482,14 @@ jint Java_android_graphics_Bitmap_nativeRowBytes(JNIEnv *env,
     struct muplar_bitmap_state *b = muplar_find_bitmap(native_bitmap);
     (void) env;
     (void) clazz;
-    return b ? b->width * 4 : 64;
+    if (!b)
+        return 64;
+    return b->width * (b->bytes_per_pixel > 0 ? b->bytes_per_pixel : 4);
 }
 
 jint Java_android_graphics_Bitmap_nativeGenerationId(JNIEnv *env,
-                                                    jclass clazz,
-                                                    jlong native_bitmap)
+                                                     jclass clazz,
+                                                     jlong native_bitmap)
 {
     (void) env;
     (void) clazz;
@@ -6342,13 +6498,15 @@ jint Java_android_graphics_Bitmap_nativeGenerationId(JNIEnv *env,
 }
 
 jint Java_android_graphics_Bitmap_nativeGetAllocationByteCount(JNIEnv *env,
-                                                            jclass clazz,
-                                                            jlong native_bitmap)
+                                                             jclass clazz,
+                                                             jlong native_bitmap)
 {
     struct muplar_bitmap_state *b = muplar_find_bitmap(native_bitmap);
     (void) env;
     (void) clazz;
-    return b ? b->width * b->height * 4 : 256;
+    if (!b)
+        return 256;
+    return b->width * b->height * (b->bytes_per_pixel > 0 ? b->bytes_per_pixel : 4);
 }
 
 jint Java_android_graphics_Bitmap_nativeGetPixel(JNIEnv *env,
@@ -6460,10 +6618,188 @@ jint Java_android_graphics_Bitmap_nativeConfig(JNIEnv *env,
                                                jclass clazz,
                                                jlong native_bitmap)
 {
+    struct muplar_bitmap_state *b = muplar_find_bitmap(native_bitmap);
     (void) env;
     (void) clazz;
-    (void) native_bitmap;
-    return 5; /* Bitmap.Config.ARGB_8888 */
+    return b && b->config ? b->config : 5; /* Bitmap.Config.ARGB_8888 */
+}
+
+void Java_android_graphics_Bitmap_nativeCopyPixelsToBuffer(JNIEnv *env,
+                                                          jclass clazz,
+                                                          jlong native_bitmap,
+                                                          jobject buffer)
+{
+    struct muplar_bitmap_state *b = muplar_find_bitmap(native_bitmap);
+    (void) clazz;
+    if (!b || !b->pixels || !buffer)
+        return;
+
+    size_t count = (size_t) b->width * (size_t) b->height;
+    int bpp = b->bytes_per_pixel > 0 ? b->bytes_per_pixel : 4;
+    size_t byte_count = count * (size_t) bpp;
+
+    void *direct = (*env)->GetDirectBufferAddress(env, buffer);
+    jclass buf_cls = (*env)->GetObjectClass(env, buffer);
+    jmethodID pos_mid = (*env)->GetMethodID(env, buf_cls, "position", "()I");
+    jint pos = pos_mid ? (*env)->CallIntMethod(env, buffer, pos_mid) : 0;
+    if ((*env)->ExceptionCheck(env))
+        (*env)->ExceptionClear(env);
+
+    if (direct) {
+        uint8_t *dst = (uint8_t *) direct + pos;
+        if (bpp == 1) {
+            for (size_t i = 0; i < count; i++) {
+                uint8_t a = (uint8_t) ((b->pixels[i] >> 24) & 0xFF);
+                if (a == 0 && (b->pixels[i] & 0xFFFFFF) != 0)
+                    a = 0xFF;
+                dst[i] = a;
+            }
+        } else if (bpp == 2) {
+            uint16_t *dst16 = (uint16_t *) dst;
+            for (size_t i = 0; i < count; i++) {
+                uint32_t p = b->pixels[i];
+                dst16[i] = (uint16_t) ((((p >> 19) & 0x1F) << 11) |
+                                       (((p >> 10) & 0x3F) << 5) |
+                                       ((p >> 3) & 0x1F));
+            }
+        } else {
+            memcpy(dst, b->pixels, byte_count);
+        }
+        return;
+    }
+
+    jmethodID has_array_mid = (*env)->GetMethodID(env, buf_cls, "hasArray", "()Z");
+    if (has_array_mid && (*env)->CallBooleanMethod(env, buffer, has_array_mid)) {
+        jmethodID arr_mid = (*env)->GetMethodID(env, buf_cls, "array", "()Ljava/lang/Object;");
+        jmethodID arr_off_mid = (*env)->GetMethodID(env, buf_cls, "arrayOffset", "()I");
+        jobject arr = (*env)->CallObjectMethod(env, buffer, arr_mid);
+        jint arr_off = arr_off_mid ? (*env)->CallIntMethod(env, buffer, arr_off_mid) : 0;
+        if ((*env)->ExceptionCheck(env))
+            (*env)->ExceptionClear(env);
+
+        if (arr) {
+            int shift = 0;
+            jclass short_buf_cls = (*env)->FindClass(env, "java/nio/ShortBuffer");
+            jclass int_buf_cls = (*env)->FindClass(env, "java/nio/IntBuffer");
+            if (short_buf_cls && (*env)->IsInstanceOf(env, buffer, short_buf_cls))
+                shift = 1;
+            else if (int_buf_cls && (*env)->IsInstanceOf(env, buffer, int_buf_cls))
+                shift = 2;
+            if ((*env)->ExceptionCheck(env))
+                (*env)->ExceptionClear(env);
+
+            void *raw = (*env)->GetPrimitiveArrayCritical(env, (jarray) arr, NULL);
+            if (raw) {
+                uint8_t *dst = (uint8_t *) raw + ((arr_off + pos) << shift);
+                if (bpp == 1) {
+                    for (size_t i = 0; i < count; i++) {
+                        uint8_t a = (uint8_t) ((b->pixels[i] >> 24) & 0xFF);
+                        if (a == 0 && (b->pixels[i] & 0xFFFFFF) != 0)
+                            a = 0xFF;
+                        dst[i] = a;
+                    }
+                } else if (bpp == 2) {
+                    uint16_t *dst16 = (uint16_t *) dst;
+                    for (size_t i = 0; i < count; i++) {
+                        uint32_t p = b->pixels[i];
+                        dst16[i] = (uint16_t) ((((p >> 19) & 0x1F) << 11) |
+                                               (((p >> 10) & 0x3F) << 5) |
+                                               ((p >> 3) & 0x1F));
+                    }
+                } else {
+                    memcpy(dst, b->pixels, byte_count);
+                }
+                (*env)->ReleasePrimitiveArrayCritical(env, (jarray) arr, raw, 0);
+            }
+        }
+    }
+}
+
+void Java_android_graphics_Bitmap_nativeCopyPixelsFromBuffer(JNIEnv *env,
+                                                            jclass clazz,
+                                                            jlong native_bitmap,
+                                                            jobject buffer)
+{
+    struct muplar_bitmap_state *b = muplar_find_bitmap(native_bitmap);
+    (void) clazz;
+    if (!b || !b->pixels || !buffer)
+        return;
+
+    size_t count = (size_t) b->width * (size_t) b->height;
+    int bpp = b->bytes_per_pixel > 0 ? b->bytes_per_pixel : 4;
+    size_t byte_count = count * (size_t) bpp;
+
+    void *direct = (*env)->GetDirectBufferAddress(env, buffer);
+    jclass buf_cls = (*env)->GetObjectClass(env, buffer);
+    jmethodID pos_mid = (*env)->GetMethodID(env, buf_cls, "position", "()I");
+    jint pos = pos_mid ? (*env)->CallIntMethod(env, buffer, pos_mid) : 0;
+    if ((*env)->ExceptionCheck(env))
+        (*env)->ExceptionClear(env);
+
+    if (direct) {
+        const uint8_t *src = (const uint8_t *) direct + pos;
+        if (bpp == 1) {
+            for (size_t i = 0; i < count; i++) {
+                b->pixels[i] = ((uint32_t) src[i] << 24) | 0x00FFFFFFu;
+            }
+        } else if (bpp == 2) {
+            const uint16_t *src16 = (const uint16_t *) src;
+            for (size_t i = 0; i < count; i++) {
+                uint16_t p = src16[i];
+                uint32_t r = ((p >> 11) & 0x1F) * 255 / 31;
+                uint32_t g = ((p >> 5) & 0x3F) * 255 / 63;
+                uint32_t bv = (p & 0x1F) * 255 / 31;
+                b->pixels[i] = (0xFFu << 24) | (r << 16) | (g << 8) | bv;
+            }
+        } else {
+            memcpy(b->pixels, src, byte_count);
+        }
+        return;
+    }
+
+    jmethodID has_array_mid = (*env)->GetMethodID(env, buf_cls, "hasArray", "()Z");
+    if (has_array_mid && (*env)->CallBooleanMethod(env, buffer, has_array_mid)) {
+        jmethodID arr_mid = (*env)->GetMethodID(env, buf_cls, "array", "()Ljava/lang/Object;");
+        jmethodID arr_off_mid = (*env)->GetMethodID(env, buf_cls, "arrayOffset", "()I");
+        jobject arr = (*env)->CallObjectMethod(env, buffer, arr_mid);
+        jint arr_off = arr_off_mid ? (*env)->CallIntMethod(env, buffer, arr_off_mid) : 0;
+        if ((*env)->ExceptionCheck(env))
+            (*env)->ExceptionClear(env);
+
+        if (arr) {
+            int shift = 0;
+            jclass short_buf_cls = (*env)->FindClass(env, "java/nio/ShortBuffer");
+            jclass int_buf_cls = (*env)->FindClass(env, "java/nio/IntBuffer");
+            if (short_buf_cls && (*env)->IsInstanceOf(env, buffer, short_buf_cls))
+                shift = 1;
+            else if (int_buf_cls && (*env)->IsInstanceOf(env, buffer, int_buf_cls))
+                shift = 2;
+            if ((*env)->ExceptionCheck(env))
+                (*env)->ExceptionClear(env);
+
+            void *raw = (*env)->GetPrimitiveArrayCritical(env, (jarray) arr, NULL);
+            if (raw) {
+                const uint8_t *src = (const uint8_t *) raw + ((arr_off + pos) << shift);
+                if (bpp == 1) {
+                    for (size_t i = 0; i < count; i++) {
+                        b->pixels[i] = ((uint32_t) src[i] << 24) | 0x00FFFFFFu;
+                    }
+                } else if (bpp == 2) {
+                    const uint16_t *src16 = (const uint16_t *) src;
+                    for (size_t i = 0; i < count; i++) {
+                        uint16_t p = src16[i];
+                        uint32_t r = ((p >> 11) & 0x1F) * 255 / 31;
+                        uint32_t g = ((p >> 5) & 0x3F) * 255 / 63;
+                        uint32_t bv = (p & 0x1F) * 255 / 31;
+                        b->pixels[i] = (0xFFu << 24) | (r << 16) | (g << 8) | bv;
+                    }
+                } else {
+                    memcpy(b->pixels, src, byte_count);
+                }
+                (*env)->ReleasePrimitiveArrayCritical(env, (jarray) arr, raw, JNI_ABORT);
+            }
+        }
+    }
 }
 
 void Java_android_graphics_Bitmap_nativeSetGainmap(JNIEnv *env,
@@ -12679,6 +13015,12 @@ JNIEXPORT jint JNICALL JNI_OnLoad(JavaVM *vm, void *reserved)
         muplar_register_one(
             env, cls, "nativeCompress", "(JIILjava/io/OutputStream;[B)Z",
             (void *) Java_android_graphics_Bitmap_nativeCompress);
+        muplar_register_one(
+            env, cls, "nativeCopyPixelsToBuffer", "(JLjava/nio/Buffer;)V",
+            (void *) Java_android_graphics_Bitmap_nativeCopyPixelsToBuffer);
+        muplar_register_one(
+            env, cls, "nativeCopyPixelsFromBuffer", "(JLjava/nio/Buffer;)V",
+            (void *) Java_android_graphics_Bitmap_nativeCopyPixelsFromBuffer);
     }
 
     cls = (*env)->FindClass(env, "android/graphics/Path");
@@ -12867,6 +13209,8 @@ JNIEXPORT jint JNICALL JNI_OnLoad(JavaVM *vm, void *reserved)
                         (void *) Java_android_graphics_Paint_nSetTextSize);
     muplar_register_one(env, cls, "nSetLetterSpacing", "(JF)V",
                         (void *) Java_android_graphics_Paint_nSetTextSize);
+    muplar_register_one(env, cls, "nGetLetterSpacing", "(J)F",
+                        (void *) Java_android_graphics_Paint_nGetLetterSpacing);
     muplar_register_one(env, cls, "nSetWordSpacing", "(JF)V",
                         (void *) Java_android_graphics_Paint_nSetTextSize);
     muplar_register_one(env, cls, "nSetStrokeWidth", "(JF)V",
@@ -12924,6 +13268,8 @@ JNIEXPORT jint JNICALL JNI_OnLoad(JavaVM *vm, void *reserved)
         (void *) Java_android_graphics_Paint_nGetRunCharacterAdvance);
     muplar_register_one(env, cls, "nGetTextAdvances", "(J[CIIIII[FI)F",
                         (void *) Java_android_graphics_Paint_nGetTextAdvances);
+    muplar_register_one(env, cls, "nHasGlyph", "(JILjava/lang/String;)Z",
+                        (void *) Java_android_graphics_Paint_nHasGlyph);
 
     cls = (*env)->FindClass(env, "android/graphics/Shader");
     if (cls) {

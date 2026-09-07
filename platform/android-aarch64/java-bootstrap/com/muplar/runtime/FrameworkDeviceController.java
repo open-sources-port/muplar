@@ -1286,6 +1286,7 @@ public final class FrameworkDeviceController {
             Object decor = getDecorView.invoke(window);
             if (decor instanceof android.view.View) {
                 MuplarFramePresenter.schedule((android.view.View) decor);
+                MuplarFramePresenter.requestBurst();
             }
         } catch (Throwable ignored) {
         }

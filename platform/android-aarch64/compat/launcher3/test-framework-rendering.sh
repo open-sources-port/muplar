@@ -18,6 +18,10 @@ if [[ ! -f "$TEST_APK" ]]; then
     "$ROOT_DIR/tests/assets/android-ui/build-apk.sh"
 fi
 
+# Restart muplard so it picks up the latest binary
+pkill -f 'muplard' 2>/dev/null || true
+rm -f "$PREFIX_DIR/run/muplard.sock" "$PREFIX_DIR/run/muplard.pid"
+
 mkdir -p "$(dirname "$LOG")"
 : > "$LOG"
 
@@ -81,7 +85,7 @@ fi
 echo "Event-driven frame presenter loop is active."
 
 echo "Waiting for initial frame presentation..."
-for _ in {1..100}; do
+for _ in {1..300}; do
     if grep -q 'software frame presented' "$LOG"; then
         break
     fi

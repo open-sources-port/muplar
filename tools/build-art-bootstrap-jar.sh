@@ -140,39 +140,7 @@ fi
 rm -rf "$CLASSES_DIR" "$DEX_DIR"
 mkdir -p "$CLASSES_DIR" "$DEX_DIR" "$(dirname "$OUT")"
 
-cat > "$BUILD_DIR/sources.txt" <<EOF
-$SRC_DIR/com/muplar/runtime/ArtApkMain.java
-$SRC_DIR/com/muplar/runtime/FrameworkProcessSession.java
-$SRC_DIR/com/muplar/runtime/FrameworkServiceClient.java
-$SRC_DIR/com/muplar/runtime/MuplarApplication.java
-$SRC_DIR/com/muplar/runtime/MuplarContentResolver.java
-$SRC_DIR/com/muplar/runtime/MuplarContext.java
-$SRC_DIR/com/muplar/runtime/MuplarGraphics.java
-$SRC_DIR/com/muplar/runtime/MuplarLayoutInflater.java
-$SRC_DIR/com/muplar/runtime/MuplarPackageManager.java
-$SRC_DIR/com/muplar/runtime/MuplarServices.java
-$SRC_DIR/com/muplar/runtime/MuplarSharedPreferences.java
-$SRC_DIR/com/muplar/runtime/MuplarVsyncScheduler.java
-$SRC_DIR/android/app/admin/IDevicePolicyManager.java
-$SRC_DIR/android/app/admin/ParcelableResource.java
-$SRC_DIR/android/app/IApplicationThread.java
-$SRC_DIR/android/app/StatsManager.java
-$SRC_DIR/android/content/IContentProvider.java
-$SRC_DIR/android/hardware/MuplarSensorManager.java
-$SRC_DIR/android/os/ICancellationSignal.java
-$SRC_DIR/android/provider/DeviceConfig.java
-$SRC_DIR/android/util/StatsEvent.java
-$SRC_DIR/android/util/StatsLog.java
-$SRC_DIR/android/view/IRecentsAnimationController.java
-$SRC_DIR/android/view/IRecentsAnimationRunner.java
-$SRC_DIR/android/view/RemoteAnimationTarget.java
-$SRC_DIR/android/widget/EditText.java
-$SRC_DIR/android/window/TaskSnapshot.java
-$SRC_DIR/android/view/autofill/AutofillManager.java
-$SRC_DIR/android/content/ContentCaptureOptions.java
-$SRC_DIR/android/content/AutofillOptions.java
-$SRC_DIR/android/bluetooth/BluetoothDevice.java
-EOF
+find "$SRC_DIR" -name "*.java" | sort > "$BUILD_DIR/sources.txt"
 
 if "$JAVAC_BIN" --help 2>&1 | grep -q -- '--release'; then
     "$JAVAC_BIN" -Xlint:-options --release 8 -classpath "$ANDROID_JAR" \

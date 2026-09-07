@@ -40,7 +40,7 @@ if __name__ == '__main__':
     # Opcode 27 = DeviceInput
     # payload format: tab \n type \n action \n source \n device_id \n key_code \n x \n y
     # ACTION_DOWN = 0
-    payload_down = "\n0\n0\n4098\n0\n0\n540.0\n960.0"
+    payload_down = "launcher\n2\n0\n4098\n1\n0\n540.0\n960.0"
     print(f"Sending ACTION_DOWN to {sock_path}...")
     res_down = send_request(sock_path, 27, payload_down)
     print(f"ACTION_DOWN response generation: {res_down}")
@@ -48,7 +48,7 @@ if __name__ == '__main__':
     time.sleep(0.05)
     
     # ACTION_UP = 1
-    payload_up = "\n0\n1\n4098\n0\n0\n540.0\n960.0"
+    payload_up = "launcher\n2\n1\n4098\n1\n0\n540.0\n960.0"
     print(f"Sending ACTION_UP to {sock_path}...")
     res_up = send_request(sock_path, 27, payload_up)
     print(f"ACTION_UP response generation: {res_up}")

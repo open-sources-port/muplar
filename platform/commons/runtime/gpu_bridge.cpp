@@ -1,6 +1,7 @@
 #include "gpu_bridge.h"
 
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <algorithm>
 #include <fstream>
@@ -13,6 +14,13 @@ extern "C" {
 
 namespace muplar::runtime
 {
+
+static bool android_software_frame_enabled()
+{
+    const char *guest_path = std::getenv("MUPLAR_ANDROID_SOFTWARE_FRAME_PATH");
+    const char *host_path = std::getenv("MUPLAR_HOST_WINDOW_SOFTWARE_FRAME_PATH");
+    return (guest_path && *guest_path) || (host_path && *host_path);
+}
 
 GpuBridge::GpuBridge(guest_t *guest,
                      uint64_t stub_arena_gpa,
@@ -158,6 +166,8 @@ void GpuBridge::present_native_window_buffer()
 {
     if (!host_window_enabled_ || !native_window_.bits_gpa)
         return;
+    if (android_software_frame_enabled())
+        return;
     ensure_host_window();
     if (!host_window_active())
         return;
@@ -176,6 +186,8 @@ void GpuBridge::present_native_window_buffer()
 void GpuBridge::present_egl_surface()
 {
     if (!host_window_enabled_)
+        return;
+    if (android_software_frame_enabled())
         return;
     ensure_host_window();
     if (!host_window_active())

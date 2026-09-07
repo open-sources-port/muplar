@@ -55,6 +55,7 @@ public final class MuplarContext extends ContextWrapper {
     private final Object statsManager;
     private final Object inputMethodManager;
     private final Object audioManager;
+    private final Object appWidgetManager;
     private final ContentResolver contentResolver;
     private final PackageManager packageManager;
     private final IBinder activityToken = new Binder();
@@ -76,6 +77,11 @@ public final class MuplarContext extends ContextWrapper {
         this.applicationInfo.flags |= ApplicationInfo.FLAG_SYSTEM;
         this.applicationInfo.targetSdkVersion = 30;
         this.resources = createResources(apkPath);
+        int launcherIcon = resources.getIdentifier("ic_launcher_home",
+            "drawable", this.packageName);
+        if (launcherIcon != 0) {
+            this.applicationInfo.icon = launcherIcon;
+        }
         this.themeResId = resolveThemeResource(resources, this.packageName);
         if (themeResId != 0) {
             this.applicationInfo.theme = themeResId;
@@ -98,6 +104,7 @@ public final class MuplarContext extends ContextWrapper {
         this.statsManager = new android.app.StatsManager();
         this.inputMethodManager = createInputMethodManager(this);
         this.audioManager = createAudioManager(this);
+        this.appWidgetManager = createAppWidgetManager(this);
     }
 
     private Context applicationContext;
@@ -475,6 +482,9 @@ public final class MuplarContext extends ContextWrapper {
         if (Context.AUDIO_SERVICE.equals(name) || "audio".equals(name)) {
             return audioManager;
         }
+        if ("appwidget".equals(name)) {
+            return appWidgetManager;
+        }
         return null;
     }
 
@@ -627,7 +637,49 @@ public final class MuplarContext extends ContextWrapper {
             "android.media.AudioManager".equals(serviceClass.getName())) {
             return Context.AUDIO_SERVICE;
         }
+        if (serviceClass != null &&
+            "android.appwidget.AppWidgetManager".equals(serviceClass.getName())) {
+            return "appwidget";
+        }
         return serviceClass == null ? null : serviceClass.getName();
+    }
+
+    private static Object createAppWidgetManager(Context context) {
+        try {
+            Class<?> type = Class.forName("android.appwidget.AppWidgetManager");
+            Object manager = null;
+            for (java.lang.reflect.Constructor<?> ctor : type.getDeclaredConstructors()) {
+                try {
+                    ctor.setAccessible(true);
+                    Class<?>[] params = ctor.getParameterTypes();
+                    Object[] args = new Object[params.length];
+                    for (int i = 0; i < params.length; i++) {
+                        if (Context.class.isAssignableFrom(params[i])) {
+                            args[i] = context;
+                        } else if (params[i] == Integer.TYPE) {
+                            args[i] = Integer.valueOf(0);
+                        } else if (params[i] == Boolean.TYPE) {
+                            args[i] = Boolean.FALSE;
+                        } else {
+                            args[i] = null;
+                        }
+                    }
+                    manager = ctor.newInstance(args);
+                    break;
+                } catch (Throwable ignored) {
+                }
+            }
+            if (manager == null) {
+                manager = allocateWithoutConstructor(type);
+            }
+            if (manager != null) {
+                setFieldIfPresent(manager, "mContext", context);
+            }
+            return manager;
+        } catch (Throwable t) {
+            System.err.println("[Muplar/ART] failed to create AppWidgetManager: " + t);
+            return null;
+        }
     }
 
     private static Object createAudioManager(Context context) {
@@ -718,18 +770,21 @@ public final class MuplarContext extends ContextWrapper {
                 java.lang.reflect.Constructor<?> ctor = type.getDeclaredConstructor(Context.class, ilserviceClass);
                 ctor.setAccessible(true);
                 launcherApps = ctor.newInstance(context, service);
+                System.out.println("[Muplar/ART] LauncherApps created with Context,ILauncherApps ctor");
             } catch (Throwable t1) {
                 try {
                     java.lang.reflect.Constructor<?> ctor = type.getDeclaredConstructor(Context.class);
                     ctor.setAccessible(true);
                     launcherApps = ctor.newInstance(context);
                     setFieldIfPresent(launcherApps, "mService", service);
+                    System.out.println("[Muplar/ART] LauncherApps created with Context ctor");
                 } catch (Throwable t2) {
                     launcherApps = allocateWithoutConstructor(type);
                     setFieldIfPresent(launcherApps, "mContext", context);
                     setFieldIfPresent(launcherApps, "mCallbacks", new java.util.ArrayList<Object>());
                     setFieldIfPresent(launcherApps, "mDelegates", new java.util.ArrayList<Object>());
                     setFieldIfPresent(launcherApps, "mService", service);
+                    System.out.println("[Muplar/ART] LauncherApps allocated without constructor");
                 }
             }
             return launcherApps;
@@ -1303,6 +1358,31 @@ public final class MuplarContext extends ContextWrapper {
                                          java.lang.reflect.Method method,
                                          Object[] args) {
                         String name = method.getName();
+                        if ("getUserProfiles".equals(name)) {
+                            java.util.ArrayList<UserHandle> profiles =
+                                new java.util.ArrayList<UserHandle>();
+                            profiles.add(((MuplarContext)context).getUser());
+                            return profiles;
+                        }
+                        if ("getProfiles".equals(name)) {
+                            java.util.ArrayList<Object> profiles =
+                                new java.util.ArrayList<Object>();
+                            Object info = buildUserInfo();
+                            if (info != null) {
+                                profiles.add(info);
+                            }
+                            return profiles;
+                        }
+                        if ("getProfileIds".equals(name) ||
+                            "getProfileIdsWithDisabled".equals(name)) {
+                            return new int[] { 0 };
+                        }
+                        if ("getSerialNumberForUser".equals(name)) {
+                            return Long.valueOf(0L);
+                        }
+                        if ("getUserSerialNumber".equals(name)) {
+                            return Integer.valueOf(0);
+                        }
                         if ("getProfileType".equals(name)) {
                             return "android.os.usertype.full.SYSTEM";
                         }
@@ -1331,6 +1411,39 @@ public final class MuplarContext extends ContextWrapper {
         } catch (Throwable ignored) {
         }
         return null;
+    }
+
+    private static Object buildUserInfo() {
+        try {
+            Class<?> type = Class.forName("android.content.pm.UserInfo");
+            Object info = null;
+            try {
+                java.lang.reflect.Constructor<?> ctor =
+                    type.getConstructor(Integer.TYPE, String.class, Integer.TYPE);
+                info = ctor.newInstance(Integer.valueOf(0), "Owner",
+                    Integer.valueOf(0));
+            } catch (Throwable ignored) {
+                try {
+                    java.lang.reflect.Constructor<?> ctor =
+                        type.getDeclaredConstructor();
+                    ctor.setAccessible(true);
+                    info = ctor.newInstance();
+                } catch (Throwable ignored2) {
+                    info = allocateWithoutConstructor(type);
+                }
+            }
+            if (info != null) {
+                setFieldIfPresent(info, "id", Integer.valueOf(0));
+                setFieldIfPresent(info, "name", "Owner");
+                setFieldIfPresent(info, "userType",
+                    "android.os.usertype.full.SYSTEM");
+                setFieldIfPresent(info, "profileGroupId", Integer.valueOf(0));
+                setFieldIfPresent(info, "serialNumber", Integer.valueOf(0));
+            }
+            return info;
+        } catch (Throwable ignored) {
+            return null;
+        }
     }
 
     private static void setFieldIfPresent(Object target, String name, Object value) {

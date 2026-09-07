@@ -24,8 +24,13 @@ import java.util.concurrent.Executor;
 public final class MuplarServices {
     private static final Map<String, IBinder> services = new HashMap<>();
     private static ClassLoader servicesClassLoader;
+    private static volatile int defaultIconResource;
 
     private MuplarServices() {
+    }
+
+    public static void setDefaultIconResource(int resourceId) {
+        defaultIconResource = resourceId;
     }
 
     public static void install() {
@@ -603,11 +608,17 @@ public final class MuplarServices {
                     || "getAllPackageInstallerSessions".equals(name)) {
                     return createParceledListSlice(Collections.emptyList());
                 }
+                if ("getShortcuts".equals(name)) {
+                    return createParceledListSlice(Collections.emptyList());
+                }
                 if ("getUserProfiles".equals(name)) {
                     List<Object> profiles = new ArrayList<>();
                     Object user = buildUserHandle(0);
                     if (user != null) profiles.add(user);
                     return profiles;
+                }
+                if ("getLauncherUserInfo".equals(name)) {
+                    return buildLauncherUserInfo();
                 }
                 if ("getLauncherActivities".equals(name)) {
                     String packageFilter = args != null && args.length > 1
@@ -828,6 +839,9 @@ public final class MuplarServices {
         setFieldIfPresent(info, "uid", Integer.valueOf(10000));
         setFieldIfPresent(info, "targetSdkVersion", Integer.valueOf(35));
         setFieldIfPresent(info, "flags", Integer.valueOf(0));
+        if (defaultIconResource != 0) {
+            setFieldIfPresent(info, "icon", Integer.valueOf(defaultIconResource));
+        }
         if (pkg.label != null && !pkg.label.isEmpty())
             setFieldIfPresent(info, "nonLocalizedLabel", pkg.label);
         return info;
@@ -847,6 +861,10 @@ public final class MuplarServices {
         setFieldIfPresent(activityInfo, "applicationInfo", appInfo);
         setFieldIfPresent(activityInfo, "enabled", Boolean.TRUE);
         setFieldIfPresent(activityInfo, "exported", Boolean.TRUE);
+        if (defaultIconResource != 0) {
+            setFieldIfPresent(activityInfo, "icon",
+                Integer.valueOf(defaultIconResource));
+        }
         if (pkg.label != null && !pkg.label.isEmpty())
             setFieldIfPresent(activityInfo, "nonLocalizedLabel", pkg.label);
 
@@ -866,6 +884,44 @@ public final class MuplarServices {
             Class.forName("android.os.UserHandle"), Boolean.TYPE);
         return ctor.newInstance(activityInfo, incremental, user,
             Boolean.FALSE);
+    }
+
+    private static Object buildLauncherUserInfo() {
+        try {
+            Class<?> type = Class.forName("android.content.pm.LauncherUserInfo");
+            Object info = null;
+            try {
+                Constructor<?> ctor = type.getConstructor(String.class,
+                    Long.TYPE);
+                info = ctor.newInstance("android.os.usertype.full.SYSTEM",
+                    Long.valueOf(0L));
+            } catch (Throwable ignored) {
+                try {
+                    Constructor<?> ctor = type.getDeclaredConstructor(
+                        String.class, Long.TYPE);
+                    ctor.setAccessible(true);
+                    info = ctor.newInstance("android.os.usertype.full.SYSTEM",
+                        Long.valueOf(0L));
+                } catch (Throwable ignored2) {
+                    info = allocateWithoutConstructor(type);
+                }
+            }
+            if (info != null) {
+                setFieldIfPresent(info, "mUserType",
+                    "android.os.usertype.full.SYSTEM");
+                setFieldIfPresent(info, "userType",
+                    "android.os.usertype.full.SYSTEM");
+                setFieldIfPresent(info, "mUserSerialNumber",
+                    Long.valueOf(0L));
+                setFieldIfPresent(info, "userSerialNumber",
+                    Long.valueOf(0L));
+            }
+            return info;
+        } catch (Throwable error) {
+            System.err.println("[Muplar/ART] buildLauncherUserInfo failed: "
+                + error.getClass().getName() + ": " + error.getMessage());
+            return null;
+        }
     }
 
     private static Object createDisplayInfo() throws Exception {
