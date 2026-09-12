@@ -33,7 +33,7 @@ public final class ArtApkMain {
         try {
             prepareMainLooper();
             FrameworkDeviceController.start();
-            installActivityThreadForFramework();
+            installActivityThreadForFramework(packageName);
             ClassLoader loader = createApkClassLoader(apkPath, packageName);
             Thread.currentThread().setContextClassLoader(loader);
             System.out.println("[Muplar/ART] apk class loader ready");
@@ -240,7 +240,7 @@ public final class ArtApkMain {
         }
     }
 
-    private static void installActivityThreadForFramework() {
+    private static void installActivityThreadForFramework(String packageName) {
         try {
             Class<?> activityThreadClass =
                 Class.forName("android.app.ActivityThread");
@@ -255,6 +255,33 @@ public final class ArtApkMain {
             setField(thread, "mCoreSettings",
                 Class.forName("android.os.Bundle").getDeclaredConstructor().newInstance());
             installConfigurationController(thread);
+            String procName = (packageName != null && !packageName.isEmpty())
+                ? packageName : "com.muplar.runtime";
+            try {
+                Class<?> bindDataClass = Class.forName("android.app.ActivityThread$AppBindData");
+                Object bindData = allocateWithoutConstructor(bindDataClass);
+                setField(bindData, "processName", procName);
+                Class<?> appInfoClass = Class.forName("android.content.pm.ApplicationInfo");
+                Object appInfo = appInfoClass.getDeclaredConstructor().newInstance();
+                setField(appInfo, "packageName", procName);
+                setField(appInfo, "processName", procName);
+                setField(bindData, "appInfo", appInfo);
+                setField(thread, "mBoundApplication", bindData);
+            } catch (Throwable bindErr) {
+                System.err.println("[Muplar/ART] AppBindData install skipped: "
+                    + bindErr.getClass().getName() + ": "
+                    + bindErr.getMessage());
+            }
+            try {
+                Class<?> procClass = Class.forName("android.os.Process");
+                setStaticField(procClass, "sProcessName", procName);
+            } catch (Throwable ignored) {}
+            try {
+                Class<?> procClass = Class.forName("android.os.Process");
+                java.lang.reflect.Method setProc = procClass.getDeclaredMethod("setProcessName", String.class);
+                setProc.setAccessible(true);
+                setProc.invoke(null, procName);
+            } catch (Throwable ignored) {}
             try {
                 Class<?> idsClass = Class.forName("android.app.IdsController");
                 Object ids = idsClass
@@ -266,7 +293,7 @@ public final class ArtApkMain {
                     + idsError.getClass().getName() + ": "
                     + idsError.getMessage());
             }
-            System.out.println("[Muplar/ART] ActivityThread installed");
+            System.out.println("[Muplar/ART] ActivityThread installed for process " + procName);
         } catch (Throwable t) {
             System.err.println("[Muplar/ART] ActivityThread install failed: "
                 + t.getClass().getName() + ": " + t.getMessage());
@@ -585,6 +612,7 @@ public final class ArtApkMain {
                 Class.forName("android.content.pm.ApplicationInfo");
             Object appInfo = applicationInfoClass.getDeclaredConstructor().newInstance();
             setField(appInfo, "packageName", packageName);
+            setField(appInfo, "processName", packageName);
             setField(appInfo, "sourceDir", apkPath);
             setField(appInfo, "publicSourceDir", apkPath);
             setField(appInfo, "dataDir", "/data/user/0/" + packageName);
@@ -816,6 +844,40 @@ public final class ArtApkMain {
                     list.add(application);
                 }
             } catch (Throwable ignored) {
+            }
+
+            try {
+                Object bindData = getField(thread, "mBoundApplication");
+                if (bindData == null) {
+                    Class<?> bindDataClass = Class.forName("android.app.ActivityThread$AppBindData");
+                    bindData = allocateWithoutConstructor(bindDataClass);
+                    setField(thread, "mBoundApplication", bindData);
+                }
+                String procName = null;
+                Object appInfo = null;
+                if (application instanceof android.content.Context) {
+                    android.content.Context ctx = (android.content.Context) application;
+                    procName = ctx.getPackageName();
+                    appInfo = ctx.getApplicationInfo();
+                }
+                if (procName == null && application != null) {
+                    procName = application.getClass().getPackage().getName();
+                }
+                if (procName != null) {
+                    setField(bindData, "processName", procName);
+                    try {
+                        Class<?> procClass = Class.forName("android.os.Process");
+                        setStaticField(procClass, "sProcessName", procName);
+                    } catch (Throwable ignored) {}
+                }
+                if (appInfo != null) {
+                    setField(appInfo, "processName", procName);
+                    setField(bindData, "appInfo", appInfo);
+                }
+            } catch (Throwable bindErr) {
+                System.err.println("[Muplar/ART] AppBindData update skipped: "
+                    + bindErr.getClass().getName() + ": "
+                    + bindErr.getMessage());
             }
             System.out.println("[Muplar/ART] ActivityThread application attached");
         } catch (Throwable t) {

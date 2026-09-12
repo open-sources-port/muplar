@@ -15,6 +15,7 @@ final class MuplarFramePresenter {
 
     private static boolean nativeAvailable = true;
     private static long lastFrameUptime;
+    private static volatile boolean isPresenting;
     private static volatile WeakReference<View> currentRoot;
     private static boolean loopStarted;
     private static volatile int burstFrames;
@@ -115,11 +116,17 @@ final class MuplarFramePresenter {
             }
             vto.addOnDrawListener(new android.view.ViewTreeObserver.OnDrawListener() {
                 @Override public void onDraw() {
+                    if (isPresenting) {
+                        return;
+                    }
                     requestFrame(root, handler);
                 }
             });
             vto.addOnGlobalLayoutListener(new android.view.ViewTreeObserver.OnGlobalLayoutListener() {
                 @Override public void onGlobalLayout() {
+                    if (isPresenting) {
+                        return;
+                    }
                     requestFrame(root, handler);
                 }
             });
@@ -128,7 +135,7 @@ final class MuplarFramePresenter {
     }
 
     private static void requestFrame(final View root, final android.os.Handler handler) {
-        if (root == null || frameRequested) {
+        if (root == null || frameRequested || isPresenting) {
             return;
         }
         frameRequested = true;
@@ -148,6 +155,7 @@ final class MuplarFramePresenter {
         burstFrames = 0;
         frameRequested = false;
         hasPresentedAny = false;
+        isPresenting = false;
         if (reusableBitmap != null && !reusableBitmap.isRecycled()) {
             try {
                 reusableBitmap.recycle();
@@ -197,42 +205,45 @@ final class MuplarFramePresenter {
 
     static void present(View root, boolean force) {
         String path = System.getenv("MUPLAR_ANDROID_SOFTWARE_FRAME_PATH");
-        System.out.println("[Muplar/Window] present entry root=" + root + " force=" + force + " nativeAvail=" + nativeAvailable + " path=" + path);
         if (root == null || !nativeAvailable) {
             return;
         }
         if (path == null || path.isEmpty()) {
             return;
         }
+        if (isPresenting) {
+            return;
+        }
         long now = android.os.SystemClock.uptimeMillis();
         if (!force && now - lastFrameUptime < 16) {
-            System.out.println("[Muplar/Window] present skipped due to rate limit dt=" + (now - lastFrameUptime));
             return;
         }
         lastFrameUptime = now;
-        if (root.getVisibility() != View.VISIBLE) {
-            try {
-                root.setVisibility(View.VISIBLE);
-            } catch (Throwable ignored) {
-            }
-        }
-        int width = root.getWidth();
-        int height = root.getHeight();
-        if (width <= 0 || height <= 0) {
-            width = 1080;
-            height = 1920;
-            try {
-                int wSpec = View.MeasureSpec.makeMeasureSpec(width, View.MeasureSpec.EXACTLY);
-                int hSpec = View.MeasureSpec.makeMeasureSpec(height, View.MeasureSpec.EXACTLY);
-                root.measure(wSpec, hSpec);
-                root.layout(0, 0, width, height);
-            } catch (Throwable ignored) {
-            }
-        }
-        width = Math.max(1, root.getWidth());
-        height = Math.max(1, root.getHeight());
-        System.out.println("[Muplar/Window] present starting w=" + width + " h=" + height);
+        isPresenting = true;
         try {
+            if (root.getVisibility() != View.VISIBLE) {
+                try {
+                    root.setVisibility(View.VISIBLE);
+                } catch (Throwable ignored) {
+                }
+            }
+            int width = root.getWidth();
+            int height = root.getHeight();
+            if (width <= 0 || height <= 0) {
+                width = 1080;
+                height = 1920;
+            }
+            if (root.isLayoutRequested() || root.getWidth() <= 0 || root.getHeight() <= 0) {
+                try {
+                    int wSpec = View.MeasureSpec.makeMeasureSpec(width, View.MeasureSpec.EXACTLY);
+                    int hSpec = View.MeasureSpec.makeMeasureSpec(height, View.MeasureSpec.EXACTLY);
+                    root.measure(wSpec, hSpec);
+                    root.layout(0, 0, width, height);
+                } catch (Throwable ignored) {
+                }
+            }
+            width = Math.max(1, root.getWidth());
+            height = Math.max(1, root.getHeight());
             if (reusableBitmap == null || reusableBitmap.isRecycled()
                 || reusableBitmap.getWidth() != width
                 || reusableBitmap.getHeight() != height) {
@@ -250,9 +261,7 @@ final class MuplarFramePresenter {
                 debugDumpViews(root, 0);
             }
             fixBubbleTextViews(root);
-            System.out.println("[Muplar/Window] present calling root.draw");
             root.draw(reusableCanvas);
-            System.out.println("[Muplar/Window] present calling writeBitmapNative");
             nativeAvailable = writeBitmapNative(reusableBitmap, path);
             if (!nativeAvailable) {
                 System.err.println("[Muplar/Window] software frame bridge disabled");
@@ -264,6 +273,8 @@ final class MuplarFramePresenter {
         } catch (Throwable error) {
             System.err.println("[Muplar/Window] software frame failed: " +
                 error.getClass().getName() + ": " + error.getMessage());
+        } finally {
+            isPresenting = false;
         }
     }
 
@@ -321,7 +332,20 @@ final class MuplarFramePresenter {
                 }
                 if (v instanceof TextView && icon instanceof android.graphics.drawable.Drawable) {
                     TextView tv = (TextView) v;
-                    tv.setCompoundDrawables(null, (android.graphics.drawable.Drawable) icon, null, null);
+                    android.graphics.drawable.Drawable[] cds = tv.getCompoundDrawables();
+                    if (cds == null || cds[1] == null) {
+                        try {
+                            java.lang.reflect.Field fDisable = v.getClass().getDeclaredField("mDisableRelayout");
+                            fDisable.setAccessible(true);
+                            fDisable.setBoolean(v, true);
+                            tv.setCompoundDrawables(null, (android.graphics.drawable.Drawable) icon, null, null);
+                            fDisable.setBoolean(v, false);
+                        } catch (Throwable t) {
+                            tv.setCompoundDrawables(null, (android.graphics.drawable.Drawable) icon, null, null);
+                        }
+                    } else {
+                        cds[1].setBounds(0, 0, iconSize, iconSize);
+                    }
                 }
             } catch (Throwable ignored) {
             }

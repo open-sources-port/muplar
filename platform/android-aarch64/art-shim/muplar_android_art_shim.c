@@ -12,7 +12,59 @@
 #include <unistd.h>
 #include <sys/socket.h>
 #include <sys/un.h>
+#include <signal.h>
+#include <ucontext.h>
 #include "muplar_font.h"
+
+static void muplar_crash_handler(int sig, siginfo_t *info, void *ucontext) {
+    ucontext_t *uc = (ucontext_t *)ucontext;
+    uintptr_t pc = 0, lr = 0, fp = 0;
+#if defined(__aarch64__)
+    if (uc) {
+        pc = uc->uc_mcontext.pc;
+        lr = uc->uc_mcontext.regs[30];
+        fp = uc->uc_mcontext.regs[29];
+    }
+#endif
+    fprintf(stderr, "\n=======================================================\n");
+    fprintf(stderr, "[MUPLAR CRASH HANDLER] Signal %d (%s) at addr=%p, pc=%p, lr=%p, fp=%p\n",
+            sig, sig == SIGSEGV ? "SIGSEGV" : sig == SIGBUS ? "SIGBUS" : "SIGABRT",
+            info ? info->si_addr : NULL, (void*)pc, (void*)lr, (void*)fp);
+    Dl_info dlinfo;
+    if (dladdr((void*)pc, &dlinfo)) {
+        fprintf(stderr, "  pc in %s (%s+%p)\n", dlinfo.dli_fname, dlinfo.dli_sname,
+                (void*)(pc - (uintptr_t)dlinfo.dli_saddr));
+    }
+    if (dladdr((void*)lr, &dlinfo)) {
+        fprintf(stderr, "  lr in %s (%s+%p)\n", dlinfo.dli_fname, dlinfo.dli_sname,
+                (void*)(lr - (uintptr_t)dlinfo.dli_saddr));
+    }
+    for (int i = 0; i < 30 && fp > 0x1000; i++) {
+        uintptr_t ret_addr = *(uintptr_t *)(fp + 8);
+        uintptr_t next_fp = *(uintptr_t *)fp;
+        if (dladdr((void*)ret_addr, &dlinfo)) {
+            fprintf(stderr, "  #%02d pc %p in %s (%s+%p)\n", i, (void*)ret_addr,
+                    dlinfo.dli_fname, dlinfo.dli_sname, (void*)(ret_addr - (uintptr_t)dlinfo.dli_saddr));
+        } else {
+            fprintf(stderr, "  #%02d pc %p (fp=%p)\n", i, (void*)ret_addr, (void*)fp);
+        }
+        if (next_fp <= fp || next_fp > fp + 0x100000) break;
+        fp = next_fp;
+    }
+    fprintf(stderr, "=======================================================\n");
+    fflush(stderr);
+    _exit(128 + sig);
+}
+
+static void muplar_install_crash_handler(void) {
+    struct sigaction sa;
+    memset(&sa, 0, sizeof(sa));
+    sa.sa_sigaction = muplar_crash_handler;
+    sa.sa_flags = SA_SIGINFO | SA_NODEFER | SA_RESETHAND;
+    sigaction(SIGSEGV, &sa, NULL);
+    sigaction(SIGBUS, &sa, NULL);
+    sigaction(SIGABRT, &sa, NULL);
+}
 
 #define PROP_VALUE_MAX 92
 
@@ -123,6 +175,11 @@ struct muplar_paint_state {
     jlong mask_filter;
     jlong shader;
     jfloat text_size;
+    jfloat stroke_width;
+    jfloat stroke_miter;
+    jint style;
+    jint stroke_cap;
+    jint stroke_join;
 };
 
 static struct muplar_bitmap_state muplar_bitmaps[2048];
@@ -523,6 +580,12 @@ static struct muplar_paint_state *muplar_alloc_paint(jint color)
         muplar_paints[i].color_filter = 0;
         muplar_paints[i].mask_filter = 0;
         muplar_paints[i].shader = 0;
+        muplar_paints[i].text_size = 0.0f;
+        muplar_paints[i].stroke_width = 0.0f;
+        muplar_paints[i].stroke_miter = 4.0f;
+        muplar_paints[i].style = 0;
+        muplar_paints[i].stroke_cap = 0;
+        muplar_paints[i].stroke_join = 0;
         return &muplar_paints[i];
     }
     return NULL;
@@ -2712,6 +2775,12 @@ jlong Java_android_graphics_Paint_nInitWithPaint(JNIEnv *env,
             dst->color_filter = src->color_filter;
             dst->mask_filter = src->mask_filter;
             dst->shader = src->shader;
+            dst->text_size = src->text_size;
+            dst->stroke_width = src->stroke_width;
+            dst->stroke_miter = src->stroke_miter;
+            dst->style = src->style;
+            dst->stroke_cap = src->stroke_cap;
+            dst->stroke_join = src->stroke_join;
         }
         return dst->token;
     }
@@ -2728,6 +2797,11 @@ void Java_android_graphics_Paint_nSet(jlong dst, jlong src)
         dst_paint->mask_filter = src_paint->mask_filter;
         dst_paint->shader = src_paint->shader;
         dst_paint->text_size = src_paint->text_size;
+        dst_paint->stroke_width = src_paint->stroke_width;
+        dst_paint->stroke_miter = src_paint->stroke_miter;
+        dst_paint->style = src_paint->style;
+        dst_paint->stroke_cap = src_paint->stroke_cap;
+        dst_paint->stroke_join = src_paint->stroke_join;
     }
 }
 
@@ -2783,6 +2857,95 @@ void Java_android_graphics_Paint_nSetColor(jlong paint, jint color)
     struct muplar_paint_state *state = muplar_find_paint(paint);
     if (state)
         state->color = color;
+}
+
+void Java_android_graphics_Paint_nSetStrokeWidth(jlong paint, jfloat width)
+{
+    struct muplar_paint_state *p = muplar_find_paint(paint);
+    if (p)
+        p->stroke_width = width;
+}
+
+jfloat Java_android_graphics_Paint_nGetStrokeWidth(jlong paint)
+{
+    struct muplar_paint_state *p = muplar_find_paint(paint);
+    return p ? p->stroke_width : 0.0f;
+}
+
+void Java_android_graphics_Paint_nSetStrokeMiter(jlong paint, jfloat miter)
+{
+    struct muplar_paint_state *p = muplar_find_paint(paint);
+    if (p)
+        p->stroke_miter = miter;
+}
+
+jfloat Java_android_graphics_Paint_nGetStrokeMiter(jlong paint)
+{
+    struct muplar_paint_state *p = muplar_find_paint(paint);
+    return p ? p->stroke_miter : 4.0f;
+}
+
+void Java_android_graphics_Paint_nSetStrokeCap(jlong paint, jint cap)
+{
+    struct muplar_paint_state *p = muplar_find_paint(paint);
+    if (p)
+        p->stroke_cap = cap;
+}
+
+jint Java_android_graphics_Paint_nGetStrokeCap(jlong paint)
+{
+    struct muplar_paint_state *p = muplar_find_paint(paint);
+    return p ? p->stroke_cap : 0;
+}
+
+void Java_android_graphics_Paint_nSetStrokeJoin(jlong paint, jint join)
+{
+    struct muplar_paint_state *p = muplar_find_paint(paint);
+    if (p)
+        p->stroke_join = join;
+}
+
+jint Java_android_graphics_Paint_nGetStrokeJoin(jlong paint)
+{
+    struct muplar_paint_state *p = muplar_find_paint(paint);
+    return p ? p->stroke_join : 0;
+}
+
+void Java_android_graphics_Paint_nSetStyle(jlong paint, jint style)
+{
+    struct muplar_paint_state *p = muplar_find_paint(paint);
+    if (p)
+        p->style = style;
+}
+
+jint Java_android_graphics_Paint_nGetStyle(jlong paint)
+{
+    struct muplar_paint_state *p = muplar_find_paint(paint);
+    return p ? p->style : 0;
+}
+
+jint Java_android_graphics_Paint_nGetAmbientShadowColor(jlong paint)
+{
+    (void) paint;
+    return 0;
+}
+
+void Java_android_graphics_Paint_nSetAmbientShadowColor(jlong paint, jint color)
+{
+    (void) paint;
+    (void) color;
+}
+
+jint Java_android_graphics_Paint_nGetSpotShadowColor(jlong paint)
+{
+    (void) paint;
+    return 0;
+}
+
+void Java_android_graphics_Paint_nSetSpotShadowColor(jlong paint, jint color)
+{
+    (void) paint;
+    (void) color;
 }
 
 void Java_android_graphics_Paint_nSetMyanmarEncoding(jlong paint, jint encoding)
@@ -8065,20 +8228,64 @@ jobject Java_android_os_ServiceManagerProxy_getNativeServiceManager(
                                                                         clazz);
 }
 
+jint Java_android_os_Parcel_nativeWriteInt(JNIEnv *env, jclass clazz, jlong native_ptr, jint value);
+jint Java_android_os_Parcel_nativeReadInt(JNIEnv *env, jclass clazz, jlong native_ptr);
+jstring Java_android_os_Parcel_nativeReadString16(JNIEnv *env, jclass clazz, jlong native_ptr);
+
+struct muplar_parcel {
+    uint8_t *data;
+    size_t size;
+    size_t pos;
+    size_t capacity;
+
+    jobject *binders;
+    size_t binder_count;
+    size_t binder_cap;
+};
+
+static int muplar_parcel_grow(struct muplar_parcel *p, size_t needed)
+{
+    if (needed <= p->capacity)
+        return 1;
+    size_t new_cap = p->capacity == 0 ? 128 : p->capacity * 2;
+    while (new_cap < needed)
+        new_cap *= 2;
+    uint8_t *new_data = (uint8_t *) realloc(p->data, new_cap);
+    if (!new_data)
+        return 0;
+    memset(new_data + p->capacity, 0, new_cap - p->capacity);
+    p->data = new_data;
+    p->capacity = new_cap;
+    return 1;
+}
+
 jlong Java_android_os_Parcel_nativeCreate(JNIEnv *env, jclass clazz)
 {
     (void) env;
     (void) clazz;
-    return (jlong) ++muplar_next_parcel_token;
+    struct muplar_parcel *p = (struct muplar_parcel *) calloc(1, sizeof(struct muplar_parcel));
+    return (jlong)(uintptr_t) p;
 }
 
 void Java_android_os_Parcel_nativeDestroy(JNIEnv *env,
                                           jclass clazz,
                                           jlong native_ptr)
 {
-    (void) env;
     (void) clazz;
-    (void) native_ptr;
+    struct muplar_parcel *p = (struct muplar_parcel *)(uintptr_t) native_ptr;
+    if (!p)
+        return;
+    if (p->binders) {
+        for (size_t i = 0; i < p->binder_count; ++i) {
+            if (p->binders[i]) {
+                (*env)->DeleteGlobalRef(env, p->binders[i]);
+            }
+        }
+        free(p->binders);
+    }
+    if (p->data)
+        free(p->data);
+    free(p);
 }
 
 jint Java_android_os_Parcel_nativeDataAvail(JNIEnv *env,
@@ -8087,8 +8294,10 @@ jint Java_android_os_Parcel_nativeDataAvail(JNIEnv *env,
 {
     (void) env;
     (void) clazz;
-    (void) native_ptr;
-    return 0;
+    struct muplar_parcel *p = (struct muplar_parcel *)(uintptr_t) native_ptr;
+    if (!p || p->pos >= p->size)
+        return 0;
+    return (jint)(p->size - p->pos);
 }
 
 jint Java_android_os_Parcel_nativeDataCapacity(JNIEnv *env,
@@ -8097,8 +8306,8 @@ jint Java_android_os_Parcel_nativeDataCapacity(JNIEnv *env,
 {
     (void) env;
     (void) clazz;
-    (void) native_ptr;
-    return 0;
+    struct muplar_parcel *p = (struct muplar_parcel *)(uintptr_t) native_ptr;
+    return p ? (jint) p->capacity : 0;
 }
 
 jint Java_android_os_Parcel_nativeDataPosition(JNIEnv *env,
@@ -8107,8 +8316,8 @@ jint Java_android_os_Parcel_nativeDataPosition(JNIEnv *env,
 {
     (void) env;
     (void) clazz;
-    (void) native_ptr;
-    return 0;
+    struct muplar_parcel *p = (struct muplar_parcel *)(uintptr_t) native_ptr;
+    return p ? (jint) p->pos : 0;
 }
 
 jint Java_android_os_Parcel_nativeDataSize(JNIEnv *env,
@@ -8117,8 +8326,8 @@ jint Java_android_os_Parcel_nativeDataSize(JNIEnv *env,
 {
     (void) env;
     (void) clazz;
-    (void) native_ptr;
-    return 0;
+    struct muplar_parcel *p = (struct muplar_parcel *)(uintptr_t) native_ptr;
+    return p ? (jint) p->size : 0;
 }
 
 void Java_android_os_Parcel_nativeSetDataCapacity(JNIEnv *env,
@@ -8128,8 +8337,10 @@ void Java_android_os_Parcel_nativeSetDataCapacity(JNIEnv *env,
 {
     (void) env;
     (void) clazz;
-    (void) native_ptr;
-    (void) size;
+    struct muplar_parcel *p = (struct muplar_parcel *)(uintptr_t) native_ptr;
+    if (!p || size <= 0)
+        return;
+    muplar_parcel_grow(p, (size_t) size);
 }
 
 void Java_android_os_Parcel_nativeSetDataPosition(JNIEnv *env,
@@ -8139,8 +8350,10 @@ void Java_android_os_Parcel_nativeSetDataPosition(JNIEnv *env,
 {
     (void) env;
     (void) clazz;
-    (void) native_ptr;
-    (void) pos;
+    struct muplar_parcel *p = (struct muplar_parcel *)(uintptr_t) native_ptr;
+    if (!p || pos < 0)
+        return;
+    p->pos = (size_t) pos;
 }
 
 void Java_android_os_Parcel_nativeSetDataSize(JNIEnv *env,
@@ -8150,17 +8363,43 @@ void Java_android_os_Parcel_nativeSetDataSize(JNIEnv *env,
 {
     (void) env;
     (void) clazz;
-    (void) native_ptr;
-    (void) size;
+    struct muplar_parcel *p = (struct muplar_parcel *)(uintptr_t) native_ptr;
+    if (!p || size < 0)
+        return;
+    if ((size_t) size > p->capacity) {
+        muplar_parcel_grow(p, (size_t) size);
+    }
+    p->size = (size_t) size;
+    if (p->pos > p->size)
+        p->pos = p->size;
 }
 
 void Java_android_os_Parcel_nativeFreeBuffer(JNIEnv *env,
                                              jclass clazz,
                                              jlong native_ptr)
 {
-    (void) env;
     (void) clazz;
-    (void) native_ptr;
+    struct muplar_parcel *p = (struct muplar_parcel *)(uintptr_t) native_ptr;
+    if (!p)
+        return;
+    if (p->binders) {
+        for (size_t i = 0; i < p->binder_count; ++i) {
+            if (p->binders[i]) {
+                (*env)->DeleteGlobalRef(env, p->binders[i]);
+            }
+        }
+        free(p->binders);
+        p->binders = NULL;
+        p->binder_count = 0;
+        p->binder_cap = 0;
+    }
+    if (p->data) {
+        free(p->data);
+        p->data = NULL;
+    }
+    p->size = 0;
+    p->pos = 0;
+    p->capacity = 0;
 }
 
 void Java_android_os_Parcel_nativeEnforceInterface(JNIEnv *env,
@@ -8168,10 +8407,12 @@ void Java_android_os_Parcel_nativeEnforceInterface(JNIEnv *env,
                                                    jlong native_ptr,
                                                    jstring interface)
 {
-    (void) env;
-    (void) clazz;
-    (void) native_ptr;
     (void) interface;
+    Java_android_os_Parcel_nativeReadInt(env, clazz, native_ptr);
+    jstring str = Java_android_os_Parcel_nativeReadString16(env, clazz, native_ptr);
+    if (str) {
+        (*env)->DeleteLocalRef(env, str);
+    }
 }
 
 jboolean Java_android_os_Parcel_nativeHasBinders(JNIEnv *env,
@@ -8180,8 +8421,8 @@ jboolean Java_android_os_Parcel_nativeHasBinders(JNIEnv *env,
 {
     (void) env;
     (void) clazz;
-    (void) native_ptr;
-    return JNI_FALSE;
+    struct muplar_parcel *p = (struct muplar_parcel *)(uintptr_t) native_ptr;
+    return (p && p->binder_count > 0) ? JNI_TRUE : JNI_FALSE;
 }
 
 jboolean Java_android_os_Parcel_nativeHasBindersInRange(JNIEnv *env,
@@ -8192,10 +8433,10 @@ jboolean Java_android_os_Parcel_nativeHasBindersInRange(JNIEnv *env,
 {
     (void) env;
     (void) clazz;
-    (void) native_ptr;
     (void) offset;
     (void) length;
-    return JNI_FALSE;
+    struct muplar_parcel *p = (struct muplar_parcel *)(uintptr_t) native_ptr;
+    return (p && p->binder_count > 0) ? JNI_TRUE : JNI_FALSE;
 }
 
 jboolean Java_android_os_Parcel_nativeHasFileDescriptors(JNIEnv *env,
@@ -8258,10 +8499,27 @@ void Java_android_os_Parcel_nativeWriteStrongBinder(JNIEnv *env,
                                                     jlong native_ptr,
                                                     jobject binder)
 {
-    (void) env;
-    (void) clazz;
-    (void) native_ptr;
-    (void) binder;
+    struct muplar_parcel *p = (struct muplar_parcel *)(uintptr_t) native_ptr;
+    if (!p)
+        return;
+    if (!binder) {
+        Java_android_os_Parcel_nativeWriteInt(env, clazz, native_ptr, -1);
+        return;
+    }
+    if (p->binder_count >= p->binder_cap) {
+        size_t new_cap = p->binder_cap == 0 ? 4 : p->binder_cap * 2;
+        jobject *new_b = (jobject *) realloc(p->binders, new_cap * sizeof(jobject));
+        if (!new_b) {
+            Java_android_os_Parcel_nativeWriteInt(env, clazz, native_ptr, -1);
+            return;
+        }
+        p->binders = new_b;
+        p->binder_cap = new_cap;
+    }
+    jobject gref = (*env)->NewGlobalRef(env, binder);
+    size_t idx = p->binder_count++;
+    p->binders[idx] = gref;
+    Java_android_os_Parcel_nativeWriteInt(env, clazz, native_ptr, (jint) idx);
 }
 
 jobject Java_android_os_Parcel_nativeReadStrongBinder(JNIEnv *env,
@@ -8269,9 +8527,14 @@ jobject Java_android_os_Parcel_nativeReadStrongBinder(JNIEnv *env,
                                                       jlong native_ptr)
 {
     (void) clazz;
-    (void) native_ptr;
-    return Java_com_android_internal_os_BinderInternal_getContextObject(env,
-                                                                        clazz);
+    struct muplar_parcel *p = (struct muplar_parcel *)(uintptr_t) native_ptr;
+    if (!p)
+        return NULL;
+    jint idx = Java_android_os_Parcel_nativeReadInt(env, clazz, native_ptr);
+    if (idx < 0 || (size_t) idx >= p->binder_count || !p->binders[idx]) {
+        return NULL;
+    }
+    return (*env)->NewLocalRef(env, p->binders[idx]);
 }
 
 jint Java_android_os_Parcel_nativeWriteInt(JNIEnv *env,
@@ -8281,8 +8544,18 @@ jint Java_android_os_Parcel_nativeWriteInt(JNIEnv *env,
 {
     (void) env;
     (void) clazz;
-    (void) native_ptr;
-    (void) value;
+    struct muplar_parcel *p = (struct muplar_parcel *)(uintptr_t) native_ptr;
+    if (!p)
+        return -1;
+    size_t aligned_pos = (p->pos + 3) & ~((size_t) 3);
+    size_t end = aligned_pos + sizeof(jint);
+    if (!muplar_parcel_grow(p, end))
+        return -1;
+    int32_t val32 = (int32_t) value;
+    memcpy(p->data + aligned_pos, &val32, sizeof(int32_t));
+    p->pos = end;
+    if (p->pos > p->size)
+        p->size = p->pos;
     return 0;
 }
 
@@ -8293,8 +8566,18 @@ jint Java_android_os_Parcel_nativeWriteLong(JNIEnv *env,
 {
     (void) env;
     (void) clazz;
-    (void) native_ptr;
-    (void) value;
+    struct muplar_parcel *p = (struct muplar_parcel *)(uintptr_t) native_ptr;
+    if (!p)
+        return -1;
+    size_t aligned_pos = (p->pos + 3) & ~((size_t) 3);
+    size_t end = aligned_pos + sizeof(jlong);
+    if (!muplar_parcel_grow(p, end))
+        return -1;
+    int64_t val64 = (int64_t) value;
+    memcpy(p->data + aligned_pos, &val64, sizeof(int64_t));
+    p->pos = end;
+    if (p->pos > p->size)
+        p->size = p->pos;
     return 0;
 }
 
@@ -8303,11 +8586,12 @@ jint Java_android_os_Parcel_nativeWriteFloat(JNIEnv *env,
                                              jlong native_ptr,
                                              jfloat value)
 {
-    (void) env;
-    (void) clazz;
-    (void) native_ptr;
-    (void) value;
-    return 0;
+    union {
+        jfloat f;
+        jint i;
+    } u;
+    u.f = value;
+    return Java_android_os_Parcel_nativeWriteInt(env, clazz, native_ptr, u.i);
 }
 
 jint Java_android_os_Parcel_nativeWriteDouble(JNIEnv *env,
@@ -8315,11 +8599,12 @@ jint Java_android_os_Parcel_nativeWriteDouble(JNIEnv *env,
                                               jlong native_ptr,
                                               jdouble value)
 {
-    (void) env;
-    (void) clazz;
-    (void) native_ptr;
-    (void) value;
-    return 0;
+    union {
+        jdouble d;
+        jlong l;
+    } u;
+    u.d = value;
+    return Java_android_os_Parcel_nativeWriteLong(env, clazz, native_ptr, u.l);
 }
 
 void Java_android_os_Parcel_nativeWriteString8(JNIEnv *env,
@@ -8327,10 +8612,31 @@ void Java_android_os_Parcel_nativeWriteString8(JNIEnv *env,
                                                jlong native_ptr,
                                                jstring value)
 {
-    (void) env;
-    (void) clazz;
-    (void) native_ptr;
-    (void) value;
+    struct muplar_parcel *p = (struct muplar_parcel *)(uintptr_t) native_ptr;
+    if (!p)
+        return;
+    if (!value) {
+        Java_android_os_Parcel_nativeWriteInt(env, clazz, native_ptr, -1);
+        return;
+    }
+    const char *chars = (*env)->GetStringUTFChars(env, value, NULL);
+    if (!chars) {
+        Java_android_os_Parcel_nativeWriteInt(env, clazz, native_ptr, -1);
+        return;
+    }
+    jsize len = (*env)->GetStringUTFLength(env, value);
+    Java_android_os_Parcel_nativeWriteInt(env, clazz, native_ptr, (jint) len);
+    size_t byte_len = (size_t) len + 1; // null-terminated
+    size_t padded = (byte_len + 3) & ~((size_t) 3);
+    size_t end = p->pos + padded;
+    if (muplar_parcel_grow(p, end)) {
+        memcpy(p->data + p->pos, chars, len);
+        p->data[p->pos + len] = '\0';
+        p->pos = end;
+        if (p->pos > p->size)
+            p->size = p->pos;
+    }
+    (*env)->ReleaseStringUTFChars(env, value, chars);
 }
 
 void Java_android_os_Parcel_nativeWriteString16(JNIEnv *env,
@@ -8338,10 +8644,32 @@ void Java_android_os_Parcel_nativeWriteString16(JNIEnv *env,
                                                 jlong native_ptr,
                                                 jstring value)
 {
-    (void) env;
-    (void) clazz;
-    (void) native_ptr;
-    (void) value;
+    struct muplar_parcel *p = (struct muplar_parcel *)(uintptr_t) native_ptr;
+    if (!p)
+        return;
+    if (!value) {
+        Java_android_os_Parcel_nativeWriteInt(env, clazz, native_ptr, -1);
+        return;
+    }
+    jsize len = (*env)->GetStringLength(env, value);
+    const jchar *chars = (*env)->GetStringChars(env, value, NULL);
+    if (!chars) {
+        Java_android_os_Parcel_nativeWriteInt(env, clazz, native_ptr, -1);
+        return;
+    }
+    Java_android_os_Parcel_nativeWriteInt(env, clazz, native_ptr, (jint) len);
+    size_t byte_len = ((size_t) len + 1) * sizeof(jchar);
+    size_t padded = (byte_len + 3) & ~((size_t) 3);
+    size_t end = p->pos + padded;
+    if (muplar_parcel_grow(p, end)) {
+        memcpy(p->data + p->pos, chars, len * sizeof(jchar));
+        p->data[p->pos + len * sizeof(jchar)] = 0;
+        p->data[p->pos + len * sizeof(jchar) + 1] = 0;
+        p->pos = end;
+        if (p->pos > p->size)
+            p->size = p->pos;
+    }
+    (*env)->ReleaseStringChars(env, value, chars);
 }
 
 void Java_android_os_Parcel_nativeWriteInterfaceToken(JNIEnv *env,
@@ -8349,10 +8677,8 @@ void Java_android_os_Parcel_nativeWriteInterfaceToken(JNIEnv *env,
                                                       jlong native_ptr,
                                                       jstring value)
 {
-    (void) env;
-    (void) clazz;
-    (void) native_ptr;
-    (void) value;
+    Java_android_os_Parcel_nativeWriteInt(env, clazz, native_ptr, 0);
+    Java_android_os_Parcel_nativeWriteString16(env, clazz, native_ptr, value);
 }
 
 jint Java_android_os_Parcel_nativeReadInt(JNIEnv *env,
@@ -8361,8 +8687,16 @@ jint Java_android_os_Parcel_nativeReadInt(JNIEnv *env,
 {
     (void) env;
     (void) clazz;
-    (void) native_ptr;
-    return 0;
+    struct muplar_parcel *p = (struct muplar_parcel *)(uintptr_t) native_ptr;
+    if (!p)
+        return 0;
+    size_t aligned_pos = (p->pos + 3) & ~((size_t) 3);
+    if (aligned_pos + sizeof(jint) > p->size)
+        return 0;
+    int32_t val32 = 0;
+    memcpy(&val32, p->data + aligned_pos, sizeof(int32_t));
+    p->pos = aligned_pos + sizeof(jint);
+    return (jint) val32;
 }
 
 jlong Java_android_os_Parcel_nativeReadLong(JNIEnv *env,
@@ -8371,47 +8705,94 @@ jlong Java_android_os_Parcel_nativeReadLong(JNIEnv *env,
 {
     (void) env;
     (void) clazz;
-    (void) native_ptr;
-    return 0;
+    struct muplar_parcel *p = (struct muplar_parcel *)(uintptr_t) native_ptr;
+    if (!p)
+        return 0;
+    size_t aligned_pos = (p->pos + 3) & ~((size_t) 3);
+    if (aligned_pos + sizeof(jlong) > p->size)
+        return 0;
+    int64_t val64 = 0;
+    memcpy(&val64, p->data + aligned_pos, sizeof(int64_t));
+    p->pos = aligned_pos + sizeof(jlong);
+    return (jlong) val64;
 }
 
 jfloat Java_android_os_Parcel_nativeReadFloat(JNIEnv *env,
                                               jclass clazz,
                                               jlong native_ptr)
 {
-    (void) env;
-    (void) clazz;
-    (void) native_ptr;
-    return 0;
+    union {
+        jint i;
+        jfloat f;
+    } u;
+    u.i = Java_android_os_Parcel_nativeReadInt(env, clazz, native_ptr);
+    return u.f;
 }
 
 jdouble Java_android_os_Parcel_nativeReadDouble(JNIEnv *env,
                                                 jclass clazz,
                                                 jlong native_ptr)
 {
-    (void) env;
-    (void) clazz;
-    (void) native_ptr;
-    return 0;
+    union {
+        jlong l;
+        jdouble d;
+    } u;
+    u.l = Java_android_os_Parcel_nativeReadLong(env, clazz, native_ptr);
+    return u.d;
 }
 
 jstring Java_android_os_Parcel_nativeReadString8(JNIEnv *env,
                                                  jclass clazz,
                                                  jlong native_ptr)
 {
-    (void) clazz;
-    (void) native_ptr;
-    return (*env)->NewStringUTF(env, "");
+    struct muplar_parcel *p = (struct muplar_parcel *)(uintptr_t) native_ptr;
+    if (!p)
+        return NULL;
+    jint len = Java_android_os_Parcel_nativeReadInt(env, clazz, native_ptr);
+    if (len < 0)
+        return NULL;
+    if (len == 0) {
+        p->pos = (p->pos + 4 <= p->size) ? p->pos + 4 : p->size;
+        return (*env)->NewStringUTF(env, "");
+    }
+    size_t byte_len = (size_t) len + 1;
+    size_t padded = (byte_len + 3) & ~((size_t) 3);
+    if (p->pos + (size_t) len > p->size)
+        return NULL;
+    char *buf = (char *) malloc((size_t) len + 1);
+    if (!buf)
+        return NULL;
+    memcpy(buf, p->data + p->pos, len);
+    buf[len] = '\0';
+    jstring res = (*env)->NewStringUTF(env, buf);
+    free(buf);
+    p->pos = (p->pos + padded <= p->size) ? p->pos + padded : p->size;
+    return res;
 }
 
 jstring Java_android_os_Parcel_nativeReadString16(JNIEnv *env,
                                                   jclass clazz,
                                                   jlong native_ptr)
 {
-    (void) clazz;
-    (void) native_ptr;
-    return (*env)->NewStringUTF(env, "");
+    struct muplar_parcel *p = (struct muplar_parcel *)(uintptr_t) native_ptr;
+    if (!p)
+        return NULL;
+    jint len = Java_android_os_Parcel_nativeReadInt(env, clazz, native_ptr);
+    if (len < 0)
+        return NULL;
+    if (len == 0) {
+        p->pos = (p->pos + 4 <= p->size) ? p->pos + 4 : p->size;
+        return (*env)->NewString(env, NULL, 0);
+    }
+    size_t byte_len = ((size_t) len + 1) * sizeof(jchar);
+    size_t padded = (byte_len + 3) & ~((size_t) 3);
+    if (p->pos + (size_t) len * sizeof(jchar) > p->size)
+        return NULL;
+    jstring res = (*env)->NewString(env, (const jchar *)(p->data + p->pos), len);
+    p->pos = (p->pos + padded <= p->size) ? p->pos + padded : p->size;
+    return res;
 }
+
 
 jlong Java_android_os_BinderProxy_getNativeFinalizer(JNIEnv *env, jclass clazz)
 {
@@ -12800,6 +13181,7 @@ Java_com_muplar_runtime_ArtApkMain_installTypefaceDefaultsNative(JNIEnv *env,
 JNIEXPORT jint JNICALL JNI_OnLoad(JavaVM *vm, void *reserved)
 {
     (void) reserved;
+    muplar_install_crash_handler();
     JNIEnv *env = NULL;
     jclass cls;
     if ((*vm)->GetEnv(vm, (void **) &env, JNI_VERSION_1_6) != JNI_OK || !env)
@@ -12862,93 +13244,6 @@ JNIEXPORT jint JNICALL JNI_OnLoad(JavaVM *vm, void *reserved)
             Java_android_os_SystemProperties_native_1add_1change_1callback);
 
     muplar_register_framework_natives(env);
-
-    cls = (*env)->FindClass(env, "android/os/Parcel");
-    if ((*env)->ExceptionCheck(env)) {
-        (*env)->ExceptionClear(env);
-    } else if (cls) {
-        muplar_register_one(env, cls, "nativeCreate", "()J",
-                            (void *) Java_android_os_Parcel_nativeCreate);
-        muplar_register_one(env, cls, "nativeDestroy", "(J)V",
-                            (void *) Java_android_os_Parcel_nativeDestroy);
-        muplar_register_one(env, cls, "nativeDataAvail", "(J)I",
-                            (void *) Java_android_os_Parcel_nativeDataAvail);
-        muplar_register_one(env, cls, "nativeDataCapacity", "(J)I",
-                            (void *) Java_android_os_Parcel_nativeDataCapacity);
-        muplar_register_one(env, cls, "nativeDataPosition", "(J)I",
-                            (void *) Java_android_os_Parcel_nativeDataPosition);
-        muplar_register_one(env, cls, "nativeDataSize", "(J)I",
-                            (void *) Java_android_os_Parcel_nativeDataSize);
-        muplar_register_one(
-            env, cls, "nativeSetDataCapacity", "(JI)V",
-            (void *) Java_android_os_Parcel_nativeSetDataCapacity);
-        muplar_register_one(
-            env, cls, "nativeSetDataPosition", "(JI)V",
-            (void *) Java_android_os_Parcel_nativeSetDataPosition);
-        muplar_register_one(env, cls, "nativeSetDataSize", "(JI)V",
-                            (void *) Java_android_os_Parcel_nativeSetDataSize);
-        muplar_register_one(env, cls, "nativeFreeBuffer", "(J)V",
-                            (void *) Java_android_os_Parcel_nativeFreeBuffer);
-        muplar_register_one(
-            env, cls, "nativeEnforceInterface", "(JLjava/lang/String;)V",
-            (void *) Java_android_os_Parcel_nativeEnforceInterface);
-        muplar_register_one(env, cls, "nativeHasBinders", "(J)Z",
-                            (void *) Java_android_os_Parcel_nativeHasBinders);
-        muplar_register_one(
-            env, cls, "nativeHasBindersInRange", "(JII)Z",
-            (void *) Java_android_os_Parcel_nativeHasBindersInRange);
-        muplar_register_one(
-            env, cls, "nativeHasFileDescriptors", "(J)Z",
-            (void *) Java_android_os_Parcel_nativeHasFileDescriptors);
-        muplar_register_one(
-            env, cls, "nativeHasFileDescriptorsInRange", "(JII)Z",
-            (void *) Java_android_os_Parcel_nativeHasFileDescriptorsInRange);
-        muplar_register_one(env, cls, "nativeIsForRpc", "(J)Z",
-                            (void *) Java_android_os_Parcel_nativeIsForRpc);
-        muplar_register_one(
-            env, cls, "nativeMarkSensitive", "(J)V",
-            (void *) Java_android_os_Parcel_nativeMarkSensitive);
-        muplar_register_one(
-            env, cls, "nativeMarkForBinder", "(JLandroid/os/IBinder;)V",
-            (void *) Java_android_os_Parcel_nativeMarkForBinder);
-        muplar_register_one(
-            env, cls, "nativeWriteStrongBinder", "(JLandroid/os/IBinder;)V",
-            (void *) Java_android_os_Parcel_nativeWriteStrongBinder);
-        muplar_register_one(
-            env, cls, "nativeReadStrongBinder", "(J)Landroid/os/IBinder;",
-            (void *) Java_android_os_Parcel_nativeReadStrongBinder);
-        muplar_register_one(env, cls, "nativeWriteInt", "(JI)I",
-                            (void *) Java_android_os_Parcel_nativeWriteInt);
-        muplar_register_one(env, cls, "nativeWriteLong", "(JJ)I",
-                            (void *) Java_android_os_Parcel_nativeWriteLong);
-        muplar_register_one(env, cls, "nativeWriteFloat", "(JF)I",
-                            (void *) Java_android_os_Parcel_nativeWriteFloat);
-        muplar_register_one(env, cls, "nativeWriteDouble", "(JD)I",
-                            (void *) Java_android_os_Parcel_nativeWriteDouble);
-        muplar_register_one(env, cls, "nativeWriteString8",
-                            "(JLjava/lang/String;)V",
-                            (void *) Java_android_os_Parcel_nativeWriteString8);
-        muplar_register_one(
-            env, cls, "nativeWriteString16", "(JLjava/lang/String;)V",
-            (void *) Java_android_os_Parcel_nativeWriteString16);
-        muplar_register_one(
-            env, cls, "nativeWriteInterfaceToken", "(JLjava/lang/String;)V",
-            (void *) Java_android_os_Parcel_nativeWriteInterfaceToken);
-        muplar_register_one(env, cls, "nativeReadInt", "(J)I",
-                            (void *) Java_android_os_Parcel_nativeReadInt);
-        muplar_register_one(env, cls, "nativeReadLong", "(J)J",
-                            (void *) Java_android_os_Parcel_nativeReadLong);
-        muplar_register_one(env, cls, "nativeReadFloat", "(J)F",
-                            (void *) Java_android_os_Parcel_nativeReadFloat);
-        muplar_register_one(env, cls, "nativeReadDouble", "(J)D",
-                            (void *) Java_android_os_Parcel_nativeReadDouble);
-        muplar_register_one(env, cls, "nativeReadString8",
-                            "(J)Ljava/lang/String;",
-                            (void *) Java_android_os_Parcel_nativeReadString8);
-        muplar_register_one(env, cls, "nativeReadString16",
-                            "(J)Ljava/lang/String;",
-                            (void *) Java_android_os_Parcel_nativeReadString16);
-    }
 
     cls = (*env)->FindClass(env, "android/os/MessageQueue");
     if (!cls) {
@@ -13280,6 +13575,10 @@ JNIEXPORT jint JNICALL JNI_OnLoad(JavaVM *vm, void *reserved)
                         (void *) Java_android_graphics_Path_nConicTo);
     muplar_register_one(env, cls, "nRConicTo", "(JFFFFF)V",
                         (void *) Java_android_graphics_Path_nRConicTo);
+    muplar_register_one(env, cls, "nArcTo", "(JFFFFFFZ)V",
+                        (void *) muplar_Path_nVoid);
+    muplar_register_one(env, cls, "nAddArc", "(JFFFFFF)V",
+                        (void *) muplar_Path_nVoid);
     muplar_register_one(env, cls, "nAddCircle", "(JFFFI)V",
                         (void *) muplar_Path_nVoid);
     muplar_register_one(env, cls, "nAddOval", "(JFFFFI)V",
@@ -13406,13 +13705,22 @@ JNIEXPORT jint JNICALL JNI_OnLoad(JavaVM *vm, void *reserved)
         (void *) Java_android_graphics_Paint_nSetMyanmarEncoding);
     muplar_register_one(
         env, cls, "nSetStyle", "(JI)V",
-        (void *) Java_android_graphics_Paint_nSetMyanmarEncoding);
+        (void *) Java_android_graphics_Paint_nSetStyle);
+    muplar_register_one(
+        env, cls, "nGetStyle", "(J)I",
+        (void *) Java_android_graphics_Paint_nGetStyle);
     muplar_register_one(
         env, cls, "nSetStrokeCap", "(JI)V",
-        (void *) Java_android_graphics_Paint_nSetMyanmarEncoding);
+        (void *) Java_android_graphics_Paint_nSetStrokeCap);
+    muplar_register_one(
+        env, cls, "nGetStrokeCap", "(J)I",
+        (void *) Java_android_graphics_Paint_nGetStrokeCap);
     muplar_register_one(
         env, cls, "nSetStrokeJoin", "(JI)V",
-        (void *) Java_android_graphics_Paint_nSetMyanmarEncoding);
+        (void *) Java_android_graphics_Paint_nSetStrokeJoin);
+    muplar_register_one(
+        env, cls, "nGetStrokeJoin", "(J)I",
+        (void *) Java_android_graphics_Paint_nGetStrokeJoin);
     muplar_register_one(env, cls, "nSetSubpixelText", "(JZ)V",
                         (void *) Java_android_graphics_Paint_nSetBoolean);
     muplar_register_one(env, cls, "nSetLinearText", "(JZ)V",
@@ -13438,9 +13746,21 @@ JNIEXPORT jint JNICALL JNI_OnLoad(JavaVM *vm, void *reserved)
     muplar_register_one(env, cls, "nSetWordSpacing", "(JF)V",
                         (void *) Java_android_graphics_Paint_nSetTextSize);
     muplar_register_one(env, cls, "nSetStrokeWidth", "(JF)V",
-                        (void *) Java_android_graphics_Paint_nSetTextSize);
+                        (void *) Java_android_graphics_Paint_nSetStrokeWidth);
+    muplar_register_one(env, cls, "nGetStrokeWidth", "(J)F",
+                        (void *) Java_android_graphics_Paint_nGetStrokeWidth);
     muplar_register_one(env, cls, "nSetStrokeMiter", "(JF)V",
-                        (void *) Java_android_graphics_Paint_nSetTextSize);
+                        (void *) Java_android_graphics_Paint_nSetStrokeMiter);
+    muplar_register_one(env, cls, "nGetStrokeMiter", "(J)F",
+                        (void *) Java_android_graphics_Paint_nGetStrokeMiter);
+    muplar_register_one(env, cls, "nGetAmbientShadowColor", "(J)I",
+                        (void *) Java_android_graphics_Paint_nGetAmbientShadowColor);
+    muplar_register_one(env, cls, "nSetAmbientShadowColor", "(JI)V",
+                        (void *) Java_android_graphics_Paint_nSetAmbientShadowColor);
+    muplar_register_one(env, cls, "nGetSpotShadowColor", "(J)I",
+                        (void *) Java_android_graphics_Paint_nGetSpotShadowColor);
+    muplar_register_one(env, cls, "nSetSpotShadowColor", "(JI)V",
+                        (void *) Java_android_graphics_Paint_nSetSpotShadowColor);
     muplar_register_one(env, cls, "nSetFontFeatureSettings",
                         "(JLjava/lang/String;)V",
                         (void *) Java_android_graphics_Paint_nSetString);

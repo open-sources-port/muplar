@@ -215,6 +215,20 @@ std::vector<GuestPathCandidates> bootclasspath_candidates()
                 "/system/framework/ext.jar",
             },
         },
+        {
+            "knoxsdk.jar",
+            false,
+            {
+                "/system/framework/knoxsdk.jar",
+            },
+        },
+        {
+            "sec_platform_library.jar",
+            false,
+            {
+                "/system/framework/sec_platform_library.jar",
+            },
+        },
     };
 }
 
@@ -504,16 +518,18 @@ ArtBootstrapPlan build_art_bootstrap_plan(const ArtBootstrapConfig &config)
         std::filesystem::path host_path =
             first_existing_regular(plan.sysroot, candidates);
         if (!host_path.empty()) {
-            if (std::string(candidates.label) == "framework.jar" &&
-                !plan.bootstrap_jar.empty() &&
-                !plan.bootstrap_jar_guest_path.empty()) {
-                plan.bootclasspath.push_back(plan.bootstrap_jar);
-                guest_bootclasspath.push_back(plan.bootstrap_jar_guest_path);
-            }
             plan.bootclasspath.push_back(host_path);
             std::string guest_path = guest_path_for(host_path, plan.sysroot);
-            if (std::string(candidates.label) == "framework.jar")
+            if (std::string(candidates.label) == "framework.jar") {
                 framework_bootclasspath_seen = true;
+                guest_bootclasspath.push_back(std::move(guest_path));
+                if (!plan.bootstrap_jar.empty() &&
+                    !plan.bootstrap_jar_guest_path.empty()) {
+                    plan.bootclasspath.push_back(plan.bootstrap_jar);
+                    guest_bootclasspath.push_back(plan.bootstrap_jar_guest_path);
+                }
+                continue;
+            }
             if (!framework_bootclasspath_seen)
                 guest_dex2oat_bootclasspath.push_back(guest_path);
             guest_bootclasspath.push_back(std::move(guest_path));

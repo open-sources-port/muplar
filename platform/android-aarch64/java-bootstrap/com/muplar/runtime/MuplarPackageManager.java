@@ -239,7 +239,8 @@ public final class MuplarPackageManager extends MuplarPackageManagerBridge {
         info.applicationInfo = applicationInfo;
         return info;
     }
-    @Override public PackageInstaller getPackageInstaller() { return null; }
+    private final PackageInstaller packageInstaller = new android.content.pm.MuplarPackageInstaller();
+    @Override public PackageInstaller getPackageInstaller() { return packageInstaller; }
     @Override public int getPackageUid(String packageName, int flags)
             throws NameNotFoundException { return applicationInfo.uid; }
     @Override public String[] getPackagesForUid(int uid) { return new String[] { packageName }; }

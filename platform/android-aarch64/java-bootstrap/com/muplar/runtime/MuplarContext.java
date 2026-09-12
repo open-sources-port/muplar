@@ -64,6 +64,11 @@ public final class MuplarContext extends ContextWrapper {
     private final Object connectivityManager;
     private final Object powerManager;
     private final Object jobScheduler;
+    private final Object accessibilityManager;
+    private final Object autofillManager;
+    private final Object clipboardManager;
+    private final Object telephonyManager;
+    private final Object wifiManager;
     private final ContentResolver contentResolver;
     private final PackageManager packageManager;
     private final IBinder activityToken = new Binder();
@@ -128,6 +133,11 @@ public final class MuplarContext extends ContextWrapper {
         this.connectivityManager = createConnectivityManager(this);
         this.powerManager = createPowerManager(this);
         this.jobScheduler = createJobScheduler(this);
+        this.accessibilityManager = createAccessibilityManager(this);
+        this.autofillManager = createAutofillManager(this);
+        this.clipboardManager = createClipboardManager(this);
+        this.telephonyManager = createTelephonyManager(this);
+        this.wifiManager = new android.net.wifi.WifiManager(this);
     }
 
     private Context applicationContext;
@@ -598,6 +608,21 @@ public final class MuplarContext extends ContextWrapper {
         if (Context.JOB_SCHEDULER_SERVICE.equals(name) || "jobscheduler".equals(name) || "android.app.job.JobScheduler".equals(name)) {
             return jobScheduler;
         }
+        if (Context.ACCESSIBILITY_SERVICE.equals(name) || "accessibility".equals(name) || "android.view.accessibility.AccessibilityManager".equals(name)) {
+            return accessibilityManager;
+        }
+        if ("autofill".equals(name) || "android.view.autofill.AutofillManager".equals(name)) {
+            return autofillManager;
+        }
+        if (Context.CLIPBOARD_SERVICE.equals(name) || "clipboard".equals(name) || "android.content.ClipboardManager".equals(name)) {
+            return clipboardManager;
+        }
+        if (Context.TELEPHONY_SERVICE.equals(name) || "phone".equals(name) || "android.telephony.TelephonyManager".equals(name)) {
+            return telephonyManager;
+        }
+        if (Context.WIFI_SERVICE.equals(name) || "wifi".equals(name) || "android.net.wifi.WifiManager".equals(name)) {
+            return wifiManager;
+        }
         return null;
     }
 
@@ -667,6 +692,11 @@ public final class MuplarContext extends ContextWrapper {
     @Override
     public android.content.ComponentName startService(Intent service) {
         return null;
+    }
+
+    @Override
+    public android.content.ComponentName startForegroundService(Intent service) {
+        return startService(service);
     }
 
     @Override
@@ -781,6 +811,26 @@ public final class MuplarContext extends ContextWrapper {
         if (serviceClass != null &&
             "android.appwidget.AppWidgetManager".equals(serviceClass.getName())) {
             return "appwidget";
+        }
+        if (serviceClass != null &&
+            "android.view.accessibility.AccessibilityManager".equals(serviceClass.getName())) {
+            return Context.ACCESSIBILITY_SERVICE;
+        }
+        if (serviceClass != null &&
+            "android.view.autofill.AutofillManager".equals(serviceClass.getName())) {
+            return "autofill";
+        }
+        if (serviceClass != null &&
+            "android.content.ClipboardManager".equals(serviceClass.getName())) {
+            return Context.CLIPBOARD_SERVICE;
+        }
+        if (serviceClass != null &&
+            "android.telephony.TelephonyManager".equals(serviceClass.getName())) {
+            return Context.TELEPHONY_SERVICE;
+        }
+        if (serviceClass != null &&
+            "android.net.wifi.WifiManager".equals(serviceClass.getName())) {
+            return Context.WIFI_SERVICE;
         }
         return serviceClass == null ? null : serviceClass.getName();
     }
@@ -937,76 +987,170 @@ public final class MuplarContext extends ContextWrapper {
 
     private static Object createDevicePolicyManager(Context context) {
         try {
-            Class<?> type = Class.forName("android.app.admin.DevicePolicyManager");
-            Class<?> serviceType =
-                Class.forName("android.app.admin.IDevicePolicyManager");
-            final IBinder binder = new Binder();
-            Object service = java.lang.reflect.Proxy.newProxyInstance(
-                serviceType.getClassLoader(),
-                new Class<?>[] { serviceType },
-                new java.lang.reflect.InvocationHandler() {
-                    @Override
-                    public Object invoke(Object proxy,
-                                         java.lang.reflect.Method method,
-                                         Object[] args) {
-                        if ("asBinder".equals(method.getName())) {
-                            return binder;
-                        }
-                        if ("getManagedSubscriptionsPolicy".equals(method.getName())) {
-                            return createManagedSubscriptionsPolicy();
-                        }
-                        return defaultValue(method.getReturnType());
-                    }
-                });
-            for (java.lang.reflect.Constructor<?> ctor
-                     : type.getDeclaredConstructors()) {
-                Class<?>[] params = ctor.getParameterTypes();
-                if (params.length >= 2 && params[0] == Context.class) {
-                    Object[] args = params.length == 2
-                        ? new Object[] { context, service }
-                        : new Object[] { context, service, Boolean.FALSE };
-                    ctor.setAccessible(true);
-                    return ctor.newInstance(args);
-                }
+            ClassLoader loader = context != null && context.getClassLoader() != null
+                ? context.getClassLoader()
+                : MuplarContext.class.getClassLoader();
+            if (loader == null) {
+                loader = ClassLoader.getSystemClassLoader();
+            }
+            Class<?> type = null;
+            try {
+                type = Class.forName("android.app.admin.DevicePolicyManager", false, loader);
+            } catch (Throwable t) {
+                try {
+                    type = Class.forName("android.app.admin.DevicePolicyManager");
+                } catch (Throwable ignored) {}
+            }
+            if (type == null) return null;
+
+            Class<?> serviceType = null;
+            try {
+                serviceType = Class.forName("android.app.admin.IDevicePolicyManager", false, loader);
+            } catch (Throwable t) {
+                try {
+                    serviceType = Class.forName("android.app.admin.IDevicePolicyManager");
+                } catch (Throwable ignored) {}
             }
 
-            Object manager = allocateWithoutConstructor(type);
+            IBinder binder = MuplarServices.getBinder("device_policy");
+            if (binder == null) {
+                binder = new Binder();
+            }
+            final IBinder finalBinder = binder;
+
+            Object service = null;
+            if (binder != null) {
+                try {
+                    Class<?> stubClass = Class.forName("android.app.admin.IDevicePolicyManager$Stub", false, loader);
+                    Method asInterface = stubClass.getMethod("asInterface", IBinder.class);
+                    service = asInterface.invoke(null, finalBinder);
+                } catch (Throwable ignored) {}
+            }
+
+            if (service == null && serviceType != null) {
+                ClassLoader proxyLoader = loader != null ? loader : MuplarContext.class.getClassLoader();
+                if (proxyLoader == null) {
+                    proxyLoader = ClassLoader.getSystemClassLoader();
+                }
+                service = java.lang.reflect.Proxy.newProxyInstance(
+                    proxyLoader,
+                    new Class<?>[] { serviceType },
+                    new java.lang.reflect.InvocationHandler() {
+                        @Override
+                        public Object invoke(Object proxy,
+                                             java.lang.reflect.Method method,
+                                             Object[] args) {
+                            if ("asBinder".equals(method.getName())) {
+                                return finalBinder;
+                            }
+                            if ("getManagedSubscriptionsPolicy".equals(method.getName())) {
+                                return createManagedSubscriptionsPolicy();
+                            }
+                            return defaultValue(method.getReturnType());
+                        }
+                    });
+            }
+
+            Object manager = null;
+            if (service != null && serviceType != null) {
+                try {
+                    Constructor<?> ctor = type.getDeclaredConstructor(Context.class, serviceType);
+                    ctor.setAccessible(true);
+                    manager = ctor.newInstance(context, service);
+                    System.out.println("[Muplar/ART] DevicePolicyManager created with (Context, IDevicePolicyManager) ctor");
+                } catch (Throwable ignored) {}
+            }
+            if (manager == null) {
+                try {
+                    Constructor<?> ctor = type.getDeclaredConstructor(Context.class, Handler.class);
+                    ctor.setAccessible(true);
+                    manager = ctor.newInstance(context, new Handler(Looper.getMainLooper()));
+                    System.out.println("[Muplar/ART] DevicePolicyManager created with (Context, Handler) ctor");
+                } catch (Throwable ignored) {}
+            }
+            if (manager == null) {
+                try {
+                    Constructor<?> ctor = type.getDeclaredConstructor(Context.class);
+                    ctor.setAccessible(true);
+                    manager = ctor.newInstance(context);
+                    System.out.println("[Muplar/ART] DevicePolicyManager created with (Context) ctor");
+                } catch (Throwable ignored) {}
+            }
+            if (manager == null) {
+                manager = allocateWithoutConstructor(type);
+                System.out.println("[Muplar/ART] DevicePolicyManager allocated without constructor");
+            }
+
             if (manager != null) {
                 setFieldIfPresent(manager, "mContext", context);
                 setFieldIfPresent(manager, "mService", service);
-                setFieldIfPresent(manager, "mResourcesManager",
-                                  createDevicePolicyResourcesManager(context,
-                                                                     service));
+                Object resMgr = null;
+                try {
+                    Method getResourcesMethod = type.getMethod("getResources");
+                    resMgr = getResourcesMethod.invoke(manager);
+                } catch (Throwable ignored) {}
+                if (resMgr == null) {
+                    resMgr = createDevicePolicyResourcesManager(context, service, loader);
+                    setFieldIfPresent(manager, "mResourcesManager", resMgr);
+                }
+                System.out.println("[Muplar/ART] DevicePolicyManager ready: " + manager + " resMgr=" + resMgr);
                 return manager;
             }
         } catch (Throwable t) {
-            System.err.println("[Muplar/ART] DevicePolicyManager create failed: "
-                + t.getClass().getName() + ": " + t.getMessage());
+            System.err.println("[Muplar/ART] DevicePolicyManager create failed: " + t);
+            t.printStackTrace(System.err);
             return null;
         }
         return null;
     }
 
     private static Object createDevicePolicyResourcesManager(Context context,
-                                                            Object service) {
+                                                            Object service,
+                                                            ClassLoader loader) {
         try {
-            Class<?> type =
-                Class.forName("android.app.admin.DevicePolicyResourcesManager");
-            for (java.lang.reflect.Constructor<?> ctor
-                     : type.getDeclaredConstructors()) {
-                Class<?>[] params = ctor.getParameterTypes();
-                if (params.length == 2 && params[0] == Context.class) {
+            Class<?> type = null;
+            try {
+                type = Class.forName("android.app.admin.DevicePolicyResourcesManager", false, loader);
+            } catch (Throwable t) {
+                try {
+                    type = Class.forName("android.app.admin.DevicePolicyResourcesManager");
+                } catch (Throwable ignored) {}
+            }
+            if (type == null) return null;
+
+            Class<?> serviceType = null;
+            try {
+                serviceType = Class.forName("android.app.admin.IDevicePolicyManager", false, loader);
+            } catch (Throwable ignored) {}
+
+            Object resMgr = null;
+            if (service != null && serviceType != null) {
+                try {
+                    Constructor<?> ctor = type.getDeclaredConstructor(Context.class, serviceType);
                     ctor.setAccessible(true);
-                    return ctor.newInstance(context, service);
-                }
+                    resMgr = ctor.newInstance(context, service);
+                    System.out.println("[Muplar/ART] DevicePolicyResourcesManager created with (Context, IDevicePolicyManager) ctor");
+                } catch (Throwable ignored) {}
             }
-            Object manager = allocateWithoutConstructor(type);
-            if (manager != null) {
-                setFieldIfPresent(manager, "mContext", context);
-                setFieldIfPresent(manager, "mService", service);
-                return manager;
+            if (resMgr == null) {
+                try {
+                    Constructor<?> ctor = type.getDeclaredConstructor(Context.class);
+                    ctor.setAccessible(true);
+                    resMgr = ctor.newInstance(context);
+                    System.out.println("[Muplar/ART] DevicePolicyResourcesManager created with (Context) ctor");
+                } catch (Throwable ignored) {}
             }
-        } catch (Throwable ignored) {
+            if (resMgr == null) {
+                resMgr = allocateWithoutConstructor(type);
+                System.out.println("[Muplar/ART] DevicePolicyResourcesManager allocated without constructor");
+            }
+            if (resMgr != null) {
+                setFieldIfPresent(resMgr, "mContext", context);
+                setFieldIfPresent(resMgr, "mService", service);
+                return resMgr;
+            }
+        } catch (Throwable t) {
+            System.err.println("[Muplar/ART] DevicePolicyResourcesManager create failed: " + t);
         }
         return null;
     }
@@ -1843,5 +1987,221 @@ public final class MuplarContext extends ContextWrapper {
             System.err.println("[Muplar/ART] createJobScheduler failed: " + t);
             return null;
         }
+    }
+
+    private static Object createAccessibilityManager(final Context context) {
+        try {
+            Class<?> type = Class.forName("android.view.accessibility.AccessibilityManager");
+            IBinder binder = MuplarServices.getBinder("accessibility");
+            Object serviceProxy = null;
+            try {
+                Class<?> stubClass = Class.forName("android.view.accessibility.IAccessibilityManager$Stub");
+                Method asInterface = stubClass.getMethod("asInterface", IBinder.class);
+                serviceProxy = asInterface.invoke(null, binder);
+            } catch (Throwable ignored) {}
+
+            Object instance = null;
+            try {
+                Method getInstance = type.getMethod("getInstance", Context.class);
+                getInstance.setAccessible(true);
+                instance = getInstance.invoke(null, context);
+                if (instance != null) {
+                    System.out.println("[Muplar/ART] AccessibilityManager obtained via getInstance");
+                }
+            } catch (Throwable ignored) {}
+
+            if (instance == null) {
+                Constructor<?>[] ctors = type.getDeclaredConstructors();
+                for (Constructor<?> ctor : ctors) {
+                    ctor.setAccessible(true);
+                    Class<?>[] params = ctor.getParameterTypes();
+                    if (params.length == 5) {
+                        try {
+                            instance = ctor.newInstance(context, new Handler(context.getMainLooper()), serviceProxy, 0, false);
+                            break;
+                        } catch (Throwable ignored) {}
+                    } else if (params.length == 4) {
+                        try {
+                            instance = ctor.newInstance(context, new Handler(context.getMainLooper()), serviceProxy, 0);
+                            break;
+                        } catch (Throwable ignored) {}
+                    } else if (params.length == 3) {
+                        try {
+                            instance = ctor.newInstance(context, serviceProxy, 0);
+                            break;
+                        } catch (Throwable ignored) {}
+                    } else if (params.length == 2) {
+                        try {
+                            instance = ctor.newInstance(context, serviceProxy);
+                            break;
+                        } catch (Throwable ignored) {}
+                    } else if (params.length == 1) {
+                        try {
+                            instance = ctor.newInstance(context);
+                            break;
+                        } catch (Throwable ignored) {}
+                    } else if (params.length == 0) {
+                        try {
+                            instance = ctor.newInstance();
+                            break;
+                        } catch (Throwable ignored) {}
+                    }
+                }
+            }
+
+            if (instance == null) {
+                instance = allocateWithoutConstructor(type);
+                if (instance != null) {
+                    setFieldIfPresent(instance, "mContext", context);
+                    setFieldIfPresent(instance, "mHandler", new Handler(context.getMainLooper()));
+                    if (serviceProxy != null) {
+                        setFieldIfPresent(instance, "mService", serviceProxy);
+                    }
+                }
+            }
+
+            if (instance != null) {
+                try {
+                    java.lang.reflect.Field sInstanceField = type.getDeclaredField("sInstance");
+                    sInstanceField.setAccessible(true);
+                    sInstanceField.set(null, instance);
+                } catch (Throwable ignored) {}
+                System.out.println("[Muplar/ART] AccessibilityManager created successfully");
+                return instance;
+            }
+        } catch (Throwable t) {
+            System.err.println("[Muplar/ART] createAccessibilityManager failed: " + t);
+        }
+        return null;
+    }
+
+    private static Object createAutofillManager(final Context context) {
+        try {
+            Class<?> type = Class.forName("android.view.autofill.AutofillManager");
+            IBinder binder = MuplarServices.getBinder("autofill");
+            Object serviceProxy = null;
+            try {
+                Class<?> stubClass = Class.forName("android.view.autofill.IAutoFillManager$Stub");
+                Method asInterface = stubClass.getMethod("asInterface", IBinder.class);
+                serviceProxy = asInterface.invoke(null, binder);
+            } catch (Throwable ignored) {}
+
+            Constructor<?>[] ctors = type.getDeclaredConstructors();
+            for (Constructor<?> ctor : ctors) {
+                ctor.setAccessible(true);
+                Class<?>[] params = ctor.getParameterTypes();
+                if (params.length == 2 && params[0].isAssignableFrom(Context.class)) {
+                    try {
+                        return ctor.newInstance(context, serviceProxy);
+                    } catch (Throwable ignored) {}
+                } else if (params.length == 1 && params[0].isAssignableFrom(Context.class)) {
+                    try {
+                        return ctor.newInstance(context);
+                    } catch (Throwable ignored) {}
+                } else if (params.length == 0) {
+                    try {
+                        return ctor.newInstance();
+                    } catch (Throwable ignored) {}
+                }
+            }
+
+            Object allocated = allocateWithoutConstructor(type);
+            if (allocated != null) {
+                setFieldIfPresent(allocated, "mContext", context);
+                if (serviceProxy != null) {
+                    setFieldIfPresent(allocated, "mService", serviceProxy);
+                }
+                return allocated;
+            }
+        } catch (Throwable t) {
+            System.err.println("[Muplar/ART] createAutofillManager failed: " + t);
+        }
+        return null;
+    }
+
+    private static Object createClipboardManager(final Context context) {
+        try {
+            Class<?> type = Class.forName("android.content.ClipboardManager");
+            IBinder binder = MuplarServices.getBinder("clipboard");
+            Object serviceProxy = null;
+            try {
+                Class<?> stubClass = Class.forName("android.content.IClipboard$Stub");
+                Method asInterface = stubClass.getMethod("asInterface", IBinder.class);
+                serviceProxy = asInterface.invoke(null, binder);
+            } catch (Throwable ignored) {}
+
+            Constructor<?>[] ctors = type.getDeclaredConstructors();
+            for (Constructor<?> ctor : ctors) {
+                ctor.setAccessible(true);
+                Class<?>[] params = ctor.getParameterTypes();
+                if (params.length == 2 && params[0].isAssignableFrom(Context.class)) {
+                    try {
+                        return ctor.newInstance(context, new Handler(context.getMainLooper()));
+                    } catch (Throwable ignored) {}
+                } else if (params.length == 1 && params[0].isAssignableFrom(Context.class)) {
+                    try {
+                        return ctor.newInstance(context);
+                    } catch (Throwable ignored) {}
+                } else if (params.length == 0) {
+                    try {
+                        return ctor.newInstance();
+                    } catch (Throwable ignored) {}
+                }
+            }
+
+            Object allocated = allocateWithoutConstructor(type);
+            if (allocated != null) {
+                setFieldIfPresent(allocated, "mContext", context);
+                setFieldIfPresent(allocated, "mHandler", new Handler(context.getMainLooper()));
+                if (serviceProxy != null) {
+                    setFieldIfPresent(allocated, "mService", serviceProxy);
+                }
+                return allocated;
+            }
+        } catch (Throwable t) {
+            System.err.println("[Muplar/ART] createClipboardManager failed: " + t);
+        }
+        return null;
+    }
+
+    private static Object createTelephonyManager(final Context context) {
+        try {
+            Class<?> type = Class.forName("android.telephony.TelephonyManager");
+            IBinder binder = MuplarServices.getBinder("phone");
+            Object serviceProxy = null;
+            try {
+                Class<?> stubClass = Class.forName("com.android.internal.telephony.ITelephony$Stub");
+                Method asInterface = stubClass.getMethod("asInterface", IBinder.class);
+                serviceProxy = asInterface.invoke(null, binder);
+            } catch (Throwable ignored) {}
+
+            Constructor<?>[] ctors = type.getDeclaredConstructors();
+            for (Constructor<?> ctor : ctors) {
+                ctor.setAccessible(true);
+                Class<?>[] params = ctor.getParameterTypes();
+                if (params.length == 2 && params[0].isAssignableFrom(Context.class) && params[1] == int.class) {
+                    try {
+                        return ctor.newInstance(context, 0);
+                    } catch (Throwable ignored) {}
+                } else if (params.length == 1 && params[0].isAssignableFrom(Context.class)) {
+                    try {
+                        return ctor.newInstance(context);
+                    } catch (Throwable ignored) {}
+                } else if (params.length == 0) {
+                    try {
+                        return ctor.newInstance();
+                    } catch (Throwable ignored) {}
+                }
+            }
+
+            Object allocated = allocateWithoutConstructor(type);
+            if (allocated != null) {
+                setFieldIfPresent(allocated, "mContext", context);
+                return allocated;
+            }
+        } catch (Throwable t) {
+            System.err.println("[Muplar/ART] createTelephonyManager failed: " + t);
+        }
+        return null;
     }
 }

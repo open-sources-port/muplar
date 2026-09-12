@@ -65,10 +65,28 @@ public final class MuplarServices {
         return binder;
     }
 
+    private static Object createManagedSubscriptionsPolicy() {
+        try {
+            Class<?> policyClass = Class.forName("android.app.admin.ManagedSubscriptionsPolicy");
+            Constructor<?> ctor = policyClass.getDeclaredConstructor(Integer.TYPE);
+            ctor.setAccessible(true);
+            return ctor.newInstance(Integer.valueOf(0));
+        } catch (Throwable ignored) {
+            return null;
+        }
+    }
+
+    private static IBinder createDevicePolicyBinder() {
+        return new NoNativeBinder("android.app.admin.IDevicePolicyManager");
+    }
+
     private static IBinder createBinder(String name) {
+        if ("device_policy".equals(name)) {
+            return createDevicePolicyBinder();
+        }
         String iface = serviceInterface(name);
         if (iface == null) {
-            return new Binder();
+            return new NoNativeBinder(name);
         }
         try {
             Class<?> type = resolveInterfaceClass(iface);
@@ -152,6 +170,24 @@ public final class MuplarServices {
         }
         if ("power".equals(name)) {
             return "android.os.IPowerManager";
+        }
+        if ("autofill".equals(name)) {
+            return "android.view.autofill.IAutoFillManager";
+        }
+        if ("clipboard".equals(name)) {
+            return "android.content.IClipboard";
+        }
+        if ("phone".equals(name)) {
+            return "com.android.internal.telephony.ITelephony";
+        }
+        if ("input_method".equals(name)) {
+            return "com.android.internal.view.IInputMethodManager";
+        }
+        if ("voiceinteraction".equals(name)) {
+            return "com.android.internal.app.IVoiceInteractionManagerService";
+        }
+        if ("textservices".equals(name)) {
+            return "com.android.internal.textservice.ITextServicesManager";
         }
         return null;
     }
@@ -288,6 +324,11 @@ public final class MuplarServices {
                     return value;
                 }
             }
+            if ("android.app.admin.IDevicePolicyManager".equals(descriptor)) {
+                if ("getManagedSubscriptionsPolicy".equals(method.getName())) {
+                    return createManagedSubscriptionsPolicy();
+                }
+            }
             if ("android.content.pm.ILauncherApps".equals(descriptor)) {
                 Object value = launcherAppsValue(method, args);
                 if (value != null) {
@@ -335,6 +376,11 @@ public final class MuplarServices {
                 Object value = powerManagerValue(method, args);
                 if (value != null) {
                     return value;
+                }
+            }
+            if ("com.android.internal.telephony.ITelephony".equals(descriptor)) {
+                if (String.class.equals(method.getReturnType())) {
+                    return "us";
                 }
             }
             return defaultValue(method.getReturnType());
@@ -1389,8 +1435,15 @@ public final class MuplarServices {
             if (reply != null) {
                 try {
                     reply.writeNoException();
+                    if ("android.app.admin.IDevicePolicyManager".equals(descriptor)) {
+                        if (code == 432 /* TRANSACTION_getManagedSubscriptionsPolicy */) {
+                            reply.writeInt(1); // Non-null TypedObject indicator
+                            reply.writeInt(0); // ManagedSubscriptionsPolicy type (0 = TYPE_ALL_PERSONAL_SUBSCRIPTIONS)
+                        }
+                    }
                 } catch (Throwable ignored) {
                 }
+                reply.setDataPosition(0);
             }
             return true;
         }

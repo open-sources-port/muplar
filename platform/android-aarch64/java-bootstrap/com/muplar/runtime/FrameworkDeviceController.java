@@ -951,7 +951,26 @@ public final class FrameworkDeviceController {
         final ActivityRecord record = activeRecord();
         if (record == null || record.activity == null) return;
         if ("launcher".equals(record.tab)) {
-            System.out.println("[DeviceController] back on launcher ignored");
+            try {
+                Object activity = record.activity;
+                ClassLoader loader = activity.getClass().getClassLoader();
+                Class<?> launcherStateClass = Class.forName("com.android.launcher3.LauncherState", false, loader);
+                java.lang.reflect.Field normalField = launcherStateClass.getField("NORMAL");
+                Object normalState = normalField.get(null);
+
+                java.lang.reflect.Method getStateManagerMethod = activity.getClass().getMethod("getStateManager");
+                Object stateManager = getStateManagerMethod.invoke(activity);
+                java.lang.reflect.Method getStateMethod = stateManager.getClass().getMethod("getState");
+                Object currentState = getStateMethod.invoke(stateManager);
+                if (currentState != null && !currentState.equals(normalState)) {
+                    System.out.println("[DeviceController] back on launcher: transitioning from " + currentState + " to NORMAL");
+                    goToNormalState(record);
+                    return;
+                }
+            } catch (Throwable t) {
+                System.err.println("[DeviceController] back on launcher state check failed: " + t);
+            }
+            System.out.println("[DeviceController] back on launcher (Normal state) ignored");
             return;
         }
         try {
@@ -1010,6 +1029,60 @@ public final class FrameworkDeviceController {
                 }
             }
             System.out.println("[DeviceController] openAllApps invoked=" + invoked);
+
+            // Force layout pass on decorView and appsView
+            try {
+                java.lang.reflect.Method getWindow = activity.getClass().getMethod("getWindow");
+                Object window = getWindow.invoke(activity);
+                java.lang.reflect.Method getDecorView = window.getClass().getMethod("getDecorView");
+                android.view.View decor = (android.view.View) getDecorView.invoke(window);
+                if (decor != null) {
+                    int w = decor.getWidth() > 0 ? decor.getWidth() : 1080;
+                    int h = decor.getHeight() > 0 ? decor.getHeight() : 1920;
+                    decor.measure(android.view.View.MeasureSpec.makeMeasureSpec(w, android.view.View.MeasureSpec.EXACTLY),
+                                  android.view.View.MeasureSpec.makeMeasureSpec(h, android.view.View.MeasureSpec.EXACTLY));
+                    decor.layout(0, 0, w, h);
+                }
+            } catch (Throwable t) {
+                System.err.println("[DeviceController] decor layout pass error: " + t);
+            }
+
+            try {
+                java.lang.reflect.Method getAppsView = activity.getClass().getMethod("getAppsView");
+                android.view.View appsView = (android.view.View) getAppsView.invoke(activity);
+                if (appsView != null) {
+                    if (appsView.getVisibility() != android.view.View.VISIBLE) {
+                        appsView.setVisibility(android.view.View.VISIBLE);
+                    }
+                    int w = 1080;
+                    int h = 1920;
+                    if (appsView.getParent() instanceof android.view.View) {
+                        android.view.View p = (android.view.View) appsView.getParent();
+                        if (p.getWidth() > 0) w = p.getWidth();
+                        if (p.getHeight() > 0) h = p.getHeight();
+                    }
+                    if (appsView.getWidth() <= 0 || appsView.getHeight() <= 0) {
+                        appsView.measure(android.view.View.MeasureSpec.makeMeasureSpec(w, android.view.View.MeasureSpec.EXACTLY),
+                                         android.view.View.MeasureSpec.makeMeasureSpec(h, android.view.View.MeasureSpec.EXACTLY));
+                        appsView.layout(0, 0, w, h);
+                    }
+                    try {
+                        java.lang.reflect.Method getRV = appsView.getClass().getMethod("getActiveRecyclerView");
+                        android.view.View rv = (android.view.View) getRV.invoke(appsView);
+                        if (rv != null && (rv.getWidth() <= 0 || rv.getHeight() <= 0)) {
+                            int rvw = appsView.getWidth() > 0 ? appsView.getWidth() : w;
+                            int rvh = appsView.getHeight() > 0 ? appsView.getHeight() : h;
+                            rv.measure(android.view.View.MeasureSpec.makeMeasureSpec(rvw, android.view.View.MeasureSpec.EXACTLY),
+                                       android.view.View.MeasureSpec.makeMeasureSpec(rvh, android.view.View.MeasureSpec.EXACTLY));
+                            rv.layout(0, 0, rvw, rvh);
+                        }
+                    } catch (Throwable t) {
+                        System.err.println("[DeviceController] rv layout error: " + t);
+                    }
+                }
+            } catch (Throwable t) {
+                System.err.println("[DeviceController] appsView layout error: " + t);
+            }
 
             // Diagnostics for appsView & transition controller
             try {
@@ -1103,6 +1176,23 @@ public final class FrameworkDeviceController {
                 }
             }
             System.out.println("[DeviceController] goToNormalState invoked=" + invoked);
+
+            try {
+                java.lang.reflect.Method getWindow = activity.getClass().getMethod("getWindow");
+                Object window = getWindow.invoke(activity);
+                java.lang.reflect.Method getDecorView = window.getClass().getMethod("getDecorView");
+                android.view.View decor = (android.view.View) getDecorView.invoke(window);
+                if (decor != null) {
+                    int w = decor.getWidth() > 0 ? decor.getWidth() : 1080;
+                    int h = decor.getHeight() > 0 ? decor.getHeight() : 1920;
+                    decor.measure(android.view.View.MeasureSpec.makeMeasureSpec(w, android.view.View.MeasureSpec.EXACTLY),
+                                  android.view.View.MeasureSpec.makeMeasureSpec(h, android.view.View.MeasureSpec.EXACTLY));
+                    decor.layout(0, 0, w, h);
+                }
+            } catch (Throwable t) {
+                System.err.println("[DeviceController] goToNormalState decor layout error: " + t);
+            }
+
             focusRecord(launcher);
             scheduleFrame(launcher);
             MuplarFramePresenter.requestBurst();
