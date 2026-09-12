@@ -147,6 +147,12 @@ public final class MuplarServices {
         if ("audio".equals(name)) {
             return "android.media.IAudioService";
         }
+        if ("connectivity".equals(name)) {
+            return "android.net.IConnectivityManager";
+        }
+        if ("power".equals(name)) {
+            return "android.os.IPowerManager";
+        }
         return null;
     }
 
@@ -313,6 +319,24 @@ public final class MuplarServices {
                     return value;
                 }
             }
+            if ("android.hardware.display.IDisplayManager".equals(descriptor)) {
+                Object value = displayManagerValue(method, args);
+                if (value != null) {
+                    return value;
+                }
+            }
+            if ("android.net.IConnectivityManager".equals(descriptor)) {
+                Object value = connectivityManagerValue(method, args);
+                if (value != null) {
+                    return value;
+                }
+            }
+            if ("android.os.IPowerManager".equals(descriptor)) {
+                Object value = powerManagerValue(method, args);
+                if (value != null) {
+                    return value;
+                }
+            }
             return defaultValue(method.getReturnType());
         }
 
@@ -334,6 +358,21 @@ public final class MuplarServices {
                     FrameworkDeviceController.finishActiveActivity();
                 }
                 return Boolean.TRUE;
+            }
+            if ("getRunningAppProcesses".equals(name)) {
+                java.util.List<android.app.ActivityManager.RunningAppProcessInfo> list =
+                    new java.util.ArrayList<android.app.ActivityManager.RunningAppProcessInfo>();
+                android.app.ActivityManager.RunningAppProcessInfo info =
+                    new android.app.ActivityManager.RunningAppProcessInfo();
+                info.pid = 1000;
+                info.processName = "";
+                FrameworkDeviceController.ActivityRecord act = FrameworkDeviceController.activeRecord();
+                if (act != null && act.packageName != null) {
+                    info.processName = act.packageName;
+                    info.pkgList = new String[] { act.packageName };
+                }
+                list.add(info);
+                return list;
             }
             if ("startActivity".equals(name) || "startActivityAsUser".equals(name)) {
                 android.content.Intent intent = null;
@@ -395,8 +434,33 @@ public final class MuplarServices {
 
         private Object inputManagerValue(Method method, Object[] args) {
             String name = method.getName();
+            System.out.println("[Muplar/ART] IInputManager invoke: " + name
+                + " args=" + java.util.Arrays.toString(args));
             if ("getInputDeviceIds".equals(name)) {
-                return new int[] { 1 };
+                return new int[] { -1, 1 };
+            }
+            if ("getInputDevice".equals(name)) {
+                int id = args != null && args.length > 0 && args[0] instanceof Integer ? (Integer) args[0] : -1;
+                try {
+                    Class<?> builderClass = Class.forName("android.view.InputDevice$Builder");
+                    Object builder = builderClass.getDeclaredConstructor().newInstance();
+                    builderClass.getMethod("setId", int.class).invoke(builder, id);
+                    builderClass.getMethod("setName", String.class).invoke(builder, "Virtual");
+                    builderClass.getMethod("setDescriptor", String.class).invoke(builder, "virtual");
+                    builderClass.getMethod("setSources", int.class).invoke(builder, 0x00000101 /* SOURCE_KEYBOARD */);
+                    builderClass.getMethod("setKeyboardType", int.class).invoke(builder, 2 /* KEYBOARD_TYPE_ALPHABETIC */);
+                    try {
+                        Class<?> kcmClass = Class.forName("android.view.KeyCharacterMap");
+                        Object kcm = kcmClass.getMethod("obtainEmptyMap", int.class).invoke(null, id);
+                        if (kcm != null) {
+                            builderClass.getMethod("setKeyCharacterMap", kcmClass).invoke(builder, kcm);
+                        }
+                    } catch (Throwable ignored) {}
+                    return builderClass.getMethod("build").invoke(builder);
+                } catch (Throwable t) {
+                    System.err.println("[Muplar/ART] getInputDevice fallback failed: " + t);
+                    return null;
+                }
             }
             if ("hasKeys".equals(name)) {
                 int[] keys = args != null && args.length > 2 && args[2] instanceof int[]
@@ -442,6 +506,206 @@ public final class MuplarServices {
                 return createSyntheticWallpaperColors();
             }
             return null;
+        }
+
+        private Object displayManagerValue(Method method, Object[] args) {
+            String name = method.getName();
+            if ("getDisplayInfo".equals(name)) {
+                int displayId = args != null && args.length > 0
+                    ? ((Integer) args[0]).intValue() : 0;
+                try {
+                    return displayId == 0 ? createDisplayInfo() : null;
+                } catch (Throwable t) {
+                    return null;
+                }
+            }
+            if ("getDisplayIds".equals(name)) {
+                return new int[] { 0 };
+            }
+            if ("getPossibleDisplayInfo".equals(name)) {
+                int displayId = args != null && args.length > 0
+                    ? ((Integer) args[0]).intValue() : 0;
+                try {
+                    return displayId == 0 ? Collections.singletonList(createDisplayInfo()) : Collections.emptyList();
+                } catch (Throwable t) {
+                    return Collections.emptyList();
+                }
+            }
+            if ("getPreferredWideGamutColorSpaceId".equals(name)) {
+                return Integer.valueOf(0);
+            }
+            return null;
+        }
+
+        private Object powerManagerValue(Method method, Object[] args) {
+            String name = method.getName();
+            Class<?> returnType = method.getReturnType();
+            if ("isDeviceIdleMode".equals(name) || "isPowerSaveMode".equals(name) || "isLowPowerModeEnabled".equals(name)) {
+                return Boolean.FALSE;
+            }
+            if ("isInteractive".equals(name) || "isIgnoringBatteryOptimizations".equals(name)) {
+                return Boolean.TRUE;
+            }
+            return defaultValue(returnType);
+        }
+
+        private static Object buildMockNetwork() {
+            try {
+                Class<?> netClass = Class.forName("android.net.Network");
+                Constructor<?>[] ctors = netClass.getDeclaredConstructors();
+                for (Constructor<?> ctor : ctors) {
+                    ctor.setAccessible(true);
+                    Class<?>[] p = ctor.getParameterTypes();
+                    if (p.length == 1 && p[0] == Integer.TYPE) {
+                        return ctor.newInstance(100);
+                    }
+                }
+            } catch (Throwable t) {
+                System.err.println("[Muplar/ART] buildMockNetwork failed: " + t);
+            }
+            return null;
+        }
+
+        private static Object buildMockNetworkCapabilities() {
+            try {
+                Class<?> ncClass = Class.forName("android.net.NetworkCapabilities");
+                Constructor<?> ctor = ncClass.getDeclaredConstructor();
+                ctor.setAccessible(true);
+                Object nc = ctor.newInstance();
+                try {
+                    Method addCap = ncClass.getMethod("addCapability", Integer.TYPE);
+                    addCap.invoke(nc, 12); // NET_CAPABILITY_INTERNET
+                    addCap.invoke(nc, 13); // NET_CAPABILITY_NOT_RESTRICTED
+                    addCap.invoke(nc, 14); // NET_CAPABILITY_TRUSTED
+                    addCap.invoke(nc, 15); // NET_CAPABILITY_NOT_VPN
+                    addCap.invoke(nc, 16); // NET_CAPABILITY_VALIDATED
+                } catch (Throwable ignored) {}
+                try {
+                    Method addTransport = ncClass.getMethod("addTransportType", Integer.TYPE);
+                    addTransport.invoke(nc, 1); // TRANSPORT_WIFI
+                } catch (Throwable ignored) {}
+                return nc;
+            } catch (Throwable t) {
+                System.err.println("[Muplar/ART] buildMockNetworkCapabilities failed: " + t);
+                return null;
+            }
+        }
+
+        private static Object buildMockNetworkInfo() {
+            try {
+                Class<?> niClass = Class.forName("android.net.NetworkInfo");
+                Constructor<?>[] ctors = niClass.getDeclaredConstructors();
+                for (Constructor<?> ctor : ctors) {
+                    ctor.setAccessible(true);
+                    Class<?>[] p = ctor.getParameterTypes();
+                    if (p.length == 4 && p[0] == Integer.TYPE && p[1] == Integer.TYPE && p[2] == String.class && p[3] == String.class) {
+                        Object ni = ctor.newInstance(1 /* TYPE_WIFI */, 0, "WIFI", "");
+                        try {
+                            Class<?> detailedStateClass = Class.forName("android.net.NetworkInfo$DetailedState");
+                            @SuppressWarnings({"unchecked", "rawtypes"})
+                            Object connectedState = Enum.valueOf((Class<Enum>)detailedStateClass, "CONNECTED");
+                            Method setDetailed = niClass.getMethod("setDetailedState", detailedStateClass, String.class, String.class);
+                            setDetailed.invoke(ni, connectedState, null, null);
+                        } catch (Throwable ignored) {}
+                        try {
+                            Class<?> stateClass = Class.forName("android.net.NetworkInfo$State");
+                            @SuppressWarnings({"unchecked", "rawtypes"})
+                            Object connectedState = Enum.valueOf((Class<Enum>)stateClass, "CONNECTED");
+                            Field stateField = niClass.getDeclaredField("mState");
+                            stateField.setAccessible(true);
+                            stateField.set(ni, connectedState);
+                        } catch (Throwable ignored) {}
+                        return ni;
+                    }
+                }
+            } catch (Throwable t) {
+                System.err.println("[Muplar/ART] buildMockNetworkInfo failed: " + t);
+            }
+            return null;
+        }
+
+        private Object connectivityManagerValue(Method method, Object[] args) {
+            String name = method.getName();
+            Class<?> returnType = method.getReturnType();
+            if ("getActiveNetwork".equals(name) || "getActiveNetworkForUid".equals(name)) {
+                return buildMockNetwork();
+            }
+            if ("getAllNetworks".equals(name)) {
+                Object net = buildMockNetwork();
+                if (net != null) {
+                    Object array = Array.newInstance(net.getClass(), 1);
+                    Array.set(array, 0, net);
+                    return array;
+                }
+            }
+            if ("getNetworkCapabilities".equals(name) || "getDefaultNetworkCapabilitiesForUser".equals(name)
+                || "getNetworkCapabilitiesForUid".equals(name)) {
+                if (returnType.isArray()) {
+                    Object nc = buildMockNetworkCapabilities();
+                    if (nc != null) {
+                        Object array = Array.newInstance(nc.getClass(), 1);
+                        Array.set(array, 0, nc);
+                        return array;
+                    }
+                } else {
+                    return buildMockNetworkCapabilities();
+                }
+            }
+            if ("getActiveNetworkInfo".equals(name) || "getActiveNetworkInfoForUid".equals(name)
+                || "getNetworkInfo".equals(name) || "getNetworkInfoForUid".equals(name)
+                || "getNetworkInfoForNetwork".equals(name)) {
+                return buildMockNetworkInfo();
+            }
+            if ("getAllNetworkInfo".equals(name)) {
+                Object ni = buildMockNetworkInfo();
+                if (ni != null) {
+                    Object array = Array.newInstance(ni.getClass(), 1);
+                    Array.set(array, 0, ni);
+                    return array;
+                }
+            }
+            if ("isActiveNetworkMetered".equals(name)) {
+                return Boolean.FALSE;
+            }
+            if ("isDefaultNetworkActive".equals(name)) {
+                return Boolean.TRUE;
+            }
+            if ("getRestrictBackgroundStatus".equals(name)) {
+                return Integer.valueOf(1);
+            }
+            if ("getLinkProperties".equals(name) || "getLinkPropertiesForType".equals(name)) {
+                try {
+                    Class<?> lpClass = Class.forName("android.net.LinkProperties");
+                    Constructor<?> ctor = lpClass.getDeclaredConstructor();
+                    ctor.setAccessible(true);
+                    Object lp = ctor.newInstance();
+                    try {
+                        Method setIface = lpClass.getMethod("setInterfaceName", String.class);
+                        setIface.invoke(lp, "wlan0");
+                    } catch (Throwable ignored) {}
+                    return lp;
+                } catch (Throwable ignored) {}
+            }
+            if ("android.net.NetworkRequest".equals(returnType.getName())) {
+                if (args != null) {
+                    for (Object arg : args) {
+                        if (arg != null && "android.net.NetworkRequest".equals(arg.getClass().getName())) {
+                            return arg;
+                        }
+                    }
+                }
+                try {
+                    Class<?> nrClass = Class.forName("android.net.NetworkRequest");
+                    Constructor<?>[] ctors = nrClass.getDeclaredConstructors();
+                    for (Constructor<?> ctor : ctors) {
+                        ctor.setAccessible(true);
+                        if (ctor.getParameterTypes().length == 0) {
+                            return ctor.newInstance();
+                        }
+                    }
+                } catch (Throwable ignored) {}
+            }
+            return defaultValue(returnType);
         }
 
         private Object createSyntheticWallpaperColors() {
@@ -778,13 +1042,15 @@ public final class MuplarServices {
         String label = "";
         String apk = "";
         String application = "";
+        int icon = 0;
+        String iconPath = "";
     }
 
     /**
      * Reads the host-written package registry via muplard's QueryPackages
      * opcode. The host (PrefixManagerApp.mm) writes one record per
      * installed, non-launcher APK, "---"-separated, each a block of
-     * "key=value" lines (package/activity/label/apk).
+     * "key=value" lines (package/activity/label/apk/application/icon/icon_path).
      */
     static List<InstalledPackage> queryInstalledPackages() {
         List<InstalledPackage> result = new ArrayList<>();
@@ -815,6 +1081,14 @@ public final class MuplarServices {
             } else if (line.startsWith("application=")) {
                 current.application = line.substring(12);
                 any = true;
+            } else if (line.startsWith("icon=")) {
+                try {
+                    current.icon = Integer.parseInt(line.substring(5).trim());
+                    any = true;
+                } catch (Throwable ignored) {}
+            } else if (line.startsWith("icon_path=")) {
+                current.iconPath = line.substring(10).trim();
+                any = true;
             }
         }
         if (any && !current.packageName.isEmpty())
@@ -839,7 +1113,9 @@ public final class MuplarServices {
         setFieldIfPresent(info, "uid", Integer.valueOf(10000));
         setFieldIfPresent(info, "targetSdkVersion", Integer.valueOf(35));
         setFieldIfPresent(info, "flags", Integer.valueOf(0));
-        if (defaultIconResource != 0) {
+        if (pkg.icon != 0) {
+            setFieldIfPresent(info, "icon", Integer.valueOf(pkg.icon));
+        } else if (defaultIconResource != 0) {
             setFieldIfPresent(info, "icon", Integer.valueOf(defaultIconResource));
         }
         if (pkg.label != null && !pkg.label.isEmpty())
@@ -861,7 +1137,9 @@ public final class MuplarServices {
         setFieldIfPresent(activityInfo, "applicationInfo", appInfo);
         setFieldIfPresent(activityInfo, "enabled", Boolean.TRUE);
         setFieldIfPresent(activityInfo, "exported", Boolean.TRUE);
-        if (defaultIconResource != 0) {
+        if (pkg.icon != 0) {
+            setFieldIfPresent(activityInfo, "icon", Integer.valueOf(pkg.icon));
+        } else if (defaultIconResource != 0) {
             setFieldIfPresent(activityInfo, "icon",
                 Integer.valueOf(defaultIconResource));
         }
@@ -931,6 +1209,15 @@ public final class MuplarServices {
         setFieldIfPresent(info, "displayGroupId", Integer.valueOf(0));
         setFieldIfPresent(info, "name", "Muplar Display");
         setFieldIfPresent(info, "uniqueId", "muplar:display:0");
+        try {
+            Class<?> addressType = Class.forName("android.view.DisplayAddress");
+            java.lang.reflect.Method fromPhysicalDisplayId =
+                addressType.getDeclaredMethod("fromPhysicalDisplayId", Long.TYPE);
+            fromPhysicalDisplayId.setAccessible(true);
+            setFieldIfPresent(info, "address",
+                fromPhysicalDisplayId.invoke(null, Long.valueOf(1L)));
+        } catch (Throwable ignored) {
+        }
         setFieldIfPresent(info, "appWidth", Integer.valueOf(1080));
         setFieldIfPresent(info, "appHeight", Integer.valueOf(1920));
         setFieldIfPresent(info, "logicalWidth", Integer.valueOf(1080));
@@ -945,6 +1232,19 @@ public final class MuplarServices {
         setFieldIfPresent(info, "defaultModeId", Integer.valueOf(1));
         setFieldIfPresent(info, "logicalDensityDpi", Integer.valueOf(480));
         setFieldIfPresent(info, "renderFrameRate", Float.valueOf(60.0f));
+
+        Class<?> modeType = Class.forName("android.view.Display$Mode");
+        java.lang.reflect.Constructor<?> modeCtor =
+            modeType.getDeclaredConstructor(
+                Integer.TYPE, Integer.TYPE, Integer.TYPE, Float.TYPE);
+        modeCtor.setAccessible(true);
+        Object mode = modeCtor.newInstance(
+            Integer.valueOf(1), Integer.valueOf(1080),
+            Integer.valueOf(1920), Float.valueOf(60.0f));
+        Object modes = java.lang.reflect.Array.newInstance(modeType, 1);
+        java.lang.reflect.Array.set(modes, 0, mode);
+        setFieldIfPresent(info, "supportedModes", modes);
+        setFieldIfPresent(info, "supportedRefreshRates", new float[] { 60.0f });
         return info;
     }
 

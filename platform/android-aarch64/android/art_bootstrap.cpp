@@ -375,6 +375,7 @@ std::filesystem::path stage_art_apk_for_sysroot(
 
     std::error_code ec;
     std::filesystem::create_directories(staging_dir, ec);
+    std::filesystem::create_directories(absolute_sysroot / "data" / "user" / "0", ec);
     if (ec) {
         throw std::runtime_error(
             "unable to create ART APK staging directory: " +

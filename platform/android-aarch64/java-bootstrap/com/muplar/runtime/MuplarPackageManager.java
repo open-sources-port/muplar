@@ -66,12 +66,26 @@ public final class MuplarPackageManager extends MuplarPackageManagerBridge {
     @Override public ActivityInfo getActivityInfo(ComponentName component, int flags)
             throws NameNotFoundException {
         if (component != null) {
+            String targetCls = component.getClassName();
+            if (targetCls != null && targetCls.startsWith(".")) {
+                targetCls = component.getPackageName() + targetCls;
+            }
             for (MuplarServices.InstalledPackage pkg :
                     MuplarServices.queryInstalledPackages()) {
-                if (component.getPackageName().equals(pkg.packageName)
-                    && component.getClassName().equals(pkg.activity)) {
-                    return createActivityInfo(pkg);
+                if (component.getPackageName().equals(pkg.packageName)) {
+                    if (targetCls == null || targetCls.isEmpty()
+                        || targetCls.equals(pkg.activity)
+                        || (pkg.activity != null && pkg.activity.endsWith(targetCls))) {
+                        return createActivityInfo(pkg);
+                    }
                 }
+            }
+            if (this.packageName.equals(component.getPackageName())) {
+                ActivityInfo ai = new ActivityInfo();
+                ai.packageName = this.packageName;
+                ai.name = component.getClassName();
+                ai.applicationInfo = this.applicationInfo;
+                return ai;
             }
         }
         throw new NameNotFoundException(component != null
@@ -109,9 +123,74 @@ public final class MuplarPackageManager extends MuplarPackageManagerBridge {
     @Override public int getComponentEnabledSetting(ComponentName componentName) {
         return COMPONENT_ENABLED_STATE_DEFAULT;
     }
+    private static final java.util.Map<String, Resources> packageResourcesCache =
+        new java.util.concurrent.ConcurrentHashMap<>();
+
+    private Resources getResourcesForPackage(String targetPackage, ApplicationInfo appInfo) {
+        if (targetPackage == null || targetPackage.isEmpty() || targetPackage.equals(packageName)) {
+            return resources;
+        }
+        Resources res = packageResourcesCache.get(targetPackage);
+        if (res != null) return res;
+        String apk = null;
+        if (appInfo != null && appInfo.sourceDir != null && !appInfo.sourceDir.isEmpty()) {
+            apk = appInfo.sourceDir;
+        } else {
+            MuplarServices.InstalledPackage pkg = MuplarServices.findInstalledPackage(targetPackage);
+            if (pkg != null && pkg.apk != null && !pkg.apk.isEmpty()) {
+                apk = pkg.apk;
+            }
+        }
+        if (apk != null && !apk.isEmpty()) {
+            res = MuplarContext.createResources(apk);
+            if (res != null) {
+                packageResourcesCache.put(targetPackage, res);
+                return res;
+            }
+        }
+        return resources;
+    }
+
+    private Drawable loadIconFromApk(String targetPackage) {
+        if (targetPackage == null || targetPackage.isEmpty()) return null;
+        MuplarServices.InstalledPackage pkg = MuplarServices.findInstalledPackage(targetPackage);
+        if (pkg == null || pkg.apk == null || pkg.apk.isEmpty()) return null;
+        try (java.util.zip.ZipFile zip = new java.util.zip.ZipFile(pkg.apk)) {
+            java.util.zip.ZipEntry entry = null;
+            if (pkg.iconPath != null && !pkg.iconPath.isEmpty()) {
+                entry = zip.getEntry(pkg.iconPath.startsWith("/") ? pkg.iconPath.substring(1) : pkg.iconPath);
+            }
+            if (entry == null) {
+                java.util.Enumeration<? extends java.util.zip.ZipEntry> entries = zip.entries();
+                while (entries.hasMoreElements()) {
+                    java.util.zip.ZipEntry e = entries.nextElement();
+                    String name = e.getName();
+                    if ((name.endsWith(".png") || name.endsWith(".webp")) &&
+                        (name.contains("ic_launcher") || name.contains("icon") || name.contains("logo"))) {
+                        entry = e;
+                        if (name.contains("xxhdpi") || name.contains("xxxhdpi")) break;
+                    }
+                }
+            }
+            if (entry != null) {
+                try (java.io.InputStream is = zip.getInputStream(entry)) {
+                    android.graphics.Bitmap bitmap = android.graphics.BitmapFactory.decodeStream(is);
+                    if (bitmap != null) {
+                        return new android.graphics.drawable.BitmapDrawable(resources, bitmap);
+                    }
+                }
+            }
+        } catch (Throwable ignored) {
+        }
+        return null;
+    }
+
     @Override public Drawable getDefaultActivityIcon() { return defaultIcon(); }
     @Override public Drawable getDrawable(String packageName, int resId, ApplicationInfo appInfo) {
-        try { return resources.getDrawable(resId, null); } catch (Throwable ignored) { return null; }
+        try {
+            Resources res = getResourcesForPackage(packageName, appInfo);
+            return res != null ? res.getDrawable(resId, null) : resources.getDrawable(resId, null);
+        } catch (Throwable ignored) { return null; }
     }
     @Override protected Drawable muplarLoadItemIcon(PackageItemInfo itemInfo,
                                                     ApplicationInfo appInfo) {
@@ -119,11 +198,11 @@ public final class MuplarPackageManager extends MuplarPackageManagerBridge {
         if (itemInfo != null && itemInfo.icon != 0) {
             try {
                 drawable = getDrawable(itemInfo.packageName, itemInfo.icon, appInfo);
-                if (drawable instanceof android.graphics.drawable.AdaptiveIconDrawable) {
-                    drawable = null;
-                }
             } catch (Throwable ignored) {
             }
+        }
+        if (drawable == null && itemInfo != null) {
+            drawable = loadIconFromApk(itemInfo.packageName);
         }
         return drawable != null ? drawable : defaultIcon();
     }
@@ -180,11 +259,30 @@ public final class MuplarPackageManager extends MuplarPackageManagerBridge {
             throws NameNotFoundException { throw new NameNotFoundException(); }
     @Override public ActivityInfo getReceiverInfo(ComponentName component, int flags)
             throws NameNotFoundException { throw new NameNotFoundException(); }
-    @Override public Resources getResourcesForActivity(ComponentName activity) { return resources; }
-    @Override public Resources getResourcesForApplication(ApplicationInfo app) { return resources; }
+    @Override public Resources getResourcesForActivity(ComponentName activity) {
+        if (activity != null) {
+            Resources res = getResourcesForPackage(activity.getPackageName(), null);
+            if (res != null) return res;
+        }
+        return resources;
+    }
+    @Override public Resources getResourcesForApplication(ApplicationInfo app) {
+        if (app != null) {
+            Resources res = getResourcesForPackage(app.packageName, app);
+            if (res != null) return res;
+        }
+        return resources;
+    }
     @Override public Resources getResourcesForApplication(String appPackageName)
             throws NameNotFoundException {
         if (packageName.equals(appPackageName)) return resources;
+        Resources res = getResourcesForPackage(appPackageName, null);
+        if (res != null && res != resources) return res;
+        for (MuplarServices.InstalledPackage pkg : MuplarServices.queryInstalledPackages()) {
+            if (appPackageName != null && appPackageName.equals(pkg.packageName)) {
+                return res != null ? res : resources;
+            }
+        }
         throw new NameNotFoundException(appPackageName);
     }
     @Override public ServiceInfo getServiceInfo(ComponentName component, int flags)
@@ -240,12 +338,21 @@ public final class MuplarPackageManager extends MuplarPackageManagerBridge {
             + result.size());
         return result;
     }
+    @Override public List<ResolveInfo> queryIntentActivities(Intent intent, ResolveInfoFlags flags) {
+        return queryIntentActivities(intent, flags != null ? (int) flags.getValue() : 0);
+    }
     @Override public List<ResolveInfo> queryIntentActivityOptions(ComponentName caller,
             Intent[] specifics, Intent intent, int flags) { return Collections.emptyList(); }
     @Override public List<ResolveInfo> queryIntentContentProviders(Intent intent, int flags) {
         return Collections.emptyList();
     }
+    @Override public List<ResolveInfo> queryIntentContentProviders(Intent intent, ResolveInfoFlags flags) {
+        return Collections.emptyList();
+    }
     @Override public List<ResolveInfo> queryIntentServices(Intent intent, int flags) {
+        return Collections.emptyList();
+    }
+    @Override public List<ResolveInfo> queryIntentServices(Intent intent, ResolveInfoFlags flags) {
         return Collections.emptyList();
     }
     @Override public List<PermissionInfo> queryPermissionsByGroup(String group, int flags) {
@@ -256,6 +363,15 @@ public final class MuplarPackageManager extends MuplarPackageManagerBridge {
     @Override public ResolveInfo resolveActivity(Intent intent, int flags) {
         return createResolveInfo();
     }
+    @Override public ResolveInfo resolveActivity(Intent intent, ResolveInfoFlags flags) {
+        return resolveActivity(intent, flags != null ? (int) flags.getValue() : 0);
+    }
+    @Override public ResolveInfo resolveService(Intent intent, int flags) {
+        return null;
+    }
+    @Override public ResolveInfo resolveService(Intent intent, ResolveInfoFlags flags) {
+        return null;
+    }
     @Override public ProviderInfo resolveContentProvider(String name, int flags) { return null; }
     @Override public Property getProperty(String propertyName,
             ComponentName componentName) throws NameNotFoundException {
@@ -265,7 +381,6 @@ public final class MuplarPackageManager extends MuplarPackageManagerBridge {
             String packageName) throws NameNotFoundException {
         throw new NameNotFoundException(propertyName);
     }
-    @Override public ResolveInfo resolveService(Intent intent, int flags) { return null; }
     @Override public void setApplicationCategoryHint(String packageName, int categoryHint) {}
     @Override public void setApplicationEnabledSetting(String packageName, int newState, int flags) {}
     @Override public void setComponentEnabledSetting(ComponentName componentName, int newState, int flags) {}
@@ -302,6 +417,7 @@ public final class MuplarPackageManager extends MuplarPackageManagerBridge {
         activity.applicationInfo = createApplicationInfo(pkg);
         activity.enabled = true;
         activity.exported = true;
+        activity.icon = pkg.icon;
         if (pkg.label != null && !pkg.label.isEmpty())
             activity.nonLocalizedLabel = pkg.label;
         return activity;
@@ -316,6 +432,7 @@ public final class MuplarPackageManager extends MuplarPackageManagerBridge {
         info.publicSourceDir = pkg.apk;
         info.uid = applicationInfo != null ? applicationInfo.uid : 10000;
         info.targetSdkVersion = 35;
+        info.icon = pkg.icon;
         if (pkg.label != null && !pkg.label.isEmpty())
             info.nonLocalizedLabel = pkg.label;
         return info;

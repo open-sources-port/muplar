@@ -236,6 +236,7 @@ public final class FrameworkDeviceController {
             normalizedTab + " package=" + normalizedPackage + " activity=" +
             normalizedActivity + " task=" + record.task + " token=" + (token != null));
         flushPendingActions();
+        scheduleFrame(record);
         start();
     }
 
@@ -263,6 +264,11 @@ public final class FrameworkDeviceController {
             nextGen, "focus-tab", tab, apkPath, packageName, activityName, applicationName);
         System.out.println("[DeviceController] launchApp tab=" + tab
             + " package=" + packageName + " activity=" + activityName);
+        try {
+            FrameworkServiceClient.request("device-action",
+                "focus-tab\n" + tab + "\n" + apkPath + "\n" + packageName + "\n" + activityName + "\n" + applicationName);
+        } catch (Throwable ignored) {
+        }
         dispatchAction(action);
     }
 
@@ -669,7 +675,7 @@ public final class FrameworkDeviceController {
     private static void applyInputOnMain(DeviceInput input) {
         try {
             ActivityRecord record = activityForTab(input.tab);
-            if (record == null)
+            if (record == null || (!record.foreground && activeRecord() != null && activeRecord().foreground))
                 record = activeRecord();
             System.out.println("[DeviceController] input apply tab=" +
                 input.tab + " type=" + input.type + " action=" +
@@ -840,17 +846,33 @@ public final class FrameworkDeviceController {
             focusRecord(record);
             return;
         }
-        if (next.apkPath.isEmpty() || next.packageName.isEmpty() ||
-            next.activityName.isEmpty()) {
+        String apkPath = next.apkPath;
+        String packageName = next.packageName;
+        String activityName = next.activityName;
+        String applicationName = next.applicationName;
+        if (packageName.isEmpty() && !next.tab.isEmpty() && !"launcher".equals(next.tab)) {
+            packageName = next.tab;
+        }
+        MuplarServices.InstalledPackage pkg = MuplarServices.findInstalledPackage(packageName);
+        if (pkg != null) {
+            if (apkPath.isEmpty()) apkPath = pkg.apk;
+            if (activityName.isEmpty()) activityName = pkg.activity;
+            if (applicationName.isEmpty()) applicationName = pkg.application;
+        }
+        if (apkPath.isEmpty() || packageName.isEmpty() || activityName.isEmpty()) {
             focusRecord(activeRecord());
             return;
         }
         moveActiveActivityToBackground();
-        boolean launched = ArtApkMain.launchActivity(next.tab, next.apkPath,
-            next.packageName, next.activityName, next.applicationName);
+        String tab = next.tab;
+        if ((tab.contains("/") || tab.contains(":")) && !packageName.isEmpty()) {
+            tab = packageName;
+        }
+        boolean launched = ArtApkMain.launchActivity(tab, apkPath,
+            packageName, activityName, applicationName);
         if (!launched)
             System.err.println("[DeviceController] app launch ignored package="
-                + next.packageName + " activity=" + next.activityName);
+                + packageName + " activity=" + activityName);
     }
 
     public static void startActivityInCurrentTask(final ActivityRecord caller,
@@ -964,9 +986,18 @@ public final class FrameworkDeviceController {
                         m.invoke(stateManager, allAppsState, Boolean.FALSE);
                         invoked = true;
                         break;
-                    } else if (params.length == 1 && params[0].isAssignableFrom(launcherStateClass)) {
-                        m.invoke(stateManager, allAppsState);
-                        invoked = true;
+                    }
+                }
+            }
+            if (!invoked) {
+                for (java.lang.reflect.Method m : stateManager.getClass().getMethods()) {
+                    if ("goToState".equals(m.getName())) {
+                        Class<?>[] params = m.getParameterTypes();
+                        if (params.length == 1 && params[0].isAssignableFrom(launcherStateClass)) {
+                            m.invoke(stateManager, allAppsState);
+                            invoked = true;
+                            break;
+                        }
                     }
                 }
             }
@@ -979,6 +1010,55 @@ public final class FrameworkDeviceController {
                 }
             }
             System.out.println("[DeviceController] openAllApps invoked=" + invoked);
+
+            // Diagnostics for appsView & transition controller
+            try {
+                java.lang.reflect.Method getAppsView = activity.getClass().getMethod("getAppsView");
+                android.view.View appsView = (android.view.View) getAppsView.invoke(activity);
+                if (appsView != null) {
+                    System.out.println("[DeviceController] appsView: " + appsView.getClass().getName()
+                        + " vis=" + appsView.getVisibility()
+                        + " alpha=" + appsView.getAlpha()
+                        + " bounds=" + appsView.getLeft() + "," + appsView.getTop() + "-" + appsView.getRight() + "," + appsView.getBottom()
+                        + " transY=" + appsView.getTranslationY()
+                        + " parent=" + appsView.getParent());
+                    if (appsView instanceof android.view.ViewGroup) {
+                        android.view.ViewGroup vg = (android.view.ViewGroup) appsView;
+                        System.out.println("[DeviceController] appsView children=" + vg.getChildCount());
+                        for (int i = 0; i < vg.getChildCount(); i++) {
+                            android.view.View c = vg.getChildAt(i);
+                            System.out.println("[DeviceController]   appsView child[" + i + "]=" + c.getClass().getName()
+                                + " vis=" + c.getVisibility()
+                                + " bounds=" + c.getLeft() + "," + c.getTop() + "-" + c.getRight() + "," + c.getBottom()
+                                + " transY=" + c.getTranslationY()
+                                + " alpha=" + c.getAlpha());
+                            if (c instanceof android.view.ViewGroup) {
+                                android.view.ViewGroup sub = (android.view.ViewGroup) c;
+                                for (int j = 0; j < Math.min(5, sub.getChildCount()); j++) {
+                                    android.view.View sc = sub.getChildAt(j);
+                                    System.out.println("[DeviceController]     sub[" + j + "]=" + sc.getClass().getName()
+                                        + " vis=" + sc.getVisibility() + " bounds=" + sc.getLeft() + "," + sc.getTop()
+                                        + "-" + sc.getRight() + "," + sc.getBottom());
+                                }
+                            }
+                        }
+                    }
+                }
+            } catch (Throwable t) {
+                System.err.println("[DeviceController] appsView inspect failed: " + t);
+            }
+
+            try {
+                java.lang.reflect.Method getAllAppsController = activity.getClass().getMethod("getAllAppsController");
+                Object controller = getAllAppsController.invoke(activity);
+                if (controller != null) {
+                    java.lang.reflect.Method getProgress = controller.getClass().getMethod("getProgress");
+                    System.out.println("[DeviceController] AllAppsTransitionController progress=" + getProgress.invoke(controller));
+                }
+            } catch (Throwable t) {
+                System.err.println("[DeviceController] controller inspect failed: " + t);
+            }
+
             focusRecord(launcher);
             scheduleFrame(launcher);
             MuplarFramePresenter.requestBurst();
@@ -1007,9 +1087,18 @@ public final class FrameworkDeviceController {
                         m.invoke(stateManager, normalState, Boolean.FALSE);
                         invoked = true;
                         break;
-                    } else if (params.length == 1 && params[0].isAssignableFrom(launcherStateClass)) {
-                        m.invoke(stateManager, normalState);
-                        invoked = true;
+                    }
+                }
+            }
+            if (!invoked) {
+                for (java.lang.reflect.Method m : stateManager.getClass().getMethods()) {
+                    if ("goToState".equals(m.getName())) {
+                        Class<?>[] params = m.getParameterTypes();
+                        if (params.length == 1 && params[0].isAssignableFrom(launcherStateClass)) {
+                            m.invoke(stateManager, normalState);
+                            invoked = true;
+                            break;
+                        }
                     }
                 }
             }
@@ -1110,6 +1199,7 @@ public final class FrameworkDeviceController {
         if (previous != null && previous != record)
             moveActiveActivityToBackground();
         activeTab = record.tab;
+        scheduleFrame(record);
         if (record.foreground) return;
         invokeLifecycle(record, "onRestart");
         invokeLifecycle(record, "onStart");

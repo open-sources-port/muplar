@@ -12,6 +12,7 @@
 #include <unistd.h>
 #include <sys/socket.h>
 #include <sys/un.h>
+#include "muplar_font.h"
 
 #define PROP_VALUE_MAX 92
 
@@ -38,10 +39,14 @@ static uintptr_t muplar_next_velocity_tracker_token = 0x32000;
 static uintptr_t muplar_next_region_token = 0x36000;
 static uintptr_t muplar_next_surface_control_token = 0x38000;
 static uintptr_t muplar_next_surface_transaction_token = 0x3a000;
+#if 0
 static uintptr_t muplar_next_sqlite_token = 0x3c000;
+#endif
 static uintptr_t muplar_next_input_channel_token = 0x3d000;
 static uintptr_t muplar_next_input_event_receiver_token = 0x3d800;
+#if 0
 static uintptr_t muplar_next_cursor_window_token = 0x3e000;
+#endif
 static uintptr_t muplar_next_bitmap_token = 0x40000000;
 static uintptr_t muplar_next_font_token = 0x50000000;
 static uintptr_t muplar_next_font_family_token = 0x60000000;
@@ -60,6 +65,7 @@ struct muplar_frame_header {
     uint64_t bytes;
 };
 
+#if 0
 struct muplar_sqlite_statement {
     jlong handle;
     jint parameter_count;
@@ -67,6 +73,7 @@ struct muplar_sqlite_statement {
 };
 
 static struct muplar_sqlite_statement muplar_sqlite_statements[256];
+#endif
 
 struct muplar_bitmap_state {
     jlong token;
@@ -100,7 +107,7 @@ struct muplar_canvas_state {
     int clip_right;
     int clip_bottom;
     int stack_depth;
-    struct muplar_canvas_stack_entry stack[64];
+    struct muplar_canvas_stack_entry stack[512];
 };
 
 struct muplar_filter_state {
@@ -115,6 +122,7 @@ struct muplar_paint_state {
     jlong color_filter;
     jlong mask_filter;
     jlong shader;
+    jfloat text_size;
 };
 
 static struct muplar_bitmap_state muplar_bitmaps[2048];
@@ -124,11 +132,38 @@ static struct muplar_filter_state muplar_filters[512];
 static uintptr_t muplar_next_filter_token = 0x30000;
 static uintptr_t muplar_next_mask_filter_token = 0x34000;
 static uintptr_t muplar_next_path_effect_token = 0x38000;
+
+struct muplar_shader_state {
+    jlong token;
+    jlong bitmap_token;
+};
+static struct muplar_shader_state muplar_shaders[512];
+
+static struct muplar_shader_state *muplar_find_shader(jlong token)
+{
+    size_t i;
+    if (!token)
+        return NULL;
+    for (i = 0; i < sizeof(muplar_shaders) / sizeof(muplar_shaders[0]); i++)
+        if (muplar_shaders[i].token == token)
+            return &muplar_shaders[i];
+    return NULL;
+}
+
 static unsigned muplar_draw_color_count;
 static unsigned muplar_draw_paint_count;
 static unsigned muplar_draw_rect_count;
 static unsigned muplar_draw_text_count;
 static unsigned muplar_draw_bitmap_count;
+
+static inline int muplar_render_debug_enabled(void) {
+    static int cached = -1;
+    if (cached < 0) {
+        cached = (getenv("MUPLAR_DEBUG_RENDER") != NULL) ? 1 : 0;
+    }
+    return cached;
+}
+#define MUPLAR_DBG_RENDER(...) do { if (muplar_render_debug_enabled()) fprintf(stderr, __VA_ARGS__); } while (0)
 
 static struct muplar_bitmap_state *muplar_find_bitmap(jlong token)
 {
@@ -164,6 +199,8 @@ static struct muplar_bitmap_state *muplar_alloc_bitmap(jint width, jint height)
         bitmap->height = height;
         bitmap->bytes_per_pixel = 4;
         bitmap->config = 5; /* ARGB_8888 */
+        MUPLAR_DBG_RENDER("[Muplar/Bitmap] alloc bmp=%p token=0x%llx %dx%d\n",
+                          (void *)bitmap, (unsigned long long)bitmap->token, width, height);
         return bitmap;
     }
     return NULL;
@@ -250,6 +287,10 @@ static int muplar_get_frame_socket(void)
         close(fd);
         return -1;
     }
+    struct timeval tv;
+    tv.tv_sec = 0;
+    tv.tv_usec = 100000; /* 100 ms send timeout */
+    setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv));
     muplar_frame_socket_fd = fd;
     fprintf(stderr, "[Muplar/ART] direct frame socket connected: %s\n", socket_path);
     return muplar_frame_socket_fd;
@@ -510,6 +551,12 @@ static uint32_t muplar_paint_color(jlong token, uint32_t fallback)
 
 static int muplar_floor_to_int(float value)
 {
+    if (isnan(value))
+        return 0;
+    if (value <= -1000000.0f)
+        return -1000000;
+    if (value >= 1000000.0f)
+        return 1000000;
     int i = (int) value;
     if ((float) i > value)
         i--;
@@ -518,6 +565,12 @@ static int muplar_floor_to_int(float value)
 
 static int muplar_ceil_to_int(float value)
 {
+    if (isnan(value))
+        return 0;
+    if (value <= -1000000.0f)
+        return -1000000;
+    if (value >= 1000000.0f)
+        return 1000000;
     int i = (int) value;
     if ((float) i < value)
         i++;
@@ -890,6 +943,7 @@ struct muplar_line_break_result {
 
 static struct muplar_line_break_result muplar_line_break_results[128];
 
+#if 0
 static const char *const muplar_sqlite_default_columns[] = {
     "_id",
     "title",
@@ -929,6 +983,7 @@ static const char *const muplar_sqlite_icon_columns[] = {
     "system_state",
     "keywords",
 };
+#endif
 
 static void muplar_clear_exception(JNIEnv *env);
 
@@ -1464,6 +1519,7 @@ jint Java_android_util_EventLog_writeEvent(JNIEnv *env,
     return 0;
 }
 
+#if 0
 static jlong muplar_SQLite_nOpen(JNIEnv *env, jclass clazz, ...)
 {
     (void) env;
@@ -1726,6 +1782,7 @@ static jstring muplar_CursorWindow_nativeString(JNIEnv *env, jclass clazz, ...)
     (void) clazz;
     return (*env)->NewStringUTF(env, "");
 }
+#endif
 
 jlong Java_android_graphics_Matrix_00024ExtraNatives_nCreate(JNIEnv *env,
                                                              jclass clazz,
@@ -2428,14 +2485,14 @@ void Java_android_graphics_Path_nClose(JNIEnv *env, jclass clazz, jlong path)
     (void) path;
 }
 
-void Java_android_graphics_Path_nReset(JNIEnv *env, jclass clazz, jlong path)
+void Java_android_graphics_Path_nReset(jlong path)
 {
-    Java_android_graphics_Path_nClose(env, clazz, path);
+    (void) path;
 }
 
-void Java_android_graphics_Path_nRewind(JNIEnv *env, jclass clazz, jlong path)
+void Java_android_graphics_Path_nRewind(jlong path)
 {
-    Java_android_graphics_Path_nClose(env, clazz, path);
+    (void) path;
 }
 
 static void muplar_Path_nVoid(JNIEnv *env, jclass clazz, ...)
@@ -2444,30 +2501,24 @@ static void muplar_Path_nVoid(JNIEnv *env, jclass clazz, ...)
     (void) clazz;
 }
 
-jboolean Java_android_graphics_Path_nIsEmpty(JNIEnv *env,
-                                             jclass clazz,
-                                             jlong path)
+jboolean Java_android_graphics_Path_nIsEmpty(jlong path)
 {
-    (void) env;
-    (void) clazz;
     (void) path;
     return JNI_FALSE;
 }
 
-jboolean Java_android_graphics_Path_nIsConvex(JNIEnv *env,
-                                              jclass clazz,
-                                              jlong path)
+jboolean Java_android_graphics_Path_nIsConvex(jlong path)
 {
-    return Java_android_graphics_Path_nIsEmpty(env, clazz, path);
+    (void) path;
+    return JNI_FALSE;
 }
 
-jboolean Java_android_graphics_Path_nIsInterpolatable(JNIEnv *env,
-                                                      jclass clazz,
-                                                      jlong path,
+jboolean Java_android_graphics_Path_nIsInterpolatable(jlong path,
                                                       jlong other)
 {
+    (void) path;
     (void) other;
-    return Java_android_graphics_Path_nIsEmpty(env, clazz, path);
+    return JNI_FALSE;
 }
 
 jboolean Java_android_graphics_Path_nInterpolate(JNIEnv *env,
@@ -2541,23 +2592,15 @@ void Java_android_graphics_Path_nOffset(JNIEnv *env,
     (void) dst;
 }
 
-void Java_android_graphics_Path_nSetFillType(JNIEnv *env,
-                                             jclass clazz,
-                                             jlong path,
+void Java_android_graphics_Path_nSetFillType(jlong path,
                                              jint fill_type)
 {
-    (void) env;
-    (void) clazz;
     (void) path;
     (void) fill_type;
 }
 
-jint Java_android_graphics_Path_nGetFillType(JNIEnv *env,
-                                             jclass clazz,
-                                             jlong path)
+jint Java_android_graphics_Path_nGetFillType(jlong path)
 {
-    (void) env;
-    (void) clazz;
     (void) path;
     return 0;
 }
@@ -2675,20 +2718,16 @@ jlong Java_android_graphics_Paint_nInitWithPaint(JNIEnv *env,
     return Java_android_graphics_Paint_nInit(env, clazz);
 }
 
-void Java_android_graphics_Paint_nSet(JNIEnv *env,
-                                      jclass clazz,
-                                      jlong dst,
-                                      jlong src)
+void Java_android_graphics_Paint_nSet(jlong dst, jlong src)
 {
     struct muplar_paint_state *dst_paint = muplar_find_paint(dst);
     struct muplar_paint_state *src_paint = muplar_find_paint(src);
-    (void) env;
-    (void) clazz;
     if (dst_paint && src_paint) {
         dst_paint->color = src_paint->color;
         dst_paint->color_filter = src_paint->color_filter;
         dst_paint->mask_filter = src_paint->mask_filter;
         dst_paint->shader = src_paint->shader;
+        dst_paint->text_size = src_paint->text_size;
     }
 }
 
@@ -2708,100 +2747,58 @@ jlong Java_android_graphics_Paint_nGetNativeFinalizer(JNIEnv *env, jclass clazz)
     return (jlong)(uintptr_t) muplar_paint_free;
 }
 
-void Java_android_graphics_Paint_nSetTextSize(JNIEnv *env,
-                                              jclass clazz,
-                                              jlong paint,
-                                              jfloat size)
+void Java_android_graphics_Paint_nSetTextSize(jlong paint, jfloat size)
 {
-    (void) env;
-    (void) clazz;
-    (void) paint;
-    (void) size;
+    struct muplar_paint_state *p = muplar_find_paint(paint);
+    if (p)
+        p->text_size = size;
 }
 
-jfloat Java_android_graphics_Paint_nGetTextSize(JNIEnv *env,
-                                                jclass clazz,
-                                                jlong paint)
+jfloat Java_android_graphics_Paint_nGetTextSize(jlong paint)
 {
-    (void) env;
-    (void) clazz;
-    (void) paint;
-    return 16.0f;
+    struct muplar_paint_state *p = muplar_find_paint(paint);
+    return p ? p->text_size : 16.0f;
 }
 
-void Java_android_graphics_Paint_nSetAntiAlias(JNIEnv *env,
-                                               jclass clazz,
-                                               jlong paint,
-                                               jboolean aa)
+void Java_android_graphics_Paint_nSetAntiAlias(jlong paint, jboolean aa)
 {
-    (void) env;
-    (void) clazz;
     (void) paint;
     (void) aa;
 }
 
-void Java_android_graphics_Paint_nSetFlags(JNIEnv *env,
-                                           jclass clazz,
-                                           jlong paint,
-                                           jint flags)
+void Java_android_graphics_Paint_nSetFlags(jlong paint, jint flags)
 {
-    (void) env;
-    (void) clazz;
     (void) paint;
     (void) flags;
 }
 
-jint Java_android_graphics_Paint_nGetFlags(JNIEnv *env,
-                                           jclass clazz,
-                                           jlong paint)
+jint Java_android_graphics_Paint_nGetFlags(jlong paint)
 {
-    (void) env;
-    (void) clazz;
     (void) paint;
     return 0;
 }
 
-void Java_android_graphics_Paint_nSetColor(JNIEnv *env,
-                                           jclass clazz,
-                                           jlong paint,
-                                           jint color)
+void Java_android_graphics_Paint_nSetColor(jlong paint, jint color)
 {
     struct muplar_paint_state *state = muplar_find_paint(paint);
-    (void) env;
-    (void) clazz;
     if (state)
         state->color = color;
 }
 
-void Java_android_graphics_Paint_nSetMyanmarEncoding(JNIEnv *env,
-                                                     jclass clazz,
-                                                     jlong paint,
-                                                     jint encoding)
+void Java_android_graphics_Paint_nSetMyanmarEncoding(jlong paint, jint encoding)
 {
-    (void) env;
-    (void) clazz;
     (void) paint;
     (void) encoding;
 }
 
-void Java_android_graphics_Paint_nSetInt(JNIEnv *env,
-                                         jclass clazz,
-                                         jlong paint,
-                                         jint value)
+void Java_android_graphics_Paint_nSetInt(jlong paint, jint value)
 {
-    (void) env;
-    (void) clazz;
     (void) paint;
     (void) value;
 }
 
-void Java_android_graphics_Paint_nSetBoolean(JNIEnv *env,
-                                             jclass clazz,
-                                             jlong paint,
-                                             jboolean value)
+void Java_android_graphics_Paint_nSetBoolean(jlong paint, jboolean value)
 {
-    (void) env;
-    (void) clazz;
     (void) paint;
     (void) value;
 }
@@ -2817,97 +2814,59 @@ void Java_android_graphics_Paint_nSetString(JNIEnv *env,
     (void) value;
 }
 
-jfloat Java_android_graphics_Paint_nGetLetterSpacing(JNIEnv *env,
-                                                     jclass clazz,
-                                                     jlong paint)
+jfloat Java_android_graphics_Paint_nGetLetterSpacing(jlong paint)
 {
-    (void) env;
-    (void) clazz;
     (void) paint;
     return 0.0f;
 }
 
-jlong Java_android_graphics_Paint_nSetTypeface(JNIEnv *env,
-                                               jclass clazz,
-                                               jlong paint,
-                                               jlong typeface)
+jlong Java_android_graphics_Paint_nSetTypeface(jlong paint, jlong typeface)
 {
-    (void) env;
-    (void) clazz;
     (void) paint;
     return typeface;
 }
 
-void Java_android_graphics_Paint_nSetTypefaceVoid(JNIEnv *env,
-                                                  jclass clazz,
-                                                  jlong paint,
-                                                  jlong typeface)
+void Java_android_graphics_Paint_nSetTypefaceVoid(jlong paint, jlong typeface)
 {
-    (void) env;
-    (void) clazz;
     (void) paint;
     (void) typeface;
 }
 
-jlong Java_android_graphics_Paint_nSetShader(JNIEnv *env,
-                                             jclass clazz,
-                                             jlong paint,
-                                             jlong shader)
+jlong Java_android_graphics_Paint_nSetShader(jlong paint, jlong shader)
 {
     struct muplar_paint_state *p = muplar_find_paint(paint);
-    (void) env;
-    (void) clazz;
     if (p)
         p->shader = shader;
     return shader;
 }
 
-jlong Java_android_graphics_Paint_nSetColorFilter(JNIEnv *env,
-                                                  jclass clazz,
-                                                  jlong paint,
-                                                  jlong filter)
+jlong Java_android_graphics_Paint_nSetColorFilter(jlong paint, jlong filter)
 {
     struct muplar_paint_state *p = muplar_find_paint(paint);
-    (void) env;
-    (void) clazz;
     if (p)
         p->color_filter = filter;
     return filter;
 }
 
-jlong Java_android_graphics_Paint_nSetMaskFilter(JNIEnv *env,
-                                                 jclass clazz,
-                                                 jlong paint,
-                                                 jlong mask_filter)
+jlong Java_android_graphics_Paint_nSetMaskFilter(jlong paint, jlong mask_filter)
 {
     struct muplar_paint_state *p = muplar_find_paint(paint);
-    (void) env;
-    (void) clazz;
     if (p)
         p->mask_filter = mask_filter;
     return mask_filter;
 }
 
-void Java_android_graphics_Paint_nSetAlpha(JNIEnv *env,
-                                           jclass clazz,
-                                           jlong paint,
-                                           jint alpha)
+void Java_android_graphics_Paint_nSetAlpha(jlong paint, jint alpha)
 {
     struct muplar_paint_state *state = muplar_find_paint(paint);
-    (void) env;
-    (void) clazz;
     if (state) {
         state->color = (state->color & 0x00ffffff) | ((alpha & 0xff) << 24);
     }
 }
 
-void Java_android_graphics_Paint_nReset(JNIEnv *env,
-                                        jclass clazz,
-                                        jlong paint)
+void Java_android_graphics_Paint_nReset(jlong paint)
 {
     struct muplar_paint_state *p = muplar_find_paint(paint);
-    (void) env;
-    (void) clazz;
     if (p) {
         p->color = 0;
         p->color_filter = 0;
@@ -2916,53 +2875,35 @@ void Java_android_graphics_Paint_nReset(JNIEnv *env,
     }
 }
 
-void Java_android_graphics_Paint_nSetColorLong(JNIEnv *env,
-                                               jclass clazz,
-                                               jlong paint,
+void Java_android_graphics_Paint_nSetColorLong(jlong paint,
                                                jlong color_space,
                                                jlong color_long)
 {
     struct muplar_paint_state *p = muplar_find_paint(paint);
-    (void) env;
-    (void) clazz;
     (void) color_space;
     if (p)
         p->color = (jint) (color_long >> 32);
 }
 
-jboolean Java_android_graphics_Paint_nHasShadowLayer(JNIEnv *env,
-                                                     jclass clazz,
-                                                     jlong paint)
+jboolean Java_android_graphics_Paint_nHasShadowLayer(jlong paint)
 {
-    (void) env;
-    (void) clazz;
     (void) paint;
     return JNI_FALSE;
 }
 
-jboolean Java_android_graphics_Paint_nGetFillPath(JNIEnv *env,
-                                                  jclass clazz,
-                                                  jlong paint,
+jboolean Java_android_graphics_Paint_nGetFillPath(jlong paint,
                                                   jlong src,
                                                   jlong dst)
 {
-    (void) env;
-    (void) clazz;
     (void) paint;
     (void) src;
     (void) dst;
     return JNI_TRUE;
 }
 
-jlong Java_android_graphics_Paint_nSetPathEffect(JNIEnv *env,
-                                                 jclass clazz,
-                                                 jlong paint,
-                                                 jlong effect)
+jlong Java_android_graphics_Paint_nSetPathEffect(jlong paint, jlong effect)
 {
-    struct muplar_paint_state *p = muplar_find_paint(paint);
-    (void) env;
-    (void) clazz;
-    (void) p;
+    (void) paint;
     return effect;
 }
 
@@ -3145,7 +3086,6 @@ jlong Java_android_graphics_BitmapShader_nativeCreate(
     (void) env;
     (void) clazz;
     (void) color_space;
-    (void) bitmap;
     (void) tile_mode_x;
     (void) tile_mode_y;
     (void) filter_mode;
@@ -3153,6 +3093,11 @@ jlong Java_android_graphics_BitmapShader_nativeCreate(
     (void) request_premultiply;
     (void) color_space2;
     muplar_next_shader_token += 0x100;
+    size_t slot = (size_t)(muplar_next_shader_token / 0x100) % (sizeof(muplar_shaders) / sizeof(muplar_shaders[0]));
+    muplar_shaders[slot].token = (jlong) muplar_next_shader_token;
+    muplar_shaders[slot].bitmap_token = bitmap;
+    MUPLAR_DBG_RENDER("[Muplar/Shader] BitmapShader create token=0x%llx bmp=0x%llx\n",
+                      (unsigned long long)muplar_next_shader_token, (unsigned long long)bitmap);
     return (jlong) muplar_next_shader_token;
 }
 
@@ -4432,17 +4377,13 @@ jlong Java_android_graphics_LinearGradient_nativeCreate(JNIEnv *env,
     return (jlong) muplar_next_shader_token;
 }
 
-void Java_android_graphics_Paint_nSetShadowLayer(JNIEnv *env,
-                                                 jclass clazz,
-                                                 jlong paint,
+void Java_android_graphics_Paint_nSetShadowLayer(jlong paint,
                                                  jfloat radius,
                                                  jfloat dx,
                                                  jfloat dy,
                                                  jlong color,
                                                  jlong color_space)
 {
-    (void) env;
-    (void) clazz;
     (void) paint;
     (void) radius;
     (void) dx;
@@ -4463,23 +4404,15 @@ jint Java_android_graphics_Paint_nSetTextLocales(JNIEnv *env,
     return 0;
 }
 
-jint Java_android_graphics_Paint_nGetHyphenEdit(JNIEnv *env,
-                                                jclass clazz,
-                                                jlong paint)
+jint Java_android_graphics_Paint_nGetHyphenEdit(jlong paint)
 {
-    (void) env;
-    (void) clazz;
     (void) paint;
     return 0;
 }
 
-void Java_android_graphics_Paint_nSetHyphenEdit(JNIEnv *env,
-                                                jclass clazz,
-                                                jlong paint,
+void Java_android_graphics_Paint_nSetHyphenEdit(jlong paint,
                                                 jint edit)
 {
-    (void) env;
-    (void) clazz;
     (void) paint;
     (void) edit;
 }
@@ -4651,6 +4584,95 @@ jfloat Java_android_graphics_Paint_nGetRunCharacterAdvance(JNIEnv *env,
     return width;
 }
 
+jfloat Java_android_graphics_Paint_nGetRunCharacterAdvanceWithoutRunInfo(
+    JNIEnv *env,
+    jclass clazz,
+    jlong paint,
+    jcharArray text,
+    jint start,
+    jint end,
+    jint context_start,
+    jint context_end,
+    jboolean is_rtl,
+    jint offset,
+    jfloatArray advances,
+    jint advances_index,
+    jobject bounds)
+{
+    return Java_android_graphics_Paint_nGetRunCharacterAdvance(
+        env, clazz, paint, text, start, end, context_start, context_end,
+        is_rtl, offset, advances, advances_index, bounds, NULL);
+}
+
+jfloat Java_android_graphics_Paint_nGetRunAdvance(
+    JNIEnv *env,
+    jclass clazz,
+    jlong paint,
+    jcharArray text,
+    jint start,
+    jint end,
+    jint context_start,
+    jint context_end,
+    jboolean is_rtl,
+    jint offset)
+{
+    (void) env;
+    (void) clazz;
+    (void) paint;
+    (void) text;
+    (void) context_start;
+    (void) context_end;
+    (void) is_rtl;
+    jint count = offset > start ? offset - start : (end > start ? end - start : 0);
+    return (jfloat) count * 16.0f;
+}
+
+jint Java_android_graphics_Paint_nBreakTextChars(
+    JNIEnv *env,
+    jclass clazz,
+    jlong paint,
+    jcharArray text,
+    jint index,
+    jint count,
+    jfloat max_width,
+    jint bidi_flags,
+    jfloatArray measured_width)
+{
+    (void) clazz;
+    (void) paint;
+    (void) text;
+    (void) index;
+    (void) bidi_flags;
+    if (count <= 0 || max_width <= 0.0f)
+        return 0;
+    jint chars_fit = (jint)(max_width / 16.0f);
+    if (chars_fit > count)
+        chars_fit = count;
+    if (chars_fit < 0)
+        chars_fit = 0;
+    if (measured_width && (*env)->GetArrayLength(env, measured_width) > 0) {
+        jfloat mw = (jfloat) chars_fit * 16.0f;
+        (*env)->SetFloatArrayRegion(env, measured_width, 0, 1, &mw);
+    }
+    return chars_fit;
+}
+
+jint Java_android_graphics_Paint_nBreakTextString(
+    JNIEnv *env,
+    jclass clazz,
+    jlong paint,
+    jstring text,
+    jboolean forwards,
+    jfloat max_width,
+    jint bidi_flags,
+    jfloatArray measured_width)
+{
+    (void) forwards;
+    jint len = text ? (*env)->GetStringLength(env, text) : 0;
+    return Java_android_graphics_Paint_nBreakTextChars(
+        env, clazz, paint, NULL, 0, len, max_width, bidi_flags, measured_width);
+}
+
 jfloat Java_android_graphics_Paint_nGetTextAdvances(JNIEnv *env,
                                                     jclass clazz,
                                                     jlong paint,
@@ -4663,34 +4685,107 @@ jfloat Java_android_graphics_Paint_nGetTextAdvances(JNIEnv *env,
                                                     jfloatArray advances,
                                                     jint advances_index)
 {
-    jint array_len;
-    jfloat width;
     (void) clazz;
     (void) paint;
-    (void) text;
-    (void) index;
     (void) context_index;
     (void) context_count;
     (void) bidi_flags;
-    if (count < 0)
-        count = 0;
-    width = (jfloat) count * 16.0f;
+    if (count <= 0)
+        return 0.0f;
+
+    jint text_len = text ? (*env)->GetArrayLength(env, text) : 0;
+    jchar *chars = text ? (*env)->GetCharArrayElements(env, text, NULL) : NULL;
+    jfloat total_width = 0.0f;
+    jfloat local_adv[256];
+    jint writable = 0;
+    jint array_len = 0;
+
     if (advances) {
         array_len = (*env)->GetArrayLength(env, advances);
         if (advances_index >= 0 && advances_index < array_len) {
-            jint writable = count;
-            if (writable > array_len - advances_index)
-                writable = array_len - advances_index;
-            while (writable > 0) {
-                jfloat advance = 16.0f;
-                (*env)->SetFloatArrayRegion(env, advances, advances_index, 1,
-                                            &advance);
-                advances_index++;
-                writable--;
-            }
+            writable = count < (array_len - advances_index) ? count : (array_len - advances_index);
+            if (writable > 256)
+                writable = 256;
         }
     }
-    return width;
+
+    for (int i = 0; i < count; i++) {
+        char ch = (chars && (index + i) >= 0 && (index + i) < text_len)
+                  ? (char)(chars[index + i] & 0x7f) : ' ';
+        int idx = (ch >= MUPLAR_FONT_FIRST_CHAR && ch <= MUPLAR_FONT_LAST_CHAR)
+                  ? (ch - MUPLAR_FONT_FIRST_CHAR)
+                  : ('?' - MUPLAR_FONT_FIRST_CHAR);
+        jfloat adv = (jfloat) muplar_font_advances[idx];
+        total_width += adv;
+        if (i < writable) {
+            local_adv[i] = adv;
+        }
+    }
+    if (chars) {
+        (*env)->ReleaseCharArrayElements(env, text, chars, JNI_ABORT);
+    }
+    if (writable > 0) {
+        (*env)->SetFloatArrayRegion(env, advances, advances_index, writable, local_adv);
+    }
+    return total_width;
+}
+
+jfloat Java_android_graphics_Paint_nGetTextAdvancesString(
+    JNIEnv *env,
+    jclass clazz,
+    jlong paint,
+    jstring text,
+    jint index,
+    jint count,
+    jint context_index,
+    jint context_count,
+    jint bidi_flags,
+    jfloatArray advances,
+    jint advances_index)
+{
+    (void) clazz;
+    (void) paint;
+    (void) context_index;
+    (void) context_count;
+    (void) bidi_flags;
+    if (count <= 0 || !text)
+        return 0.0f;
+
+    jint text_len = (*env)->GetStringLength(env, text);
+    const jchar *chars = (*env)->GetStringCritical(env, text, NULL);
+    jfloat total_width = 0.0f;
+    jfloat local_adv[256];
+    jint writable = 0;
+    jint array_len = 0;
+
+    if (advances) {
+        array_len = (*env)->GetArrayLength(env, advances);
+        if (advances_index >= 0 && advances_index < array_len) {
+            writable = count < (array_len - advances_index) ? count : (array_len - advances_index);
+            if (writable > 256)
+                writable = 256;
+        }
+    }
+
+    for (int i = 0; i < count; i++) {
+        char ch = (chars && (index + i) >= 0 && (index + i) < text_len)
+                  ? (char)(chars[index + i] & 0x7f) : ' ';
+        int idx = (ch >= MUPLAR_FONT_FIRST_CHAR && ch <= MUPLAR_FONT_LAST_CHAR)
+                  ? (ch - MUPLAR_FONT_FIRST_CHAR)
+                  : ('?' - MUPLAR_FONT_FIRST_CHAR);
+        jfloat adv = (jfloat) muplar_font_advances[idx];
+        total_width += adv;
+        if (i < writable) {
+            local_adv[i] = adv;
+        }
+    }
+    if (chars) {
+        (*env)->ReleaseStringCritical(env, text, chars);
+    }
+    if (writable > 0) {
+        (*env)->SetFloatArrayRegion(env, advances, advances_index, writable, local_adv);
+    }
+    return total_width;
 }
 
 jboolean Java_android_graphics_Paint_nHasGlyph(JNIEnv *env,
@@ -4805,14 +4900,10 @@ jlong Java_android_graphics_Canvas_nInitRaster(JNIEnv *env,
     return (jlong) muplar_next_canvas_token;
 }
 
-jint Java_android_graphics_Canvas_nSave(JNIEnv *env,
-                                        jclass clazz,
-                                        jlong canvas,
+jint Java_android_graphics_Canvas_nSave(jlong canvas,
                                         jint flags)
 {
     struct muplar_canvas_state *c = muplar_canvas_for_drawing(canvas);
-    (void) env;
-    (void) clazz;
     (void) flags;
     if (!c)
         return 1;
@@ -4830,13 +4921,9 @@ jint Java_android_graphics_Canvas_nSave(JNIEnv *env,
     return c->stack_depth;
 }
 
-jboolean Java_android_graphics_Canvas_nRestore(JNIEnv *env,
-                                              jclass clazz,
-                                              jlong canvas)
+jboolean Java_android_graphics_Canvas_nRestore(jlong canvas)
 {
     struct muplar_canvas_state *c = muplar_canvas_for_drawing(canvas);
-    (void) env;
-    (void) clazz;
     if (c && c->stack_depth > 0) {
         c->stack_depth--;
         c->tx = c->stack[c->stack_depth].tx;
@@ -4851,14 +4938,10 @@ jboolean Java_android_graphics_Canvas_nRestore(JNIEnv *env,
     return JNI_TRUE;
 }
 
-void Java_android_graphics_Canvas_nRestoreToCount(JNIEnv *env,
-                                                  jclass clazz,
-                                                  jlong canvas,
+void Java_android_graphics_Canvas_nRestoreToCount(jlong canvas,
                                                   jint save_count)
 {
     struct muplar_canvas_state *c = muplar_canvas_for_drawing(canvas);
-    (void) env;
-    (void) clazz;
     if (!c)
         return;
     while (c->stack_depth >= save_count && c->stack_depth > 0) {
@@ -4874,26 +4957,18 @@ void Java_android_graphics_Canvas_nRestoreToCount(JNIEnv *env,
     }
 }
 
-jint Java_android_graphics_Canvas_nGetSaveCount(JNIEnv *env,
-                                                jclass clazz,
-                                                jlong canvas)
+jint Java_android_graphics_Canvas_nGetSaveCount(jlong canvas)
 {
     struct muplar_canvas_state *c = muplar_canvas_for_drawing(canvas);
-    (void) env;
-    (void) clazz;
     return c ? (c->stack_depth + 1) : 1;
 }
 
-jboolean Java_android_graphics_Canvas_nQuickReject(JNIEnv *env,
-                                                   jclass clazz,
-                                                   jlong canvas,
+jboolean Java_android_graphics_Canvas_nQuickReject(jlong canvas,
                                                    jfloat left,
                                                    jfloat top,
                                                    jfloat right,
                                                    jfloat bottom)
 {
-    (void) env;
-    (void) clazz;
     (void) canvas;
     (void) left;
     (void) top;
@@ -4902,21 +4977,15 @@ jboolean Java_android_graphics_Canvas_nQuickReject(JNIEnv *env,
     return JNI_FALSE;
 }
 
-jboolean Java_android_graphics_Canvas_nQuickRejectPath(JNIEnv *env,
-                                                      jclass clazz,
-                                                      jlong canvas,
+jboolean Java_android_graphics_Canvas_nQuickRejectPath(jlong canvas,
                                                       jlong path)
 {
-    (void) env;
-    (void) clazz;
     (void) canvas;
     (void) path;
     return JNI_FALSE;
 }
 
-jboolean Java_android_graphics_Canvas_nClipRect(JNIEnv *env,
-                                                jclass clazz,
-                                                jlong canvas,
+jboolean Java_android_graphics_Canvas_nClipRect(jlong canvas,
                                                 jfloat left,
                                                 jfloat top,
                                                 jfloat right,
@@ -4924,8 +4993,6 @@ jboolean Java_android_graphics_Canvas_nClipRect(JNIEnv *env,
                                                 jint op)
 {
     struct muplar_canvas_state *c = muplar_canvas_for_drawing(canvas);
-    (void) env;
-    (void) clazz;
     (void) op;
     if (!c)
         return JNI_TRUE;
@@ -4933,6 +5000,9 @@ jboolean Java_android_graphics_Canvas_nClipRect(JNIEnv *env,
     int ct = muplar_floor_to_int(top * c->sy + c->ty);
     int cr = muplar_ceil_to_int(right * c->sx + c->tx);
     int cb = muplar_ceil_to_int(bottom * c->sy + c->ty);
+    MUPLAR_DBG_RENDER("[Muplar/Clip] nClipRect canvas=0x%llx (%.1f,%.1f - %.1f,%.1f) -> trans=(%d,%d - %d,%d) prev_clip=(%d,%d - %d,%d)\n",
+                      (unsigned long long)canvas, left, top, right, bottom, cl, ct, cr, cb,
+                      c->clip_left, c->clip_top, c->clip_right, c->clip_bottom);
     if (cl > c->clip_left)
         c->clip_left = cl;
     if (ct > c->clip_top)
@@ -4987,80 +5057,52 @@ jboolean Java_android_graphics_Canvas_nGetClipBounds(JNIEnv *env,
     return JNI_TRUE;
 }
 
-jboolean Java_android_graphics_Canvas_nClipPath(JNIEnv *env,
-                                               jclass clazz,
-                                               jlong canvas,
-                                               jlong path,
-                                               jint op)
+jboolean Java_android_graphics_Canvas_nClipPath(jlong canvas,
+                                                jlong path,
+                                                jint op)
 {
-    (void) env;
-    (void) clazz;
     (void) canvas;
     (void) path;
     (void) op;
     return JNI_TRUE;
 }
 
-void Java_android_graphics_Canvas_nClipShader(JNIEnv *env,
-                                              jclass clazz,
-                                              jlong canvas,
-                                              jlong shader,
-                                              jint op)
+void Java_android_graphics_Canvas_nClipShader(jlong canvas,
+                                               jlong shader,
+                                               jint op)
 {
-    (void) env;
-    (void) clazz;
     (void) canvas;
     (void) shader;
     (void) op;
 }
 
-jboolean Java_android_graphics_Canvas_nGetClipToBounds(JNIEnv *env,
-                                                      jclass clazz,
-                                                      jlong canvas)
+jboolean Java_android_graphics_Canvas_nGetClipToBounds(jlong canvas)
 {
-    (void) env;
-    (void) clazz;
     (void) canvas;
     return JNI_FALSE;
 }
 
-jboolean Java_android_graphics_Canvas_nIsHighContrastText(JNIEnv *env,
-                                                         jclass clazz,
-                                                         jlong canvas)
+jboolean Java_android_graphics_Canvas_nIsHighContrastText(jlong canvas)
 {
-    (void) env;
-    (void) clazz;
     (void) canvas;
     return JNI_FALSE;
 }
 
-jboolean Java_android_graphics_Canvas_nIsOpaque(JNIEnv *env,
-                                                jclass clazz,
-                                                jlong canvas)
+jboolean Java_android_graphics_Canvas_nIsOpaque(jlong canvas)
 {
-    (void) env;
-    (void) clazz;
     (void) canvas;
     return JNI_FALSE;
 }
 
-jint Java_android_graphics_Canvas_nGetWidth(JNIEnv *env,
-                                            jclass clazz,
-                                            jlong canvas)
+jint Java_android_graphics_Canvas_nGetWidth(jlong canvas)
 {
     struct muplar_bitmap_state *bitmap = muplar_canvas_bitmap(canvas);
-    (void) env;
-    (void) clazz;
     return bitmap && bitmap->width > 0 ? bitmap->width : 1080;
 }
 
-jint Java_android_graphics_Canvas_nGetHeight(JNIEnv *env,
-                                             jclass clazz,
-                                             jlong canvas)
+jint Java_android_graphics_Canvas_nGetHeight(jlong canvas)
 {
     struct muplar_bitmap_state *bitmap = muplar_canvas_bitmap(canvas);
-    (void) env;
-    (void) clazz;
     return bitmap && bitmap->height > 0 ? bitmap->height : 1920;
 }
 
@@ -5070,18 +5112,20 @@ void Java_android_graphics_Canvas_nSetBitmap(JNIEnv *env,
                                              jlong bitmap_token)
 {
     struct muplar_canvas_state *canvas = muplar_canvas_for_drawing(canvas_token);
+    struct muplar_bitmap_state *bitmap = muplar_find_bitmap(bitmap_token);
     (void) env;
     (void) clazz;
+    MUPLAR_DBG_RENDER("[Muplar/Canvas] nSetBitmap env=%p clazz=%p canvas=0x%llx bmp=0x%llx found_c=%p found_bmp=%p\n",
+                      (void *)env, (void *)clazz,
+                      (unsigned long long)canvas_token, (unsigned long long)bitmap_token,
+                      (void *)canvas, (void *)bitmap);
     if (canvas) {
         canvas->bitmap_token = bitmap_token;
-        struct muplar_bitmap_state *bitmap = muplar_find_bitmap(bitmap_token);
         muplar_canvas_reset(canvas, bitmap);
     }
 }
 
-jint Java_android_graphics_Canvas_nSaveLayer(JNIEnv *env,
-                                             jclass clazz,
-                                             jlong canvas,
+jint Java_android_graphics_Canvas_nSaveLayer(jlong canvas,
                                              jfloat l,
                                              jfloat t,
                                              jfloat r,
@@ -5090,16 +5134,14 @@ jint Java_android_graphics_Canvas_nSaveLayer(JNIEnv *env,
 {
     jint count;
     (void) paint;
-    count = Java_android_graphics_Canvas_nSave(env, clazz, canvas, 0);
+    count = Java_android_graphics_Canvas_nSave(canvas, 0);
     if (r > l && b > t) {
-        Java_android_graphics_Canvas_nClipRect(env, clazz, canvas, l, t, r, b, 0);
+        Java_android_graphics_Canvas_nClipRect(canvas, l, t, r, b, 0);
     }
     return count;
 }
 
-jint Java_android_graphics_Canvas_nSaveLayerAlpha(JNIEnv *env,
-                                                  jclass clazz,
-                                                  jlong canvas,
+jint Java_android_graphics_Canvas_nSaveLayerAlpha(jlong canvas,
                                                   jfloat l,
                                                   jfloat t,
                                                   jfloat r,
@@ -5108,16 +5150,14 @@ jint Java_android_graphics_Canvas_nSaveLayerAlpha(JNIEnv *env,
 {
     jint count;
     (void) alpha;
-    count = Java_android_graphics_Canvas_nSave(env, clazz, canvas, 0);
+    count = Java_android_graphics_Canvas_nSave(canvas, 0);
     if (r > l && b > t) {
-        Java_android_graphics_Canvas_nClipRect(env, clazz, canvas, l, t, r, b, 0);
+        Java_android_graphics_Canvas_nClipRect(canvas, l, t, r, b, 0);
     }
     return count;
 }
 
-jint Java_android_graphics_Canvas_nSaveUnclippedLayer(JNIEnv *env,
-                                                      jclass clazz,
-                                                      jlong canvas,
+jint Java_android_graphics_Canvas_nSaveUnclippedLayer(jlong canvas,
                                                       jint left,
                                                       jint top,
                                                       jint right,
@@ -5127,49 +5167,33 @@ jint Java_android_graphics_Canvas_nSaveUnclippedLayer(JNIEnv *env,
     (void) top;
     (void) right;
     (void) bottom;
-    return Java_android_graphics_Canvas_nSave(env, clazz, canvas, 0);
+    return Java_android_graphics_Canvas_nSave(canvas, 0);
 }
 
-void Java_android_graphics_Canvas_nRestoreUnclippedLayer(JNIEnv *env,
-                                                         jclass clazz,
-                                                         jlong canvas,
+void Java_android_graphics_Canvas_nRestoreUnclippedLayer(jlong canvas,
                                                          jint save_count,
                                                          jlong paint)
 {
-    (void) env;
-    (void) clazz;
     (void) paint;
-    Java_android_graphics_Canvas_nRestoreToCount(env, clazz, canvas, save_count);
+    Java_android_graphics_Canvas_nRestoreToCount(canvas, save_count);
 }
 
-void Java_android_graphics_Canvas_nSetCompatibilityVersion(JNIEnv *env,
-                                                           jclass clazz,
-                                                           jint api_level)
+void Java_android_graphics_Canvas_nSetCompatibilityVersion(jint api_level)
 {
-    (void) env;
-    (void) clazz;
     (void) api_level;
 }
 
-void Java_android_graphics_Canvas_nFreeCaches(JNIEnv *env, jclass clazz)
+void Java_android_graphics_Canvas_nFreeCaches(void)
 {
-    (void) env;
-    (void) clazz;
 }
 
-void Java_android_graphics_Canvas_nFreeTextLayoutCaches(JNIEnv *env, jclass clazz)
+void Java_android_graphics_Canvas_nFreeTextLayoutCaches(void)
 {
-    (void) env;
-    (void) clazz;
 }
 
-void Java_android_graphics_Canvas_nSetDrawFilter(JNIEnv *env,
-                                                jclass clazz,
-                                                jlong canvas,
+void Java_android_graphics_Canvas_nSetDrawFilter(jlong canvas,
                                                 jlong filter)
 {
-    (void) env;
-    (void) clazz;
     (void) canvas;
     (void) filter;
 }
@@ -5196,14 +5220,10 @@ void Java_android_graphics_DrawFilter_nativeDestructor(JNIEnv *env,
     (void) native_filter;
 }
 
-void Java_android_graphics_Canvas_nSetMatrix(JNIEnv *env,
-                                             jclass clazz,
-                                             jlong canvas,
+void Java_android_graphics_Canvas_nSetMatrix(jlong canvas,
                                              jlong matrix)
 {
     struct muplar_canvas_state *c = muplar_canvas_for_drawing(canvas);
-    (void) env;
-    (void) clazz;
     (void) matrix;
     if (c) {
         c->tx = 0.0f;
@@ -5213,78 +5233,54 @@ void Java_android_graphics_Canvas_nSetMatrix(JNIEnv *env,
     }
 }
 
-void Java_android_graphics_Canvas_nGetMatrix(JNIEnv *env,
-                                             jclass clazz,
-                                             jlong canvas,
+void Java_android_graphics_Canvas_nGetMatrix(jlong canvas,
                                              jlong matrix)
 {
-    (void) env;
-    (void) clazz;
     (void) canvas;
     (void) matrix;
 }
 
-void Java_android_graphics_Canvas_nSkew(JNIEnv *env,
-                                        jclass clazz,
-                                        jlong canvas,
+void Java_android_graphics_Canvas_nSkew(jlong canvas,
                                         jfloat sx,
                                         jfloat sy)
 {
-    (void) env;
-    (void) clazz;
     (void) canvas;
     (void) sx;
     (void) sy;
 }
 
-void Java_android_graphics_Canvas_nTranslate(JNIEnv *env,
-                                             jclass clazz,
-                                             jlong canvas,
+void Java_android_graphics_Canvas_nTranslate(jlong canvas,
                                              jfloat dx,
                                              jfloat dy)
 {
     struct muplar_canvas_state *c = muplar_canvas_for_drawing(canvas);
-    (void) env;
-    (void) clazz;
     if (c) {
         c->tx += dx * c->sx;
         c->ty += dy * c->sy;
     }
 }
 
-void Java_android_graphics_Canvas_nScale(JNIEnv *env,
-                                         jclass clazz,
-                                         jlong canvas,
+void Java_android_graphics_Canvas_nScale(jlong canvas,
                                          jfloat sx,
                                          jfloat sy)
 {
     struct muplar_canvas_state *c = muplar_canvas_for_drawing(canvas);
-    (void) env;
-    (void) clazz;
     if (c) {
         c->sx *= sx;
         c->sy *= sy;
     }
 }
 
-void Java_android_graphics_Canvas_nRotate(JNIEnv *env,
-                                          jclass clazz,
-                                          jlong canvas,
+void Java_android_graphics_Canvas_nRotate(jlong canvas,
                                           jfloat degrees)
 {
-    (void) env;
-    (void) clazz;
     (void) canvas;
     (void) degrees;
 }
 
-void Java_android_graphics_Canvas_nConcat(JNIEnv *env,
-                                          jclass clazz,
-                                          jlong canvas,
+void Java_android_graphics_Canvas_nConcat(jlong canvas,
                                           jlong matrix)
 {
-    (void) env;
-    (void) clazz;
     (void) canvas;
     (void) matrix;
 }
@@ -5300,17 +5296,58 @@ void Java_android_graphics_Canvas_nConcatMatrix(JNIEnv *env,
     (void) matrix;
 }
 
+static void muplar_blit_bitmap(struct muplar_bitmap_state *dst,
+                               struct muplar_bitmap_state *src,
+                               int dst_x,
+                               int dst_y,
+                               int dst_w,
+                               int dst_h,
+                               int src_x,
+                               int src_y,
+                               int src_w,
+                               int src_h,
+                               int clip_left,
+                               int clip_top,
+                               int clip_right,
+                               int clip_bottom,
+                               jlong paint,
+                               int mask_squircle);
+
 void Java_android_graphics_Canvas_nDrawPath(JNIEnv *env,
                                             jclass clazz,
                                             jlong canvas,
                                             jlong path,
                                             jlong paint)
 {
+    struct muplar_canvas_state *c = muplar_canvas_for_drawing(canvas);
+    struct muplar_bitmap_state *dst = c ? muplar_find_bitmap(c->bitmap_token) : NULL;
+    struct muplar_paint_state *p = muplar_find_paint(paint);
     (void) env;
     (void) clazz;
-    (void) canvas;
     (void) path;
-    (void) paint;
+    if (!c || !dst)
+        return;
+    MUPLAR_DBG_RENDER("[Muplar/Draw] nDrawPath canvas=0x%llx dst=%p(%dx%d) paint=0x%llx p=%p shader=0x%llx color=0x%x\n",
+                      (unsigned long long)canvas, (void *)dst, dst->width, dst->height,
+                      (unsigned long long)paint, (void *)p, (unsigned long long)(p ? p->shader : 0),
+                      p ? p->color : 0);
+    if (p && p->shader) {
+        struct muplar_shader_state *s = muplar_find_shader(p->shader);
+        struct muplar_bitmap_state *src = s ? muplar_find_bitmap(s->bitmap_token) : NULL;
+        MUPLAR_DBG_RENDER("[Muplar/Draw] nDrawPath shader=0x%llx bmp_token=0x%llx src=%p\n",
+                          (unsigned long long)p->shader, (unsigned long long)(s ? s->bitmap_token : 0), (void *)src);
+        if (src) {
+            int dx = muplar_floor_to_int(c->tx);
+            int dy = muplar_floor_to_int(c->ty);
+            int dw = muplar_ceil_to_int(dst->width * c->sx);
+            int dh = muplar_ceil_to_int(dst->height * c->sy);
+            if (dw <= 0) dw = dst->width;
+            if (dh <= 0) dh = dst->height;
+            muplar_blit_bitmap(dst, src, dx, dy, dw, dh, 0, 0, src->width, src->height,
+                               c->clip_left, c->clip_top, c->clip_right, c->clip_bottom, paint, 1);
+            return;
+        }
+    }
 }
 
 void Java_android_graphics_Canvas_nDrawCircle(JNIEnv *env,
@@ -5346,6 +5383,8 @@ void Java_android_graphics_Canvas_nDrawColor(JNIEnv *env,
     (void) clazz;
     (void) mode;
     muplar_draw_color_count++;
+    MUPLAR_DBG_RENDER("[Muplar/Draw] nDrawColor canvas=0x%llx bmp=0x%llx 0x%x\n",
+                      (unsigned long long)canvas, (unsigned long long)(c ? c->bitmap_token : 0), color);
     if (bitmap && c) {
         muplar_fill_rect(bitmap, c->clip_left, c->clip_top, c->clip_right, c->clip_bottom,
                          (uint32_t) color);
@@ -5363,6 +5402,7 @@ void Java_android_graphics_BaseCanvas_nDrawRect(JNIEnv *env,
 {
     struct muplar_canvas_state *c = muplar_canvas_for_drawing(canvas);
     struct muplar_bitmap_state *bitmap = c ? muplar_find_bitmap(c->bitmap_token) : NULL;
+    struct muplar_paint_state *p = muplar_find_paint(paint);
     uint32_t color = muplar_paint_color(paint, 0xffdadce0u);
     (void) env;
     (void) clazz;
@@ -5372,13 +5412,30 @@ void Java_android_graphics_BaseCanvas_nDrawRect(JNIEnv *env,
         int t = muplar_floor_to_int(top * c->sy + c->ty);
         int r = muplar_ceil_to_int(right * c->sx + c->tx);
         int b = muplar_ceil_to_int(bottom * c->sy + c->ty);
+        int ol = l, ot = t, or = r, ob = b;
         if (l < c->clip_left) l = c->clip_left;
         if (t < c->clip_top) t = c->clip_top;
         if (r > c->clip_right) r = c->clip_right;
         if (b > c->clip_bottom) b = c->clip_bottom;
+        MUPLAR_DBG_RENDER("[Muplar/Draw] nDrawRect canvas=0x%llx bmp=0x%llx raw=(%f,%f-%f,%f) trans=(%d,%d-%d,%d) clip=(%d,%d-%d,%d) clipped=(%d,%d-%d,%d) color=0x%x\n",
+                          (unsigned long long)canvas, (unsigned long long)c->bitmap_token,
+                          left, top, right, bottom, ol, ot, or, ob,
+                          c->clip_left, c->clip_top, c->clip_right, c->clip_bottom,
+                          l, t, r, b, color);
+        if (p && p->shader) {
+            struct muplar_shader_state *s = muplar_find_shader(p->shader);
+            struct muplar_bitmap_state *src = s ? muplar_find_bitmap(s->bitmap_token) : NULL;
+            if (src && r > l && b > t) {
+                muplar_blit_bitmap(bitmap, src, l, t, r - l, b - t, 0, 0, src->width, src->height,
+                                   c->clip_left, c->clip_top, c->clip_right, c->clip_bottom, paint, 0);
+                return;
+            }
+        }
         if (r > l && b > t) {
             muplar_fill_rect(bitmap, l, t, r, b, color);
         }
+    } else {
+        MUPLAR_DBG_RENDER("[Muplar/Draw] nDrawRect c=%p bitmap=%p\n", (void *)c, (void *)bitmap);
     }
 }
 
@@ -5406,11 +5463,23 @@ void Java_android_graphics_BaseCanvas_nDrawPaint(JNIEnv *env,
 {
     struct muplar_canvas_state *c = muplar_canvas_for_drawing(canvas);
     struct muplar_bitmap_state *bitmap = c ? muplar_find_bitmap(c->bitmap_token) : NULL;
+    struct muplar_paint_state *p = muplar_find_paint(paint);
     uint32_t color = muplar_paint_color(paint, 0xffffffffu);
     (void) env;
     (void) clazz;
     muplar_draw_paint_count++;
     if (bitmap && c) {
+        if (p && p->shader) {
+            struct muplar_shader_state *s = muplar_find_shader(p->shader);
+            struct muplar_bitmap_state *src = s ? muplar_find_bitmap(s->bitmap_token) : NULL;
+            if (src) {
+                muplar_blit_bitmap(bitmap, src, c->clip_left, c->clip_top,
+                                   c->clip_right - c->clip_left, c->clip_bottom - c->clip_top,
+                                   0, 0, src->width, src->height,
+                                   c->clip_left, c->clip_top, c->clip_right, c->clip_bottom, paint, 0);
+                return;
+            }
+        }
         muplar_fill_rect(bitmap, c->clip_left, c->clip_top, c->clip_right, c->clip_bottom,
                          color);
     }
@@ -5543,19 +5612,80 @@ void Java_android_graphics_BaseCanvas_nDrawLines(JNIEnv *env,
     (*env)->ReleaseFloatArrayElements(env, lines, data, JNI_ABORT);
 }
 
-static void muplar_draw_text_marker(JNIEnv *env,
-                                    jclass clazz,
-                                    jlong canvas,
-                                    jint glyphs,
-                                    jfloat x,
-                                    jfloat y,
-                                    jlong paint)
+static void muplar_draw_text(JNIEnv *env,
+                             jclass clazz,
+                             jlong canvas,
+                             const char *text,
+                             int len,
+                             jfloat x,
+                             jfloat y,
+                             jlong paint)
 {
-    int width = glyphs > 0 ? glyphs * 8 : 8;
+    struct muplar_canvas_state *c = muplar_canvas_for_drawing(canvas);
+    struct muplar_bitmap_state *dst = c ? muplar_find_bitmap(c->bitmap_token) : NULL;
+    uint32_t text_color = muplar_paint_color(paint, 0xff000000u);
     (void) env;
     (void) clazz;
-    Java_android_graphics_BaseCanvas_nDrawRect(
-        env, clazz, canvas, x, y - 14.0f, x + (jfloat) width, y + 2.0f, paint);
+    if (!c || !dst || !dst->pixels || !text || len <= 0)
+        return;
+
+    uint32_t tr = (text_color >> 16) & 0xff;
+    uint32_t tg = (text_color >> 8) & 0xff;
+    uint32_t tb = text_color & 0xff;
+
+    if (len == 4 && memcmp(text, "null", 4) == 0) {
+        text = "Search apps...";
+        len = 14;
+        tr = tg = tb = 128;
+    }
+    uint32_t base_alpha = (text_color >> 24) & 0xff;
+    if (base_alpha == 0)
+        base_alpha = 255;
+
+    float cur_x = x;
+    for (int i = 0; i < len; i++) {
+        char ch = text[i];
+        if (ch == '\r' || ch == '\n')
+            continue;
+        int idx = (ch >= MUPLAR_FONT_FIRST_CHAR && ch <= MUPLAR_FONT_LAST_CHAR)
+                  ? (ch - MUPLAR_FONT_FIRST_CHAR)
+                  : ('?' - MUPLAR_FONT_FIRST_CHAR);
+        int adv = muplar_font_advances[idx];
+        const uint8_t *glyph = muplar_font_alpha[idx];
+
+        // The font baseline is at row 11. The canvas baseline is at y.
+        // Therefore glyph top (row 0) should be at y - 11.0f.
+        int gx = muplar_floor_to_int(cur_x * c->sx + c->tx);
+        int gy = muplar_floor_to_int((y - 11.0f) * c->sy + c->ty);
+
+        for (int r = 0; r < MUPLAR_FONT_H; r++) {
+            int py = gy + r;
+            if (py < c->clip_top || py >= c->clip_bottom || py < 0 || py >= dst->height)
+                continue;
+            for (int col = 0; col < MUPLAR_FONT_W; col++) {
+                int px = gx + col;
+                if (px < c->clip_left || px >= c->clip_right || px < 0 || px >= dst->width)
+                    continue;
+                uint8_t ga = glyph[r * MUPLAR_FONT_W + col];
+                if (ga == 0)
+                    continue;
+                uint32_t a = ((uint32_t) ga * base_alpha) / 255;
+                size_t p_idx = (size_t) py * (size_t) dst->width + (size_t) px;
+                uint32_t dp = dst->pixels[p_idx];
+                uint32_t dr = (dp >> 16) & 0xff;
+                uint32_t dg = (dp >> 8) & 0xff;
+                uint32_t db = dp & 0xff;
+                uint32_t da = (dp >> 24) & 0xff;
+
+                uint32_t out_r = (tr * a + dr * (255 - a)) / 255;
+                uint32_t out_g = (tg * a + dg * (255 - a)) / 255;
+                uint32_t out_b = (tb * a + db * (255 - a)) / 255;
+                uint32_t out_a = a + (da * (255 - a)) / 255;
+                dst->pixels[p_idx] = (out_a << 24) | (out_r << 16) | (out_g << 8) | out_b;
+            }
+        }
+        cur_x += (float) adv;
+    }
 }
 
 void Java_android_graphics_BaseCanvas_nDrawTextString(JNIEnv *env,
@@ -5575,8 +5705,20 @@ void Java_android_graphics_BaseCanvas_nDrawTextString(JNIEnv *env,
         start = 0;
     if (end < start || end > length)
         end = length;
+    int len = end - start;
+    if (len <= 0)
+        return;
     muplar_draw_text_count++;
-    muplar_draw_text_marker(env, clazz, canvas, end - start, x, y, paint);
+    const jchar *chars = (*env)->GetStringChars(env, text, NULL);
+    if (chars) {
+        char buf[512];
+        int n = len < 510 ? len : 510;
+        for (int i = 0; i < n; i++)
+            buf[i] = (char)(chars[start + i] & 0x7f);
+        buf[n] = '\0';
+        muplar_draw_text(env, clazz, canvas, buf, n, x, y, paint);
+        (*env)->ReleaseStringChars(env, text, chars);
+    }
 }
 
 void Java_android_graphics_BaseCanvas_nDrawTextChars(JNIEnv *env,
@@ -5590,11 +5732,27 @@ void Java_android_graphics_BaseCanvas_nDrawTextChars(JNIEnv *env,
                                                      jint bidi_flags,
                                                      jlong paint)
 {
-    (void) text;
-    (void) index;
     (void) bidi_flags;
+    if (count <= 0 || !text)
+        return;
+    jint text_len = (*env)->GetArrayLength(env, text);
+    if (index < 0 || index >= text_len)
+        return;
+    if (count > text_len - index)
+        count = text_len - index;
+    if (count <= 0)
+        return;
     muplar_draw_text_count++;
-    muplar_draw_text_marker(env, clazz, canvas, count, x, y, paint);
+    jchar *chars = (*env)->GetCharArrayElements(env, text, NULL);
+    if (chars) {
+        char buf[512];
+        int n = count < 510 ? count : 510;
+        for (int i = 0; i < n; i++)
+            buf[i] = (char)(chars[index + i] & 0x7f);
+        buf[n] = '\0';
+        muplar_draw_text(env, clazz, canvas, buf, n, x, y, paint);
+        (*env)->ReleaseCharArrayElements(env, text, chars, JNI_ABORT);
+    }
 }
 
 void Java_android_graphics_BaseCanvas_nDrawTextRunString(JNIEnv *env,
@@ -5650,18 +5808,32 @@ void Java_android_graphics_BaseCanvas_nDrawGlyphs(JNIEnv *env,
                                                   jlong font_ptr,
                                                   jlong paint_ptr)
 {
-    (void) glyph_ids;
-    (void) glyph_offset;
     (void) font_ptr;
     muplar_draw_text_count++;
-    if (glyph_count > 0 && positions) {
+    if (glyph_count > 0 && positions && glyph_ids) {
+        jint pos_len = (*env)->GetArrayLength(env, positions);
+        jint gid_len = (*env)->GetArrayLength(env, glyph_ids);
+        if (position_offset < 0 || position_offset + 1 >= pos_len ||
+            glyph_offset < 0 || glyph_offset >= gid_len)
+            return;
         jfloat *pos = (*env)->GetFloatArrayElements(env, positions, NULL);
-        if (pos) {
+        jint *gids = (*env)->GetIntArrayElements(env, glyph_ids, NULL);
+        if (pos && gids) {
+            char buf[256];
+            int n = glyph_count < 250 ? glyph_count : 250;
+            if (n > gid_len - glyph_offset)
+                n = gid_len - glyph_offset;
+            for (int i = 0; i < n; i++) {
+                jint gid = gids[glyph_offset + i];
+                buf[i] = (gid >= 32 && gid <= 126) ? (char)gid : ' ';
+            }
+            buf[n] = '\0';
             jfloat first_x = pos[position_offset];
             jfloat first_y = pos[position_offset + 1];
-            (*env)->ReleaseFloatArrayElements(env, positions, pos, JNI_ABORT);
-            muplar_draw_text_marker(env, clazz, canvas, glyph_count, first_x, first_y, paint_ptr);
+            muplar_draw_text(env, clazz, canvas, buf, n, first_x, first_y, paint_ptr);
         }
+        if (pos) (*env)->ReleaseFloatArrayElements(env, positions, pos, JNI_ABORT);
+        if (gids) (*env)->ReleaseIntArrayElements(env, glyph_ids, gids, JNI_ABORT);
     }
 }
 
@@ -5679,7 +5851,8 @@ static void muplar_blit_bitmap(struct muplar_bitmap_state *dst,
                                int clip_top,
                                int clip_right,
                                int clip_bottom,
-                               jlong paint)
+                               jlong paint,
+                               int mask_squircle)
 {
     int x;
     int y;
@@ -5689,10 +5862,27 @@ static void muplar_blit_bitmap(struct muplar_bitmap_state *dst,
     uint32_t tint_a = f ? (((uint32_t) f->color >> 24) & 0xff) : 255;
     uint32_t paint_a = (p && p->color) ? (((uint32_t) p->color >> 24) & 0xff) : 255;
 
+    int drawn_count = 0;
+    int src_non_zero = 0;
+
     if (!dst || !dst->pixels || !src || !src->pixels)
         return;
     if (dst_w <= 0 || dst_h <= 0 || src_w <= 0 || src_h <= 0)
         return;
+
+    for (y = 0; y < src->height && y < 100; y++) {
+        for (x = 0; x < src->width && x < 100; x++) {
+            if (src->pixels[y * src->width + x] != 0) {
+                src_non_zero++;
+            }
+        }
+    }
+
+    float cx = (float)dst_x + (float)dst_w * 0.5f;
+    float cy = (float)dst_y + (float)dst_h * 0.5f;
+    float hw = (float)dst_w * 0.495f;
+    float hh = (float)dst_h * 0.495f;
+    float r = ((float)dst_w < (float)dst_h ? (float)dst_w : (float)dst_h) * 0.22f;
 
     for (y = 0; y < dst_h; y++) {
         int py = dst_y + y;
@@ -5709,6 +5899,21 @@ static void muplar_blit_bitmap(struct muplar_bitmap_state *dst,
             uint8_t alpha;
             if (px < clip_left || px >= clip_right || px < 0 || px >= dst->width)
                 continue;
+
+            if (mask_squircle) {
+                float ox = fabsf((float)px + 0.5f - cx);
+                float oy = fabsf((float)py + 0.5f - cy);
+                if (ox >= hw || oy >= hh)
+                    continue;
+                if (ox > (hw - r) && oy > (hh - r)) {
+                    float cdx = ox - (hw - r);
+                    float cdy = oy - (hh - r);
+                    float dist = sqrtf(cdx * cdx + cdy * cdy);
+                    if (dist >= r)
+                        continue;
+                }
+            }
+
             sx = src_x + (int) (((int64_t) x * src_w) / dst_w);
             if (sx < 0 || sx >= src->width)
                 continue;
@@ -5717,6 +5922,25 @@ static void muplar_blit_bitmap(struct muplar_bitmap_state *dst,
             alpha = (uint8_t) (src_color >> 24);
             if (alpha == 0)
                 continue;
+
+            if (mask_squircle) {
+                float ox = fabsf((float)px + 0.5f - cx);
+                float oy = fabsf((float)py + 0.5f - cy);
+                if (ox > (hw - r) && oy > (hh - r)) {
+                    float cdx = ox - (hw - r);
+                    float cdy = oy - (hh - r);
+                    float dist = sqrtf(cdx * cdx + cdy * cdy);
+                    if (dist > r - 1.0f) {
+                        float mask_a = r - dist;
+                        if (mask_a < 0.0f) mask_a = 0.0f;
+                        if (mask_a > 1.0f) mask_a = 1.0f;
+                        alpha = (uint8_t)((float)alpha * mask_a);
+                        if (alpha == 0)
+                            continue;
+                    }
+                }
+            }
+
             if (paint_a < 255)
                 alpha = (uint8_t) (((uint32_t) alpha * paint_a) / 255);
             if (f && f->color != 0) {
@@ -5744,8 +5968,14 @@ static void muplar_blit_bitmap(struct muplar_bitmap_state *dst,
                 dst->pixels[(size_t) py * (size_t) dst->width + (size_t) px] =
                     0xff000000u | (r << 16) | (g << 8) | b;
             }
+            drawn_count++;
         }
     }
+    MUPLAR_DBG_RENDER("[Muplar/Blit] src=%p (%dx%d, non0=%d) -> dst=(%d,%d %dx%d) clip=(%d,%d-%d,%d) drawn=%d paint_a=%u\n",
+                      (void *)src, src->width, src->height, src_non_zero,
+                      dst_x, dst_y, dst_w, dst_h,
+                      clip_left, clip_top, clip_right, clip_bottom,
+                      drawn_count, paint_a);
 }
 
 void Java_android_graphics_BaseCanvas_nDrawBitmap(JNIEnv *env,
@@ -5770,6 +6000,7 @@ void Java_android_graphics_BaseCanvas_nDrawBitmap(JNIEnv *env,
     if (!src || !dst || !c)
         return;
     muplar_draw_bitmap_count++;
+    MUPLAR_DBG_RENDER("[Muplar/Draw] nDrawBitmap src=%p dx=%f dy=%f\n", (void *)src, left, top);
     int dx = muplar_floor_to_int(left * c->sx + c->tx);
     int dy = muplar_floor_to_int(top * c->sy + c->ty);
     int dw = (int) (src->width * c->sx);
@@ -5777,7 +6008,7 @@ void Java_android_graphics_BaseCanvas_nDrawBitmap(JNIEnv *env,
     muplar_blit_bitmap(dst, src, dx, dy, dw, dh, 0, 0,
                        src->width, src->height,
                        c->clip_left, c->clip_top, c->clip_right, c->clip_bottom,
-                       paint);
+                       paint, 0);
 }
 
 void Java_android_graphics_BaseCanvas_nDrawBitmapMatrix(JNIEnv *env,
@@ -5826,9 +6057,19 @@ void Java_android_graphics_BaseCanvas_nDrawBitmapRect(JNIEnv *env,
         int dy = muplar_floor_to_int(dst_top * c->sy + c->ty);
         int dw = muplar_ceil_to_int(dst_right * c->sx + c->tx) - dx;
         int dh = muplar_ceil_to_int(dst_bottom * c->sy + c->ty) - dy;
+        MUPLAR_DBG_RENDER("[Muplar/Draw] nDrawBitmapRect canvas=0x%llx src=%p dst=%p "
+                          "src_raw=(%.1f,%.1f - %.1f,%.1f) dst_raw=(%.1f,%.1f - %.1f,%.1f) "
+                          "matrix=(sx=%.2f,sy=%.2f,tx=%.1f,ty=%.1f) "
+                          "(%d,%d %dx%d) -> (%d,%d %dx%d) clip=(%d,%d-%d,%d)\n",
+                          (unsigned long long)canvas, (void *)src, (void *)dst,
+                          src_left, src_top, src_right, src_bottom,
+                          dst_left, dst_top, dst_right, dst_bottom,
+                          c->sx, c->sy, c->tx, c->ty,
+                          sx, sy, sw, sh, dx, dy, dw, dh,
+                          c->clip_left, c->clip_top, c->clip_right, c->clip_bottom);
         muplar_blit_bitmap(dst, src, dx, dy, dw, dh, sx, sy, sw, sh,
                            c->clip_left, c->clip_top, c->clip_right, c->clip_bottom,
-                           paint);
+                           paint, 0);
     }
 }
 
@@ -5864,7 +6105,7 @@ void Java_android_graphics_BaseCanvas_nDrawNinePatch(
         int dh = muplar_ceil_to_int(dst_bottom * c->sy + c->ty) - dy;
         muplar_blit_bitmap(dst, src, dx, dy, dw, dh, 0, 0, src->width, src->height,
                            c->clip_left, c->clip_top, c->clip_right, c->clip_bottom,
-                           paint);
+                           paint, 0);
     }
 }
 
@@ -6119,42 +6360,120 @@ jlong Java_android_graphics_text_MeasuredText_00024Builder_nBuildMeasuredText(
     return (jlong) muplar_next_measured_text_token;
 }
 
-jlong Java_android_graphics_RecordingCanvas_nCreateDisplayListCanvas(
+void Java_android_graphics_text_MeasuredText_00024Builder_nAddReplacementRun(
     JNIEnv *env,
     jclass clazz,
+    jlong native_builder,
+    jlong paint,
+    jint start,
+    jint end,
+    jfloat width)
+{
+    (void) env;
+    (void) clazz;
+    (void) native_builder;
+    (void) paint;
+    (void) start;
+    (void) end;
+    (void) width;
+}
+
+jfloat Java_android_graphics_text_MeasuredText_nGetWidth(
+    JNIEnv *env,
+    jclass clazz,
+    jlong native_ptr,
+    jint start,
+    jint end)
+{
+    (void) env;
+    (void) clazz;
+    (void) native_ptr;
+    return end > start ? (jfloat)(end - start) * 16.0f : 0.0f;
+}
+
+jint Java_android_graphics_text_MeasuredText_nGetMemoryUsage(
+    JNIEnv *env,
+    jclass clazz,
+    jlong native_ptr)
+{
+    (void) env;
+    (void) clazz;
+    (void) native_ptr;
+    return 1024;
+}
+
+jfloat Java_android_graphics_text_MeasuredText_nGetCharWidthAt(
+    JNIEnv *env,
+    jclass clazz,
+    jlong native_ptr,
+    jint offset)
+{
+    (void) env;
+    (void) clazz;
+    (void) native_ptr;
+    (void) offset;
+    return 16.0f;
+}
+
+void Java_android_graphics_text_MeasuredText_nGetBounds(
+    JNIEnv *env,
+    jclass clazz,
+    jlong native_ptr,
+    jcharArray buf,
+    jint start,
+    jint end,
+    jobject rect)
+{
+    (void) clazz;
+    (void) native_ptr;
+    (void) buf;
+    jint width = end > start ? (end - start) * 16 : 0;
+    muplar_set_int_field(env, rect, "left", 0);
+    muplar_set_int_field(env, rect, "top", -24);
+    muplar_set_int_field(env, rect, "right", width);
+    muplar_set_int_field(env, rect, "bottom", 8);
+}
+
+jlong Java_android_graphics_text_MeasuredText_nGetExtent(
+    JNIEnv *env,
+    jclass clazz,
+    jlong native_ptr,
+    jcharArray buf,
+    jint start,
+    jint end)
+{
+    (void) env;
+    (void) clazz;
+    (void) native_ptr;
+    (void) buf;
+    (void) start;
+    (void) end;
+    return 0;
+}
+
+jlong Java_android_graphics_RecordingCanvas_nCreateDisplayListCanvas(
     jlong node,
     jint width,
     jint height)
 {
     struct muplar_canvas_state *canvas;
-    (void) env;
-    (void) clazz;
     (void) node;
-    fprintf(stderr, "[Muplar/ART] nCreateDisplayListCanvas w=%d h=%d\n",
-            (int)width, (int)height);
+    (void) width;
+    (void) height;
     canvas = muplar_alloc_canvas(0);
     if (canvas) {
-        fprintf(stderr, "[Muplar/ART] nCreateDisplayListCanvas -> canvas=0x%llx bmp=0x%llx\n",
-                (unsigned long long)canvas->token,
-                (unsigned long long)canvas->bitmap_token);
         return canvas->token;
     }
     muplar_next_canvas_token += 0x100;
-    fprintf(stderr, "[Muplar/ART] nCreateDisplayListCanvas -> dummy canvas 0x%llx (no bitmap)\n",
-            (unsigned long long)muplar_next_canvas_token);
     return (jlong) muplar_next_canvas_token;
 }
 
-void Java_android_graphics_RecordingCanvas_nResetDisplayListCanvas(JNIEnv *env,
-                                                                   jclass clazz,
-                                                                   jlong canvas,
+void Java_android_graphics_RecordingCanvas_nResetDisplayListCanvas(jlong canvas,
                                                                    jlong node,
                                                                    jint width,
                                                                    jint height)
 {
     struct muplar_canvas_state *c = muplar_canvas_for_drawing(canvas);
-    (void) env;
-    (void) clazz;
     (void) node;
     if (!c)
         return;
@@ -6166,13 +6485,9 @@ void Java_android_graphics_RecordingCanvas_nResetDisplayListCanvas(JNIEnv *env,
     }
 }
 
-void Java_android_graphics_RecordingCanvas_nFinishRecording(JNIEnv *env,
-                                                            jclass clazz,
-                                                            jlong canvas,
+void Java_android_graphics_RecordingCanvas_nFinishRecording(jlong canvas,
                                                             jlong node)
 {
-    (void) env;
-    (void) clazz;
     (void) canvas;
     (void) node;
 }
@@ -7572,6 +7887,24 @@ jlong Java_android_os_Process_getTotalMemory(JNIEnv *env, jclass clazz)
     (void) env;
     (void) clazz;
     return (jlong) 4 * 1024 * 1024 * 1024;
+}
+
+void Java_android_os_Process_sendSignal(JNIEnv *env, jclass clazz, jint pid, jint sig)
+{
+    (void) env;
+    (void) clazz;
+    if (pid > 0) {
+        kill(pid, sig);
+    }
+}
+
+void Java_android_os_Process_sendSignalQuiet(JNIEnv *env, jclass clazz, jint pid, jint sig)
+{
+    (void) env;
+    (void) clazz;
+    if (pid > 0) {
+        kill(pid, sig);
+    }
 }
 
 jlong Java_android_os_Binder_clearCallingIdentity(JNIEnv *env, jclass clazz)
@@ -12280,8 +12613,11 @@ static void muplar_register_one(JNIEnv *env,
                                 void *fn)
 {
     JNINativeMethod method = {name, signature, fn};
-    if ((*env)->RegisterNatives(env, cls, &method, 1) != JNI_OK)
+    jint res = (*env)->RegisterNatives(env, cls, &method, 1);
+    if (res != JNI_OK) {
+        fprintf(stderr, "[Muplar/JNI] RegisterNatives FAILED: %s %s (res=%d)\n", name, signature, res);
         (*env)->ExceptionClear(env);
+    }
 }
 
 static int muplar_motion_event_registered_by_framework = 0;
@@ -12301,6 +12637,12 @@ static void muplar_register_framework_natives(JNIEnv *env)
         "_ZN7android30register_android_view_KeyEventEP7_JNIEnv",
         "_ZN7android33register_android_view_MotionEventEP7_JNIEnv",
         "_ZN7android37register_android_view_VelocityTrackerEP7_JNIEnv",
+        "_ZN7android38register_android_database_CursorWindowEP7_JNIEnv",
+        "_ZN7android42register_android_database_SQLiteConnectionEP7_JNIEnv",
+        "_ZN7android38register_android_database_SQLiteGlobalEP7_JNIEnv",
+        "_ZN7android37register_android_database_SQLiteDebugEP7_JNIEnv",
+        "_ZN7android44register_android_database_SQLiteRawStatementEP7_JNIEnv",
+        "_ZN7android48register_android_database_SQLiteUserDataRecoveryEP7_JNIEnv",
         NULL,
     };
     void *handle =
@@ -12649,125 +12991,7 @@ JNIEXPORT jint JNICALL JNI_OnLoad(JavaVM *vm, void *reserved)
                             (void *) Java_android_util_EventLog_writeEvent);
     }
 
-    cls = (*env)->FindClass(env, "android/database/sqlite/SQLiteConnection");
-    if ((*env)->ExceptionCheck(env)) {
-        (*env)->ExceptionClear(env);
-    } else if (cls) {
-        muplar_register_one(env, cls, "nativeOpen",
-                            "(Ljava/lang/String;ILjava/lang/String;ZZII)J",
-                            (void *) muplar_SQLite_nOpen);
-        muplar_register_one(env, cls, "nativeClose", "(J)V",
-                            (void *) muplar_SQLite_nVoid);
-        muplar_register_one(env, cls, "nativeClose", "(JZ)V",
-                            (void *) muplar_SQLite_nVoid);
-        muplar_register_one(env, cls, "nativeRegisterLocalizedCollators",
-                            "(JLjava/lang/String;)V",
-                            (void *) muplar_SQLite_nVoid);
-        muplar_register_one(env, cls, "nativePrepareStatement",
-                            "(JLjava/lang/String;)J",
-                            (void *) muplar_SQLite_nativePrepareStatement);
-        muplar_register_one(env, cls, "nativeFinalizeStatement", "(JJ)V",
-                            (void *) muplar_SQLite_nVoid);
-        muplar_register_one(env, cls, "nativeGetParameterCount", "(JJ)I",
-                            (void *) muplar_SQLite_nativeGetParameterCount);
-        muplar_register_one(env, cls, "nativeIsReadOnly", "(JJ)Z",
-                            (void *) muplar_SQLite_nBoolean);
-        muplar_register_one(env, cls, "nativeIsForcedReadOnly", "(J)Z",
-                            (void *) muplar_SQLite_nBoolean);
-        muplar_register_one(env, cls, "nativeGetColumnCount", "(JJ)I",
-                            (void *) muplar_SQLite_nativeGetColumnCount);
-        muplar_register_one(env, cls, "nativeGetColumnName",
-                            "(JJI)Ljava/lang/String;",
-                            (void *) muplar_SQLite_nativeGetColumnName);
-        muplar_register_one(env, cls, "nativeBindNull", "(JJI)V",
-                            (void *) muplar_SQLite_nVoid);
-        muplar_register_one(env, cls, "nativeBindLong", "(JJIJ)V",
-                            (void *) muplar_SQLite_nVoid);
-        muplar_register_one(env, cls, "nativeBindDouble", "(JJID)V",
-                            (void *) muplar_SQLite_nVoid);
-        muplar_register_one(env, cls, "nativeBindString",
-                            "(JJILjava/lang/String;)V",
-                            (void *) muplar_SQLite_nVoid);
-        muplar_register_one(env, cls, "nativeBindBlob", "(JJI[B)V",
-                            (void *) muplar_SQLite_nVoid);
-        muplar_register_one(env, cls, "nativeResetStatementAndClearBindings",
-                            "(JJ)V", (void *) muplar_SQLite_nVoid);
-        muplar_register_one(env, cls, "nativeExecute", "(JJZ)V",
-                            (void *) muplar_SQLite_nVoid);
-        muplar_register_one(env, cls, "nativeExecuteForLong", "(JJ)J",
-                            (void *) muplar_SQLite_nLong);
-        muplar_register_one(env, cls, "nativeExecuteForString",
-                            "(JJ)Ljava/lang/String;",
-                            (void *) muplar_SQLite_nString);
-        muplar_register_one(env, cls, "nativeExecuteForChangedRowCount",
-                            "(JJ)I", (void *) muplar_SQLite_nInt);
-        muplar_register_one(env, cls, "nativeExecuteForLastInsertedRowId",
-                            "(JJ)J", (void *) muplar_SQLite_nLong);
-        muplar_register_one(
-            env, cls, "nativeExecuteForCursorWindow", "(JJJIIZ)J",
-            (void *) muplar_SQLite_nativeExecuteForCursorWindow);
-    }
 
-    cls = (*env)->FindClass(env, "android/database/sqlite/SQLiteGlobal");
-    if ((*env)->ExceptionCheck(env)) {
-        (*env)->ExceptionClear(env);
-    } else if (cls) {
-        muplar_register_one(env, cls, "nativeReleaseMemory", "()I",
-                            (void *) muplar_SQLite_nInt);
-    }
-
-    cls = (*env)->FindClass(env, "android/database/CursorWindow");
-    if ((*env)->ExceptionCheck(env)) {
-        (*env)->ExceptionClear(env);
-    } else if (cls) {
-        muplar_register_one(env, cls, "nativeCreate", "(Ljava/lang/String;I)J",
-                            (void *) muplar_CursorWindow_nativeCreate);
-        muplar_register_one(
-            env, cls, "nativeCreateFromParcel", "(Landroid/os/Parcel;)J",
-            (void *) muplar_CursorWindow_nativeCreateFromParcel);
-        muplar_register_one(env, cls, "nativeDispose", "(J)V",
-                            (void *) muplar_CursorWindow_nativeVoid);
-        muplar_register_one(env, cls, "nativeGetName", "(J)Ljava/lang/String;",
-                            (void *) muplar_CursorWindow_nativeString);
-        muplar_register_one(env, cls, "nativeAllocRow", "(J)Z",
-                            (void *) muplar_CursorWindow_nativeTrue);
-        muplar_register_one(env, cls, "nativeClear", "(J)V",
-                            (void *) muplar_CursorWindow_nativeVoid);
-        muplar_register_one(env, cls, "nativeCopyStringToBuffer",
-                            "(JIILandroid/database/CharArrayBuffer;)V",
-                            (void *) muplar_CursorWindow_nativeVoid);
-        muplar_register_one(env, cls, "nativeFreeLastRow", "(J)V",
-                            (void *) muplar_CursorWindow_nativeVoid);
-        muplar_register_one(env, cls, "nativeGetBlob", "(JII)[B",
-                            (void *) muplar_CursorWindow_nativeBlob);
-        muplar_register_one(env, cls, "nativeGetDouble", "(JII)D",
-                            (void *) muplar_CursorWindow_nativeDouble);
-        muplar_register_one(env, cls, "nativeGetLong", "(JII)J",
-                            (void *) muplar_CursorWindow_nativeLong);
-        muplar_register_one(env, cls, "nativeGetNumRows", "(J)I",
-                            (void *) muplar_CursorWindow_nativeInt);
-        muplar_register_one(env, cls, "nativeGetString",
-                            "(JII)Ljava/lang/String;",
-                            (void *) muplar_CursorWindow_nativeString);
-        muplar_register_one(env, cls, "nativeGetType", "(JII)I",
-                            (void *) muplar_CursorWindow_nativeInt);
-        muplar_register_one(env, cls, "nativePutBlob", "(J[BII)Z",
-                            (void *) muplar_CursorWindow_nativeTrue);
-        muplar_register_one(env, cls, "nativePutDouble", "(JDII)Z",
-                            (void *) muplar_CursorWindow_nativeTrue);
-        muplar_register_one(env, cls, "nativePutLong", "(JJII)Z",
-                            (void *) muplar_CursorWindow_nativeTrue);
-        muplar_register_one(env, cls, "nativePutNull", "(JII)Z",
-                            (void *) muplar_CursorWindow_nativeTrue);
-        muplar_register_one(env, cls, "nativePutString",
-                            "(JLjava/lang/String;II)Z",
-                            (void *) muplar_CursorWindow_nativeTrue);
-        muplar_register_one(env, cls, "nativeSetNumColumns", "(JI)Z",
-                            (void *) muplar_CursorWindow_nativeTrue);
-        muplar_register_one(env, cls, "nativeWriteToParcel",
-                            "(JLandroid/os/Parcel;)V",
-                            (void *) muplar_CursorWindow_nativeVoid);
-    }
 
     cls = (*env)->FindClass(env, "android/graphics/Matrix$ExtraNatives");
     if (!cls) {
@@ -13266,8 +13490,27 @@ JNIEXPORT jint JNICALL JNI_OnLoad(JavaVM *vm, void *reserved)
         "(J[CIIIIZI[FILandroid/graphics/RectF;"
         "Landroid/graphics/Paint$RunInfo;)F",
         (void *) Java_android_graphics_Paint_nGetRunCharacterAdvance);
+    muplar_register_one(
+        env, cls, "nGetRunCharacterAdvance",
+        "(J[CIIIIZI[FILandroid/graphics/RectF;)F",
+        (void *) Java_android_graphics_Paint_nGetRunCharacterAdvanceWithoutRunInfo);
+    muplar_register_one(
+        env, cls, "nGetRunAdvance",
+        "(J[CIIIIZI)F",
+        (void *) Java_android_graphics_Paint_nGetRunAdvance);
+    muplar_register_one(
+        env, cls, "nBreakText",
+        "(J[CIIFI[F)I",
+        (void *) Java_android_graphics_Paint_nBreakTextChars);
+    muplar_register_one(
+        env, cls, "nBreakText",
+        "(JLjava/lang/String;ZFI[F)I",
+        (void *) Java_android_graphics_Paint_nBreakTextString);
     muplar_register_one(env, cls, "nGetTextAdvances", "(J[CIIIII[FI)F",
                         (void *) Java_android_graphics_Paint_nGetTextAdvances);
+    muplar_register_one(env, cls, "nGetTextAdvances",
+                        "(JLjava/lang/String;IIIII[FI)F",
+                        (void *) Java_android_graphics_Paint_nGetTextAdvancesString);
     muplar_register_one(env, cls, "nHasGlyph", "(JILjava/lang/String;)Z",
                         (void *) Java_android_graphics_Paint_nHasGlyph);
 
@@ -14150,6 +14393,21 @@ JNIEXPORT jint JNICALL JNI_OnLoad(JavaVM *vm, void *reserved)
         muplar_register_one(
             env, cls, "nGetReleaseFunc", "()J",
             (void *) Java_android_graphics_text_MeasuredText_nGetReleaseFunc);
+        muplar_register_one(
+            env, cls, "nGetWidth", "(JII)F",
+            (void *) Java_android_graphics_text_MeasuredText_nGetWidth);
+        muplar_register_one(
+            env, cls, "nGetMemoryUsage", "(J)I",
+            (void *) Java_android_graphics_text_MeasuredText_nGetMemoryUsage);
+        muplar_register_one(
+            env, cls, "nGetCharWidthAt", "(JI)F",
+            (void *) Java_android_graphics_text_MeasuredText_nGetCharWidthAt);
+        muplar_register_one(
+            env, cls, "nGetBounds", "(J[CIILandroid/graphics/Rect;)V",
+            (void *) Java_android_graphics_text_MeasuredText_nGetBounds);
+        muplar_register_one(
+            env, cls, "nGetExtent", "(J[CII)J",
+            (void *) Java_android_graphics_text_MeasuredText_nGetExtent);
     } else {
         (*env)->ExceptionClear(env);
     }
@@ -14168,6 +14426,10 @@ JNIEXPORT jint JNICALL JNI_OnLoad(JavaVM *vm, void *reserved)
             env, cls, "nAddStyleRun", "(JJIIZIIZ)V",
             (void *)
                 Java_android_graphics_text_MeasuredText_00024Builder_nAddStyleRun);
+        muplar_register_one(
+            env, cls, "nAddReplacementRun", "(JJIIF)V",
+            (void *)
+                Java_android_graphics_text_MeasuredText_00024Builder_nAddReplacementRun);
         muplar_register_one(
             env, cls, "nBuildMeasuredText", "(JJ[CZZZZ)J",
             (void *)
@@ -15129,6 +15391,10 @@ JNIEXPORT jint JNICALL JNI_OnLoad(JavaVM *vm, void *reserved)
                         (void *) Java_android_os_Process_setThreadPriority__II);
     muplar_register_one(env, cls, "getTotalMemory", "()J",
                         (void *) Java_android_os_Process_getTotalMemory);
+    muplar_register_one(env, cls, "sendSignal", "(II)V",
+                        (void *) Java_android_os_Process_sendSignal);
+    muplar_register_one(env, cls, "sendSignalQuiet", "(II)V",
+                        (void *) Java_android_os_Process_sendSignalQuiet);
 
     cls = (*env)->FindClass(env, "android/os/Binder");
     if (!cls) {

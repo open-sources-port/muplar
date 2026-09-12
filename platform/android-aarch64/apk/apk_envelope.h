@@ -47,6 +47,7 @@ struct ApkClassification {
     std::optional<std::string> manifest_package;
     std::optional<std::string> manifest_application_label;
     std::optional<std::string> manifest_application_icon;
+    std::optional<uint32_t> manifest_application_icon_resource;
     std::optional<std::string> manifest_application_class;
     std::optional<std::string> manifest_launch_activity;
     std::optional<std::string> manifest_widget_provider;

@@ -633,6 +633,18 @@ std::optional<std::string> infer_plain_manifest_launch_activity(
     }
 
     for (const auto &candidate : candidates) {
+        if (candidate.is_launcher) {
+            std::string lower = candidate.name;
+            for (char &c : lower) c = std::tolower((unsigned char)c);
+            if (lower.find("mainactivity") != std::string::npos ||
+                (lower.find("main") != std::string::npos &&
+                 lower.find("panic") == std::string::npos &&
+                 lower.find("calc") == std::string::npos)) {
+                return candidate.name;
+            }
+        }
+    }
+    for (const auto &candidate : candidates) {
         if (candidate.is_launcher)
             return candidate.name;
     }
@@ -893,6 +905,7 @@ std::optional<std::string> infer_binary_manifest_launch_activity(
 
     std::optional<std::string> first_activity;
     std::optional<std::string> current_activity;
+    std::vector<std::string> launcher_activities;
     bool has_main_action = false;
     bool has_launcher_category = false;
     size_t off =
@@ -940,11 +953,24 @@ std::optional<std::string> infer_binary_manifest_launch_activity(
             if (current_activity && name_idx < strings.size() &&
                 strings[name_idx] == "activity") {
                 if (has_main_action && has_launcher_category)
-                    return current_activity;
+                    launcher_activities.push_back(*current_activity);
                 current_activity.reset();
             }
         }
         off += chunk_size;
+    }
+    if (!launcher_activities.empty()) {
+        for (const auto &act : launcher_activities) {
+            std::string lower = act;
+            for (char &c : lower) c = std::tolower((unsigned char)c);
+            if (lower.find("mainactivity") != std::string::npos ||
+                (lower.find("main") != std::string::npos &&
+                 lower.find("panic") == std::string::npos &&
+                 lower.find("calc") == std::string::npos)) {
+                return act;
+            }
+        }
+        return launcher_activities.front();
     }
     return first_activity;
 }
@@ -1173,6 +1199,8 @@ ApkClassification classify_entries(const std::filesystem::path &apk_path,
                 extract_entry_data(apk, *resources_entry),
                 *manifest_info.application_icon_resource);
         }
+        classification.manifest_application_icon_resource =
+            manifest_info.application_icon_resource;
         classification.manifest_application_class =
             manifest_info.application_class;
         classification.manifest_launch_activity = manifest_info.launch_activity;

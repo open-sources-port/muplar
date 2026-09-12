@@ -667,7 +667,9 @@ int AndroidAarch64Runtime::run(const PlatformLaunchConfig &config)
                 std::cerr << "[APK] dex files="
                           << classification.dex_files.size() << "\n";
             }
-            if (classification.runtime_kind == apk::ApkRuntimeKind::JavaOnly)
+            bool is_java_app = classification.runtime_kind == apk::ApkRuntimeKind::JavaOnly ||
+                (!classification.dex_files.empty() && !guest_cfg.native_activity);
+            if (is_java_app)
                 return handle_java_apk_launch(config, classification);
 
             apply_apk_launch(config, guest_cfg);

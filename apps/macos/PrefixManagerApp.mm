@@ -3047,6 +3047,20 @@ static NSString* MapLinuxIconToSFSymbol(NSString* icon)
                     "activity=" + *apk.manifest_launch_activity + "\n";
                 registryText += "label=" + std::string(name.UTF8String) + "\n";
                 registryText += "apk=" + entry.path().string() + "\n";
+                if (apk.manifest_application_class &&
+                    !apk.manifest_application_class->empty()) {
+                    registryText +=
+                        "application=" + *apk.manifest_application_class + "\n";
+                }
+                if (apk.manifest_application_icon_resource) {
+                    registryText += "icon=" +
+                        std::to_string(*apk.manifest_application_icon_resource) + "\n";
+                }
+                if (apk.manifest_application_icon &&
+                    !apk.manifest_application_icon->empty()) {
+                    registryText +=
+                        "icon_path=" + *apk.manifest_application_icon + "\n";
+                }
                 registryText += "---\n";
             }
         } @catch (...) {
@@ -4854,7 +4868,20 @@ static NSString* MapLinuxIconToSFSymbol(NSString* icon)
     BOOL isLauncherApp = app.name.length > 0 &&
         [app.name rangeOfString:@"launcher"
                         options:NSCaseInsensitiveSearch].location != NSNotFound;
-    NSString* tabIdentifier = isLauncherApp ? @"launcher" : key;
+    NSString* tabIdentifier = @"launcher";
+    if (!isLauncherApp) {
+        @try {
+            auto apk = muplar::runtime::apk::classify_apk(
+                std::filesystem::path(app.path.UTF8String));
+            if (apk.manifest_package && !apk.manifest_package->empty()) {
+                tabIdentifier = NSStringFromStdString(*apk.manifest_package);
+            } else {
+                tabIdentifier = key;
+            }
+        } @catch (...) {
+            tabIdentifier = key;
+        }
+    }
     NSString* tabTitle = isLauncherApp ? @"Home" : (app.name ?: @"App");
     NSString* sessionSocketPath = NSStringFromPath(selected->root / "run" / "muplard.sock");
     NSString* frameSocketPath =
@@ -5111,8 +5138,22 @@ static NSString* MapLinuxIconToSFSymbol(NSString* icon)
         [strongSelf->_stoppingAndroidSessionKeys addObject:capturedSessionKey];
         if (running.isRunning) {
             [running terminate];
+            pid_t pid = running.processIdentifier;
+            dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(500 * NSEC_PER_MSEC)),
+                           dispatch_get_global_queue(QOS_CLASS_DEFAULT, 0), ^{
+                if (pid > 1 && kill(pid, 0) == 0) {
+                    kill(pid, SIGKILL);
+                }
+            });
         } else if (pending.isRunning) {
             [pending terminate];
+            pid_t pid = pending.processIdentifier;
+            dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(500 * NSEC_PER_MSEC)),
+                           dispatch_get_global_queue(QOS_CLASS_DEFAULT, 0), ^{
+                if (pid > 1 && kill(pid, 0) == 0) {
+                    kill(pid, SIGKILL);
+                }
+            });
         } else {
             [strongSelf->_androidSessionTasks removeObjectForKey:capturedSessionKey];
             [strongSelf->_pendingAndroidSessionTasks removeObjectForKey:
@@ -5589,10 +5630,30 @@ static NSString* MapLinuxIconToSFSymbol(NSString* icon)
 
     NSString* status = [self statusForApp:app];
     if ([status isEqualToString:@"Running"]) {
-        NSString* key = [self appKeyForApp:app];
-        NSTask* task = _runningTasks[key];
-        if (task && task.isRunning) {
-            [task terminate];
+        prefix::PrefixLayout* selected = [self selectedPrefix];
+        if (selected && selected->kind == prefix::PrefixKind::Android) {
+            NSString* deviceKey = [self androidDeviceKeyForPrefix:selected];
+            NSTask* task = _androidSessionTasks[deviceKey];
+            if (task && task.isRunning) {
+                [task terminate];
+                pid_t pid = task.processIdentifier;
+                dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(500 * NSEC_PER_MSEC)),
+                               dispatch_get_global_queue(QOS_CLASS_DEFAULT, 0), ^{
+                    if (pid > 1 && kill(pid, 0) == 0) {
+                        kill(pid, SIGKILL);
+                    }
+                });
+            }
+            AndroidDeviceShell* shell = _androidDeviceShells[deviceKey];
+            if (shell) {
+                [shell.window close];
+            }
+        } else {
+            NSString* key = [self appKeyForApp:app];
+            NSTask* task = _runningTasks[key];
+            if (task && task.isRunning) {
+                [task terminate];
+            }
         }
     } else if ([status isEqualToString:@"Stopped"]) {
         [self launchShortcut:app];

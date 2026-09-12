@@ -23,6 +23,7 @@ import android.os.Handler;
 import android.os.IBinder;
 import android.os.Looper;
 import android.os.UserHandle;
+import android.net.Uri;
 import android.graphics.Rect;
 import android.view.Display;
 import android.view.WindowInsets;
@@ -30,6 +31,8 @@ import android.view.LayoutInflater;
 import android.view.WindowManager;
 import android.view.WindowMetrics;
 import java.io.File;
+import java.lang.reflect.Constructor;
+import java.lang.reflect.Method;
 import java.util.HashMap;
 import java.util.Collections;
 import java.util.Map;
@@ -56,6 +59,11 @@ public final class MuplarContext extends ContextWrapper {
     private final Object inputMethodManager;
     private final Object audioManager;
     private final Object appWidgetManager;
+    private final Object activityManager;
+    private final Object notificationManager;
+    private final Object connectivityManager;
+    private final Object powerManager;
+    private final Object jobScheduler;
     private final ContentResolver contentResolver;
     private final PackageManager packageManager;
     private final IBinder activityToken = new Binder();
@@ -69,9 +77,19 @@ public final class MuplarContext extends ContextWrapper {
             ? MuplarContext.class.getClassLoader() : classLoader;
         this.applicationInfo = new ApplicationInfo();
         this.applicationInfo.packageName = this.packageName;
+        this.applicationInfo.processName = this.packageName;
         this.applicationInfo.sourceDir = apkPath;
         this.applicationInfo.publicSourceDir = apkPath;
         this.applicationInfo.dataDir = "/data/user/0/" + this.packageName;
+        try {
+            File dDir = new File(this.applicationInfo.dataDir);
+            dDir.mkdirs();
+            new File(dDir, "databases").mkdirs();
+            new File(dDir, "shared_prefs").mkdirs();
+            new File(dDir, "files").mkdirs();
+            new File(dDir, "cache").mkdirs();
+        } catch (Throwable ignored) {
+        }
         this.applicationInfo.nativeLibraryDir = "/data/local/tmp/muplar/lib";
         this.applicationInfo.uid = 1000;
         this.applicationInfo.flags |= ApplicationInfo.FLAG_SYSTEM;
@@ -105,6 +123,11 @@ public final class MuplarContext extends ContextWrapper {
         this.inputMethodManager = createInputMethodManager(this);
         this.audioManager = createAudioManager(this);
         this.appWidgetManager = createAppWidgetManager(this);
+        this.activityManager = createActivityManager(this);
+        this.notificationManager = createNotificationManager(this);
+        this.connectivityManager = createConnectivityManager(this);
+        this.powerManager = createPowerManager(this);
+        this.jobScheduler = createJobScheduler(this);
     }
 
     private Context applicationContext;
@@ -324,6 +347,73 @@ public final class MuplarContext extends ContextWrapper {
     }
 
     @Override
+    public boolean isDeviceProtectedStorage() {
+        return false;
+    }
+
+    @Override
+    public void startActivity(Intent intent) {
+        startActivity(intent, null);
+    }
+
+    @Override
+    public void startActivity(Intent intent, Bundle options) {
+        if (intent != null) {
+            String targetPkg = intent.getPackage();
+            String targetCls = null;
+            if (intent.getComponent() != null) {
+                targetPkg = intent.getComponent().getPackageName();
+                targetCls = intent.getComponent().getClassName();
+            }
+            if (targetPkg == null || targetPkg.isEmpty()) {
+                targetPkg = this.packageName;
+            }
+            MuplarServices.InstalledPackage pkg = MuplarServices.findInstalledPackage(targetPkg);
+            String apk = pkg != null ? pkg.apk : this.applicationInfo.sourceDir;
+            String appCls = pkg != null ? pkg.application : null;
+            if (targetCls == null && pkg != null) {
+                targetCls = pkg.activity;
+            }
+            if (targetCls != null && !targetCls.isEmpty()) {
+                System.out.println("[Muplar/ART] Context.startActivity targetPkg=" + targetPkg + " cls=" + targetCls);
+                FrameworkDeviceController.launchApp(apk, targetPkg, targetCls, appCls);
+            }
+        }
+    }
+
+    @Override
+    public void grantUriPermission(String toPackage, Uri uri, int modeFlags) {
+    }
+
+    @Override
+    public void revokeUriPermission(Uri uri, int modeFlags) {
+    }
+
+    @Override
+    public void revokeUriPermission(String toPackage, Uri uri, int modeFlags) {
+    }
+
+    @Override
+    public int checkUriPermission(Uri uri, int pid, int uid, int modeFlags) {
+        return PackageManager.PERMISSION_GRANTED;
+    }
+
+    @Override
+    public int checkCallingUriPermission(Uri uri, int modeFlags) {
+        return PackageManager.PERMISSION_GRANTED;
+    }
+
+    @Override
+    public int checkCallingOrSelfUriPermission(Uri uri, int modeFlags) {
+        return PackageManager.PERMISSION_GRANTED;
+    }
+
+    @Override
+    public int checkUriPermission(Uri uri, String readPermission, String writePermission, int pid, int uid, int modeFlags) {
+        return PackageManager.PERMISSION_GRANTED;
+    }
+
+    @Override
     public void registerComponentCallbacks(ComponentCallbacks callback) {
     }
 
@@ -398,6 +488,14 @@ public final class MuplarContext extends ContextWrapper {
 
     @Override
     public File getDatabasePath(String name) {
+        if (name != null && (name.startsWith(File.separator) || name.contains(File.separator))) {
+            File f = new File(name);
+            File parent = f.getParentFile();
+            if (parent != null && !parent.exists()) {
+                parent.mkdirs();
+            }
+            return f;
+        }
         File dir = new File(applicationInfo.dataDir, "databases");
         if (!dir.exists()) {
             dir.mkdirs();
@@ -443,6 +541,9 @@ public final class MuplarContext extends ContextWrapper {
 
     @Override
     public Object getSystemService(String name) {
+        if (Context.ACTIVITY_SERVICE.equals(name) || "activity".equals(name) || "android.app.ActivityManager".equals(name)) {
+            return activityManager;
+        }
         if (Context.USER_SERVICE.equals(name)) {
             return userManager;
         }
@@ -485,11 +586,31 @@ public final class MuplarContext extends ContextWrapper {
         if ("appwidget".equals(name)) {
             return appWidgetManager;
         }
+        if (Context.NOTIFICATION_SERVICE.equals(name) || "notification".equals(name) || "android.app.NotificationManager".equals(name)) {
+            return notificationManager;
+        }
+        if (Context.CONNECTIVITY_SERVICE.equals(name) || "connectivity".equals(name) || "android.net.ConnectivityManager".equals(name)) {
+            return connectivityManager;
+        }
+        if (Context.POWER_SERVICE.equals(name) || "power".equals(name) || "android.os.PowerManager".equals(name)) {
+            return powerManager;
+        }
+        if (Context.JOB_SCHEDULER_SERVICE.equals(name) || "jobscheduler".equals(name) || "android.app.job.JobScheduler".equals(name)) {
+            return jobScheduler;
+        }
         return null;
     }
 
     @Override
     public Intent registerReceiver(BroadcastReceiver receiver, IntentFilter filter) {
+        if (filter != null && filter.hasAction(Intent.ACTION_BATTERY_CHANGED)) {
+            Intent intent = new Intent(Intent.ACTION_BATTERY_CHANGED);
+            intent.putExtra(android.os.BatteryManager.EXTRA_STATUS, android.os.BatteryManager.BATTERY_STATUS_CHARGING);
+            intent.putExtra(android.os.BatteryManager.EXTRA_PLUGGED, android.os.BatteryManager.BATTERY_PLUGGED_AC);
+            intent.putExtra(android.os.BatteryManager.EXTRA_LEVEL, 100);
+            intent.putExtra(android.os.BatteryManager.EXTRA_SCALE, 100);
+            return intent;
+        }
         return null;
     }
 
@@ -497,7 +618,7 @@ public final class MuplarContext extends ContextWrapper {
     public Intent registerReceiver(BroadcastReceiver receiver,
                                    IntentFilter filter,
                                    int flags) {
-        return null;
+        return registerReceiver(receiver, filter);
     }
 
     @Override
@@ -585,6 +706,26 @@ public final class MuplarContext extends ContextWrapper {
 
     @Override
     public String getSystemServiceName(Class<?> serviceClass) {
+        if (serviceClass != null &&
+            "android.app.ActivityManager".equals(serviceClass.getName())) {
+            return Context.ACTIVITY_SERVICE;
+        }
+        if (serviceClass != null &&
+            "android.app.NotificationManager".equals(serviceClass.getName())) {
+            return Context.NOTIFICATION_SERVICE;
+        }
+        if (serviceClass != null &&
+            "android.net.ConnectivityManager".equals(serviceClass.getName())) {
+            return Context.CONNECTIVITY_SERVICE;
+        }
+        if (serviceClass != null &&
+            "android.os.PowerManager".equals(serviceClass.getName())) {
+            return Context.POWER_SERVICE;
+        }
+        if (serviceClass != null &&
+            ("android.app.job.JobScheduler".equals(serviceClass.getName()) || "android.app.JobSchedulerImpl".equals(serviceClass.getName()))) {
+            return Context.JOB_SCHEDULER_SERVICE;
+        }
         if (serviceClass != null &&
             "android.os.UserManager".equals(serviceClass.getName())) {
             return Context.USER_SERVICE;
@@ -899,7 +1040,7 @@ public final class MuplarContext extends ContextWrapper {
         }
     }
 
-    private static Resources createResources(String apkPath) {
+    static Resources createResources(String apkPath) {
         try {
             java.lang.reflect.Constructor<AssetManager> ctor =
                 AssetManager.class.getDeclaredConstructor();
@@ -1015,13 +1156,23 @@ public final class MuplarContext extends ContextWrapper {
     private static int resolveThemeResource(Resources resources,
                                             String packageName) {
         String[] names = {
-            "LauncherTheme",
+            "Theme_App",
+            "Theme.App",
             "AppTheme",
-            "Theme",
-            "BaseLauncherTheme",
-            "LauncherThemeBase",
+            "LauncherTheme",
             "Theme_Launcher",
             "Theme_Launcher3",
+            "LauncherThemeBase",
+            "BaseLauncherTheme",
+            "Theme_AppCompat",
+            "Theme.AppCompat",
+            "Theme_AppCompat_Light",
+            "Theme.AppCompat.Light",
+            "Theme_MaterialComponents",
+            "Theme.MaterialComponents",
+            "Theme_MaterialComponents_Light",
+            "Theme.MaterialComponents.Light",
+            "Theme",
         };
         for (String name : names) {
             try {
@@ -1528,6 +1679,168 @@ public final class MuplarContext extends ContextWrapper {
                 }
             );
         } catch (Throwable t) {
+            return null;
+        }
+    }
+
+    private static Object createActivityManager(final Context context) {
+        try {
+            Class<?> type = Class.forName("android.app.ActivityManager");
+            java.lang.reflect.Constructor<?>[] ctors = type.getDeclaredConstructors();
+            System.out.println("[Muplar/ART] ActivityManager constructors count=" + ctors.length);
+            for (java.lang.reflect.Constructor<?> ctor : ctors) {
+                ctor.setAccessible(true);
+                Class<?>[] params = ctor.getParameterTypes();
+                System.out.println("[Muplar/ART] ActivityManager ctor params=" + java.util.Arrays.toString(params));
+                if (params.length == 2) {
+                    try {
+                        android.os.Handler handler = null;
+                        try {
+                            if (android.os.Looper.getMainLooper() != null) {
+                                handler = new android.os.Handler(android.os.Looper.getMainLooper());
+                            }
+                        } catch (Throwable ignored) {}
+                        Object res = ctor.newInstance(context, handler);
+                        System.out.println("[Muplar/ART] ActivityManager created successfully");
+                        return res;
+                    } catch (Throwable e) {
+                        System.err.println("[Muplar/ART] ActivityManager(2) failed: " + e);
+                    }
+                } else if (params.length == 1) {
+                    try {
+                        Object res = ctor.newInstance(context);
+                        System.out.println("[Muplar/ART] ActivityManager created(1)");
+                        return res;
+                    } catch (Throwable e) {
+                        System.err.println("[Muplar/ART] ActivityManager(1) failed: " + e);
+                    }
+                } else if (params.length == 0) {
+                    try {
+                        Object res = ctor.newInstance();
+                        System.out.println("[Muplar/ART] ActivityManager created(0)");
+                        return res;
+                    } catch (Throwable e) {
+                        System.err.println("[Muplar/ART] ActivityManager(0) failed: " + e);
+                    }
+                }
+            }
+        } catch (Throwable t) {
+            System.err.println("[Muplar/ART] createActivityManager failed: " + t);
+        }
+        return null;
+    }
+
+    private static Object createNotificationManager(final Context context) {
+        try {
+            Class<?> type = Class.forName("android.app.NotificationManager");
+            java.lang.reflect.Constructor<?>[] ctors = type.getDeclaredConstructors();
+            System.out.println("[Muplar/ART] NotificationManager constructors count=" + ctors.length);
+            for (java.lang.reflect.Constructor<?> ctor : ctors) {
+                ctor.setAccessible(true);
+                Class<?>[] params = ctor.getParameterTypes();
+                System.out.println("[Muplar/ART] NotificationManager ctor params=" + java.util.Arrays.toString(params));
+                if (params.length == 2) {
+                    try {
+                        Object res = ctor.newInstance(context, null);
+                        System.out.println("[Muplar/ART] NotificationManager created(2)");
+                        return res;
+                    } catch (Throwable e) {
+                        System.err.println("[Muplar/ART] NotificationManager(2) failed: " + e);
+                    }
+                } else if (params.length == 1) {
+                    try {
+                        Object res = ctor.newInstance(context);
+                        System.out.println("[Muplar/ART] NotificationManager created(1)");
+                        return res;
+                    } catch (Throwable e) {
+                        System.err.println("[Muplar/ART] NotificationManager(1) failed: " + e);
+                    }
+                } else if (params.length == 0) {
+                    try {
+                        Object res = ctor.newInstance();
+                        System.out.println("[Muplar/ART] NotificationManager created(0)");
+                        return res;
+                    } catch (Throwable e) {
+                        System.err.println("[Muplar/ART] NotificationManager(0) failed: " + e);
+                    }
+                }
+            }
+        } catch (Throwable t) {
+            System.err.println("[Muplar/ART] createNotificationManager failed: " + t);
+        }
+        return null;
+    }
+
+    private static Object createPowerManager(final Context context) {
+        try {
+            Class<?> type = Class.forName("android.os.PowerManager");
+            IBinder binder = MuplarServices.getBinder("power");
+            Object serviceProxy = null;
+            try {
+                Class<?> stubClass = Class.forName("android.os.IPowerManager$Stub");
+                Method asInterface = stubClass.getMethod("asInterface", IBinder.class);
+                serviceProxy = asInterface.invoke(null, binder);
+            } catch (Throwable ignored) {}
+
+            Constructor<?>[] ctors = type.getDeclaredConstructors();
+            for (Constructor<?> ctor : ctors) {
+                ctor.setAccessible(true);
+                Class<?>[] params = ctor.getParameterTypes();
+                if (params.length == 4 && params[0].isAssignableFrom(Context.class)) {
+                    try {
+                        Object res = ctor.newInstance(context, serviceProxy, null, new Handler(context.getMainLooper()));
+                        return res;
+                    } catch (Throwable ignored) {}
+                } else if (params.length == 3 && params[0].isAssignableFrom(Context.class)) {
+                    try {
+                        Object res = ctor.newInstance(context, serviceProxy, new Handler(context.getMainLooper()));
+                        return res;
+                    } catch (Throwable ignored) {}
+                } else if (params.length == 2 && params[0].isAssignableFrom(Context.class)) {
+                    try {
+                        Object res = ctor.newInstance(context, serviceProxy);
+                        return res;
+                    } catch (Throwable ignored) {}
+                } else if (params.length == 1 && params[0].isAssignableFrom(Context.class)) {
+                    try {
+                        Object res = ctor.newInstance(context);
+                        return res;
+                    } catch (Throwable ignored) {}
+                } else if (params.length == 0) {
+                    try {
+                        return ctor.newInstance();
+                    } catch (Throwable ignored) {}
+                }
+            }
+            Object allocated = allocateWithoutConstructor(type);
+            if (allocated != null) {
+                setFieldIfPresent(allocated, "mContext", context);
+                if (serviceProxy != null) {
+                    setFieldIfPresent(allocated, "mService", serviceProxy);
+                }
+                setFieldIfPresent(allocated, "mHandler", new Handler(context.getMainLooper()));
+                return allocated;
+            }
+        } catch (Throwable t) {
+            System.err.println("[Muplar/ART] createPowerManager failed: " + t);
+        }
+        return null;
+    }
+
+    private static Object createConnectivityManager(final Context context) {
+        try {
+            return new android.net.ConnectivityManager(context);
+        } catch (Throwable t) {
+            System.err.println("[Muplar/ART] createConnectivityManager failed: " + t);
+            return null;
+        }
+    }
+
+    private static Object createJobScheduler(final Context context) {
+        try {
+            return new android.app.job.MuplarJobScheduler(context);
+        } catch (Throwable t) {
+            System.err.println("[Muplar/ART] createJobScheduler failed: " + t);
             return null;
         }
     }

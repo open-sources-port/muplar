@@ -54,9 +54,11 @@ public final class ArtApkMain {
                 attachBaseContext(activityObj,
                     new MuplarContext(packageName, apkPath, loader));
                 attachActivityInfo(activityObj, packageName, activityClassName, apkPath);
+                attachIntent(activityObj, packageName, activityClassName);
                 attachApplication(activityObj, packageName, apkPath, loader,
                     applicationClass);
                 attachWindow(activityObj, packageName, apkPath, loader);
+                applyActivityTheme(activityObj, activityClass);
                 attachMainThread(activityObj);
                 attachInstrumentation(activityObj);
                 attachFragmentHost(activityObj);
@@ -83,6 +85,7 @@ public final class ArtApkMain {
                         android.os.IBinder token = attachToken(activityObj);
                         FrameworkDeviceController.registerActivity(activityObj,
                             packageName, activityClassName, activityClass, token);
+                        disableInteractionJankMonitor();
                         runMainLooper();
                     } else {
                         System.out.println("[Muplar/ART] onCreate method not found");
@@ -130,9 +133,11 @@ public final class ArtApkMain {
             attachBaseContext(activityObj,
                 new MuplarContext(packageName, apkPath, loader));
             attachActivityInfo(activityObj, packageName, activityClassName, apkPath);
+            attachIntent(activityObj, packageName, activityClassName);
             attachApplication(activityObj, packageName, apkPath, loader,
                 applicationClass);
             attachWindow(activityObj, packageName, apkPath, loader);
+            applyActivityTheme(activityObj, activityClass);
             attachMainThread(activityObj);
             attachInstrumentation(activityObj);
             attachFragmentHost(activityObj);
@@ -587,14 +592,9 @@ public final class ArtApkMain {
             setField(appInfo, "flags", Integer.valueOf(1));
             setField(appInfo, "targetSdkVersion", Integer.valueOf(30));
             try {
-                android.content.res.Resources resources =
-                    new MuplarContext(packageName, apkPath,
-                        ArtApkMain.class.getClassLoader()).getResources();
-                theme = resources.getIdentifier(
-                    "LauncherTheme", "style", packageName);
-                if (theme == 0) {
-                    theme = resources.getIdentifier("AppTheme", "style", packageName);
-                }
+                MuplarContext mCtx = new MuplarContext(packageName, apkPath,
+                    ArtApkMain.class.getClassLoader());
+                theme = mCtx.getResolvedThemeResId();
                 if (theme != 0) {
                     setField(appInfo, "theme", Integer.valueOf(theme));
                     setField(info, "theme", Integer.valueOf(theme));
@@ -612,19 +612,51 @@ public final class ArtApkMain {
         }
     }
 
+    private static void applyActivityTheme(Object activityObj, Class<?> activityClass) {
+        try {
+            int themeRes = 0;
+            if (activityObj instanceof android.content.Context) {
+                Object mBase = getField(activityObj, "mBase");
+                if (mBase instanceof MuplarContext) {
+                    themeRes = ((MuplarContext) mBase).getResolvedThemeResId();
+                }
+            }
+            if (themeRes != 0) {
+                java.lang.reflect.Method setTheme = activityClass.getMethod("setTheme", int.class);
+                setTheme.invoke(activityObj, themeRes);
+                System.out.println("[Muplar/ART] applied theme 0x"
+                    + Integer.toHexString(themeRes) + " to activity");
+            }
+        } catch (Throwable t) {
+            System.err.println("[Muplar/ART] applyActivityTheme failed: " + t);
+        }
+    }
+
+    private static void attachIntent(Object activityObj, String packageName, String activityClassName) {
+        try {
+            android.content.Intent intent = new android.content.Intent(android.content.Intent.ACTION_MAIN);
+            intent.setClassName(packageName, activityClassName);
+            setField(activityObj, "mIntent", intent);
+            System.out.println("[Muplar/ART] intent attached: " + intent);
+        } catch (Throwable t) {
+            System.err.println("[Muplar/ART] intent attach failed: " + t);
+        }
+    }
+
     private static void attachFragmentHost(Object activityObj) {
         try {
-            Object fragments = getField(activityObj, "mFragments");
-            if (fragments == null) {
-                return;
+            java.lang.reflect.Field field = android.app.Activity.class.getDeclaredField("mFragments");
+            field.setAccessible(true);
+            Object fragments = field.get(activityObj);
+            if (fragments != null) {
+                java.lang.reflect.Method attachHost =
+                    fragments.getClass().getMethod(
+                        "attachHost", Class.forName("android.app.Fragment"));
+                attachHost.invoke(fragments, new Object[] { null });
+                System.out.println("[Muplar/ART] activity framework fragment host attached");
             }
-            java.lang.reflect.Method attachHost =
-                fragments.getClass().getMethod(
-                    "attachHost", Class.forName("android.app.Fragment"));
-            attachHost.invoke(fragments, new Object[] { null });
-            System.out.println("[Muplar/ART] fragment host attached");
         } catch (Throwable t) {
-            System.err.println("[Muplar/ART] fragment host attach failed: "
+            System.err.println("[Muplar/ART] activity framework fragment host attach failed: "
                 + t.getClass().getName() + ": " + t.getMessage());
         }
     }
@@ -698,6 +730,12 @@ public final class ArtApkMain {
         Object application;
         String className = applicationClass == null ? "" : applicationClass;
         if (className.isEmpty()) {
+            MuplarServices.InstalledPackage pkg = MuplarServices.findInstalledPackage(packageName);
+            if (pkg != null && pkg.application != null && !pkg.application.isEmpty()) {
+                className = pkg.application;
+            }
+        }
+        if (className.isEmpty()) {
             application =
                 new MuplarApplication((android.content.Context)context);
         } else {
@@ -712,12 +750,20 @@ public final class ArtApkMain {
         if (context instanceof MuplarContext && application instanceof android.content.Context) {
             ((MuplarContext) context).setApplicationContext((android.content.Context) application);
         }
-        if (!className.isEmpty()) {
+        try {
             java.lang.reflect.Method onCreate =
                 application.getClass().getMethod("onCreate");
+            onCreate.setAccessible(true);
             onCreate.invoke(application);
             System.out.println("[Muplar/ART] Application onCreate completed class="
                 + application.getClass().getName());
+        } catch (Throwable t) {
+            Throwable cause = t instanceof java.lang.reflect.InvocationTargetException
+                ? ((java.lang.reflect.InvocationTargetException) t).getCause()
+                : t;
+            System.err.println("[Muplar/ART] Application onCreate failed: " + cause);
+            if (cause != null) cause.printStackTrace(System.err);
+            else t.printStackTrace(System.err);
         }
         return application;
     }
@@ -843,6 +889,9 @@ public final class ArtApkMain {
                 } catch (Throwable ignored) {
                 }
                 setField(activityObj, "mWindowManager", wm != null ? wm : windowManager);
+            }
+            if (window instanceof android.view.Window && activityObj instanceof android.view.Window.Callback) {
+                ((android.view.Window) window).setCallback((android.view.Window.Callback) activityObj);
             }
             setField(activityObj, "mWindow", window);
             System.out.println("[Muplar/ART] window attached");
@@ -1088,5 +1137,28 @@ public final class ArtApkMain {
             }
         }
         return out.toString();
+    }
+
+    private static void disableInteractionJankMonitor() {
+        try {
+            Class<?> clazz = Class.forName("com.android.internal.jank.InteractionJankMonitor");
+            java.lang.reflect.Method getInstance = clazz.getMethod("getInstance");
+            Object instance = getInstance.invoke(null);
+            if (instance != null) {
+                for (java.lang.reflect.Field f : clazz.getDeclaredFields()) {
+                    if (f.getType() == boolean.class) {
+                        try {
+                            f.setAccessible(true);
+                            System.out.println("[Muplar/ART] InteractionJankMonitor " + f.getName() + " was " + f.getBoolean(instance));
+                            f.setBoolean(instance, false);
+                        } catch (Throwable ignored) {
+                        }
+                    }
+                }
+                System.out.println("[Muplar/ART] InteractionJankMonitor disabled successfully");
+            }
+        } catch (Throwable t) {
+            System.err.println("[Muplar/ART] disableInteractionJankMonitor ignored: " + t);
+        }
     }
 }
