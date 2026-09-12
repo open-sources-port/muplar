@@ -1,42 +1,41 @@
 # Java And ART Surface Checklist
 
-Stable area: Java-facing objects, JNI behavior, Android framework methods, and
-the eventual ART-facing compatibility layer.
+Stable area: Java-facing objects, JNI behavior, Android framework methods, and the ART-facing compatibility layer.
 
-## Done
+---
 
-- [x] Minimal `JavaVM` and `JNIEnv` tables for `JNI_OnLoad` and native registration.
-- [x] Basic JNI class/method/object/string/byte-array helpers used by current fixtures.
-- [x] Lightweight NativeActivity context object for package name and code path queries.
-- [x] Package metadata and data paths are populated from APK manifest information.
-- [x] Java-only APKs are classified before native launch and report missing ART bootstrap inputs.
-- [x] ART sysroot checker/import helper records required `app_process64`,
-      bootclasspath jar, and native runtime library inputs.
-- [x] Ready ART bootstrap plans are wired into `GuestRunner` with guest-visible
-      `app_process64` paths, APK staging, and Android environment overrides.
-- [x] Muplar Java bootstrap jar provides the `com.muplar.runtime.ArtApkMain`
-      entrypoint used by `app_process64`.
-- [x] `ArtApkMain` creates an Android APK class loader and resolves the
-      manifest launch Activity class when ART reaches Java code.
-- [x] Tiny Java Activity APK fixture is classified and carries its launch
-      Activity into the ART bootstrap plan.
-- [x] Import an ART-capable Android sysroot with `tools/import-android-art-sysroot.sh`
-      and verify it with `tools/check-android-art-sysroot.sh`.
-- [x] Run the tiny Java Activity fixture through `app_process64` and record
-      first Java/framework method gaps. Use `tools/run-tiny-java-activity-art.sh`
-      once the sysroot is ready and `d8` is available.
-- [x] Run a simple Java launcher app with enough Activity/framework surface to
-      display and launch one installed package.
-- [x] Add Java-side API stubs only when tied to a real startup failure or focused fixture.
+## 1. Current State & What Works
 
-## Next
-- [ ] Complete the functional simple-launcher milestones in
-      [Launcher and Launcher3](./launcher3.md).
-- [ ] Use Launcher3 as the compatibility target only after package launching,
-      Android UI/resources, and required framework services are stable.
-- [ ] Keep Java/ART expansion separate from native dependency closure work.
+- [x] **ART Bootstrapping**: `app_process64` launches `com.muplar.runtime.ArtApkMain` entrypoint with custom bootclasspath (`muplar-art-bootstrap.jar`).
+- [x] **APK ClassLoader**: `ArtApkMain` loads APK DEX files and resolves the manifest launch Activity class via `PathClassLoader`.
+- [x] **Genuine AOSP SQLite JNI**: `muplar_android_art_shim.c` loads `libandroid_runtime.so` and registers genuine CursorWindow and SQLite natives.
+- [x] **Activity Lifecycle Driving**: `ArtApkMain` invokes Activity constructors, attaches context, and drives `onCreate()`, `onStart()`, `onResume()`, and `makeVisible()`.
+- [x] **Synthetic Context (`MuplarContext.java`)**: Implements `ContextWrapper` providing system service dispatch, package metadata, resource resolution, and asset extraction.
+- [x] **Networking & Jobs Bootstrap**: Implemented `ConnectivityManager` and `MuplarJobScheduler` in `java-bootstrap`.
 
-## Later
+---
 
-- [ ] More faithful object identity, class hierarchy, method dispatch, and exception behavior.
-- [ ] Larger Android framework surface once native execution reaches real app startup reliably.
+## 2. Active Blockers & Gaps
+
+### Blocker 1: Unpopulated `ActivityThread.mBoundApplication` (P0)
+- **Problem**: `ActivityThread` is instantiated reflectively via `allocateWithoutConstructor()`. `mBoundApplication` is `null`.
+- **Impact**: Any app calling `Application.getProcessName()` (e.g. WorkManager in F-Droid) crashes with `NullPointerException: getProcessName() must not be null`.
+- **Action**: Allocate `ActivityThread$AppBindData` during `installActivityThreadForFramework()`, set `processName = packageName`, and attach `applicationInfo`.
+
+### Blocker 2: Broken Frame Presenter Output (P0)
+- **Problem**: `MuplarFramePresenter` uses a 200ms software DecorView snapshot hack (`decor.draw(canvas)`) which frequently produces black, blank, or frozen frames.
+- **Impact**: Even when an Activity reaches `onResume` and inflates views, the macOS window shows a blank screen.
+- **Action**: Audit `MuplarFramePresenter.drawViewToBitmap()` and native frame dumping to ensure real rendered pixels reach the display.
+
+### Blocker 3: Unbacked `LauncherApps` Query (P1)
+- **Problem**: `MuplarServices.launcherAppsValue()` returns dummy data.
+- **Impact**: Launcher3's workspace and all-apps drawer remain empty.
+- **Action**: Back `LauncherApps` with installed APK manifests.
+
+---
+
+## 3. Long-Term Architecture
+
+- [ ] Transition from 200ms software bitmap capture to direct `ViewRootImpl` / `Surface` / Metal texture sharing.
+- [ ] Add `InputMethodManager` stubs and virtual/hardware keyboard event bridge.
+- [ ] Implement inter-app `startActivity` and real `ActivityManager` task back-stack management.

@@ -1,34 +1,39 @@
 # Android Runtime Checklist
 
-Stable area: NativeActivity, JNI/native execution, windowing, input, app loop,
-assets, and package context.
+Stable area: Native execution, JNI bindings, windowing, input routing, process lifecycle, and ART/HVF integration.
 
-## Done
+---
 
-- [x] Direct Android `.so` execution through `JNI_OnLoad`.
-- [x] `RegisterNatives` resolution and direct native method invocation.
-- [x] NativeActivity `ANativeActivity_onCreate` bootstrap.
-- [x] Lifecycle callback dispatch for start, resume, pause, stop, destroy.
-- [x] `ANativeWindow` dimensions, buffer lock/unlock, and post path.
-- [x] EGL/GLES smoke path through ANGLE-backed host rendering.
-- [x] Native app glue pthread scheduling and guest callback invocation.
-- [x] `ALooper` add/poll callbacks, input queue attach/detach, and command pipe.
-- [x] Host-driven app loop with repeated input/frame scheduling.
-- [x] APK launch envelope, asset extraction, `AAssetManager`, package name, and context paths.
-- [x] Generic Wine-style prefix metadata with Android ARM64 running through elfuse, keeping prefix policy in Muplar-owned code.
-- [x] CLI instance manager for listing, inspecting, cloning, and deleting prefix-backed instances.
-- [x] Native macOS instance manager shell for desktop instance management.
+## 1. Done
 
-## Next
+- [x] Direct Android `.so` execution through `JNI_OnLoad` and `RegisterNatives`.
+- [x] ART execution via `app_process64` inside an Android API 35 ARM64 sysroot.
+- [x] Genuine AOSP SQLite and CursorWindow native binding via `libandroid_runtime.so`.
+- [x] Native socket bridge (`MuplarSocketClient.java` + JNI) communicating over `AF_UNIX` without guest `execve`.
+- [x] JIT code cache tuning (`-Xjitmaxsize:1m`) preventing HVF W^X page-table collision with elfuse RX window.
+- [x] Process lifecycle cleanup in `PrefixManagerApp.mm` with 500ms `SIGKILL` fallback.
+- [x] APK launch envelope, asset extraction, `AAssetManager`, and manifest parsing.
+- [x] AppKit device window (`AndroidDeviceShell`) with toolbar navigation controls.
 
-- [ ] Move prefix-aware APK install/run into a long-lived `muplard` session model.
-- [ ] Add Muplar-owned writable rootfs routing without adding prefix concepts to elfuse.
-- [ ] Add Linux/Wine prefix policies after the Android prefix path is stable.
-- [ ] Run less-controlled native APKs with `--host-window` and record first unsupported runtime APIs.
-- [ ] Replace conservative libc/file stubs with host-backed behavior only when real APKs need it.
-- [ ] Add focused fixtures for new lifecycle or window/input failures before broad refactors.
+---
 
-## Later
+## 2. Active Blockers & In Progress
 
-- [ ] More complete surface resize, pause/resume, and multi-frame timing behavior.
-- [ ] Better rendering capture and visual diff tests for real host-window runs.
+- [ ] **Frame Presentation Broken**:
+  - `BLASTBufferQueue` is disconnected from host.
+  - `MuplarFramePresenter` software DecorView snapshot path frequently outputs black or blank frames.
+- [ ] **Touch Input Routing Broken**:
+  - Pointer events from `AndroidDeviceShell` fail to trigger clicks, view state changes, or scrolling.
+- [ ] **Back-Button Looper Hang**:
+  - Calling `onBackPressed()` on `QuickstepLauncher` enters an infinite looper hang, locking the session.
+- [ ] **WorkManager Crash**:
+  - `Application.getProcessName()` returns `null` because `ActivityThread.mBoundApplication` is unpopulated.
+
+---
+
+## 3. Next Steps
+
+- [ ] Diagnose and fix `MuplarFramePresenter` to reliably output active DecorView pixels to `HostWindow`.
+- [ ] Connect mouse clicks from `AndroidDeviceShell` end-to-end to `dispatchTouchEvent()`.
+- [ ] Populate `ActivityThread.mBoundApplication` to stop WorkManager startup crashes.
+- [ ] Provide real `LauncherApps` query data from installed APK manifests.
