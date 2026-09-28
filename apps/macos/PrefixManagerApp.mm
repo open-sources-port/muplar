@@ -1393,7 +1393,7 @@ static NSString* ParseLnkFile(const std::filesystem::path& lnkPath)
     _addAppButton.enabled = NO;
 
     [toolbar addArrangedSubview:createButton];
-    [toolbar addArrangedSubview:_cloneButton];
+    // [toolbar addArrangedSubview:_cloneButton];
     [toolbar addArrangedSubview:_deleteButton];
     [toolbar addArrangedSubview:refreshButton];
     [toolbar addArrangedSubview:_openRootButton];
@@ -2135,11 +2135,13 @@ static NSString* MapLinuxIconToSFSymbol(NSString* icon)
     NSTextField* nameField = [NSTextField textFieldWithString:@"android"];
     NSTextField* locationField = [NSTextField textFieldWithString:@""];
     NSPopUpButton* kindPopup = [[NSPopUpButton alloc] init];
-    [kindPopup addItemsWithTitles:@[@"Android", @"Linux", @"Windows"]];
+    // [kindPopup addItemsWithTitles:@[@"Android", @"Linux", @"Windows"]];
+    [kindPopup addItemsWithTitles:@[@"Windows", @"Linux"]];
     NSPopUpButton* archPopup = [[NSPopUpButton alloc] init];
     [archPopup addItemsWithTitles:@[@"ARM64", @"x64"]];
     NSPopUpButton* distroPopup = [[NSPopUpButton alloc] init];
-    [distroPopup addItemsWithTitles:@[@"Ubuntu", @"Alpine", @"Debian", @"Fedora", @"Arch", @"openSUSE"]];
+    // [distroPopup addItemsWithTitles:@[@"Ubuntu", @"Alpine", @"Debian", @"Fedora", @"Arch", @"openSUSE"]];
+    [distroPopup addItemsWithTitles:@[@"Ubuntu"]];
     distroPopup.enabled = NO; // Android selected by default
     NSTextField* sysrootField = [NSTextField textFieldWithString:@""];
     [self trackAutoNameField:nameField kindPopup:kindPopup archPopup:archPopup distroPopup:distroPopup sysrootField:sysrootField];

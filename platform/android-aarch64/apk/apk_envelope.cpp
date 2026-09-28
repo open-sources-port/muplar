@@ -635,7 +635,8 @@ std::optional<std::string> infer_plain_manifest_launch_activity(
     for (const auto &candidate : candidates) {
         if (candidate.is_launcher) {
             std::string lower = candidate.name;
-            for (char &c : lower) c = std::tolower((unsigned char)c);
+            for (char &c : lower)
+                c = std::tolower((unsigned char) c);
             if (lower.find("mainactivity") != std::string::npos ||
                 (lower.find("main") != std::string::npos &&
                  lower.find("panic") == std::string::npos &&
@@ -962,7 +963,8 @@ std::optional<std::string> infer_binary_manifest_launch_activity(
     if (!launcher_activities.empty()) {
         for (const auto &act : launcher_activities) {
             std::string lower = act;
-            for (char &c : lower) c = std::tolower((unsigned char)c);
+            for (char &c : lower)
+                c = std::tolower((unsigned char) c);
             if (lower.find("mainactivity") != std::string::npos ||
                 (lower.find("main") != std::string::npos &&
                  lower.find("panic") == std::string::npos &&

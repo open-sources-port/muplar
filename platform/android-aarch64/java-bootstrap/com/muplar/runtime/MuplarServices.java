@@ -76,19 +76,21 @@ public final class MuplarServices {
         }
     }
 
-    private static IBinder createDevicePolicyBinder() {
-        return new NoNativeBinder("android.app.admin.IDevicePolicyManager");
-    }
-
     private static IBinder createBinder(String name) {
-        if ("device_policy".equals(name)) {
-            return createDevicePolicyBinder();
-        }
+        // Device policy also needs a local interface: returning a bare
+        // NoNativeBinder makes AIDL construct a remote proxy and enter the
+        // unavailable kernel Binder transport while Launcher3 loads strings.
         String iface = serviceInterface(name);
         if (iface == null) {
             return new NoNativeBinder(name);
         }
         try {
+            if ("device_policy".equals(name)) {
+                // The vendor interface mentions optional classes absent from
+                // this userland. Its generated Default avoids resolving every
+                // method signature as java.lang.reflect.Proxy would.
+                return new MuplarDevicePolicyService().asBinder();
+            }
             Class<?> type = resolveInterfaceClass(iface);
             Binder binder = new Binder();
             ClassLoader loader = getSafeClassLoader(type);

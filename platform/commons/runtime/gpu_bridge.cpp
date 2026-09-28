@@ -18,7 +18,8 @@ namespace muplar::runtime
 static bool android_software_frame_enabled()
 {
     const char *guest_path = std::getenv("MUPLAR_ANDROID_SOFTWARE_FRAME_PATH");
-    const char *host_path = std::getenv("MUPLAR_HOST_WINDOW_SOFTWARE_FRAME_PATH");
+    const char *host_path =
+        std::getenv("MUPLAR_HOST_WINDOW_SOFTWARE_FRAME_PATH");
     return (guest_path && *guest_path) || (host_path && *host_path);
 }
 

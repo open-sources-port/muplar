@@ -708,6 +708,22 @@ public final class FrameworkDeviceController {
             pointerDownX = input.x;
             pointerDownY = input.y;
         }
+        if (input.action == android.view.MotionEvent.ACTION_UP &&
+            "launcher".equals(record.tab) && pointerDownTime > 0) {
+            float dy = input.y - pointerDownY;
+            float dx = Math.abs(input.x - pointerDownX);
+            if (Math.abs(dy) > 60.0f && Math.abs(dy) > dx) {
+                pointerDownTime = 0;
+                if (dy < 0.0f) {
+                    System.out.println("[DeviceController] launcher upward swipe detected: dy=" + dy);
+                    openAllApps(record);
+                } else {
+                    System.out.println("[DeviceController] launcher downward swipe detected: dy=" + dy);
+                    goToNormalState(record);
+                }
+                return;
+            }
+        }
         System.out.println("[DeviceController] motion trace: before obtain");
         System.out.flush();
         android.view.MotionEvent.PointerProperties props =

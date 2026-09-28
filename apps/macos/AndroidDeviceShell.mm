@@ -657,7 +657,12 @@ static NSView* AndroidDeviceTabChipView(NSString* title,
                     break;
                 if (header.magic != AndroidDeviceFrameMagic || header.width == 0 ||
                     header.height == 0 || header.bytes == 0 ||
+                    header.stridePixels != header.width ||
+                    header.bytes != (uint64_t)header.width * header.height * 4 ||
                     header.bytes > 64ULL * 1024ULL * 1024ULL) {
+                    NSLog(@"[AndroidDeviceShell] rejected frame magic=%08x size=%ux%u stride=%u bytes=%llu",
+                          header.magic, header.width, header.height,
+                          header.stridePixels, header.bytes);
                     break;
                 }
                 NSMutableData* frameData =
@@ -668,6 +673,31 @@ static NSView* AndroidDeviceTabChipView(NSString* title,
                 }
                 NSUInteger width = (NSUInteger)header.width;
                 NSUInteger height = (NSUInteger)header.height;
+                static uint64_t receivedFrameCount = 0;
+                uint64_t frameNumber = ++receivedFrameCount;
+                if (frameNumber == 1 || frameNumber % 30 == 0) {
+                    const uint8_t* pixels =
+                        static_cast<const uint8_t*>(frameData.bytes);
+                    uint64_t dark = 0;
+                    uint64_t light = 0;
+                    uint64_t transparent = 0;
+                    uint64_t sampled = 0;
+                    NSUInteger pixelCount = width * height;
+                    NSUInteger step = MAX((NSUInteger)1, pixelCount / 4096);
+                    for (NSUInteger i = 0; i < pixelCount; i += step) {
+                        const uint8_t* pixel = pixels + i * 4;
+                        ++sampled;
+                        if (pixel[3] < 16)
+                            ++transparent;
+                        if (pixel[0] < 16 && pixel[1] < 16 && pixel[2] < 16)
+                            ++dark;
+                        if (pixel[0] > 224 && pixel[1] > 224 && pixel[2] > 224)
+                            ++light;
+                    }
+                    NSLog(@"[AndroidDeviceShell] frame=%llu size=%lux%lu sampled=%llu dark=%llu light=%llu transparent=%llu",
+                          frameNumber, (unsigned long)width, (unsigned long)height,
+                          sampled, dark, light, transparent);
+                }
                 dispatch_async(dispatch_get_main_queue(), ^{
                     AndroidDeviceShell* strongSelf = weakSelf;
                     if (!strongSelf)

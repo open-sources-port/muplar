@@ -58,11 +58,10 @@ jobs:
             sudo mkdir -p "${HOMEBREW_X86_PREFIX}"
             sudo chown -R "$(whoami)":admin "${HOMEBREW_X86_PREFIX}"
 
-            curl -fsSL \
-              https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh \
-              -o /tmp/install-homebrew-x86.sh
-
-            NONINTERACTIVE=1 arch -x86_64 /bin/bash /tmp/install-homebrew-x86.sh
+            sudo mkdir -p "${HOMEBREW_X86_PREFIX}/Homebrew"
+            curl -fsSL https://github.com/Homebrew/brew/tarball/master | tar xz --strip-components 1 -C "${HOMEBREW_X86_PREFIX}/Homebrew"
+            sudo mkdir -p "${HOMEBREW_X86_PREFIX}/bin"
+            sudo ln -sf "${HOMEBREW_X86_PREFIX}/Homebrew/bin/brew" "${HOMEBREW_X86_PREFIX}/bin/brew"
           fi
 
           arch -x86_64 "${HOMEBREW_X86_PREFIX}/bin/brew" --prefix

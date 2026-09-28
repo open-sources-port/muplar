@@ -62,6 +62,7 @@ final class MuplarFramePresenter {
             final android.os.Handler handler = android.os.Handler.createAsync(looper);
             handler.post(new Runnable() {
                 @Override public void run() {
+                    if (!isCurrentRoot(root)) return;
                     present(root);
                     attachObserver(root, handler);
                 }
@@ -135,16 +136,21 @@ final class MuplarFramePresenter {
     }
 
     private static void requestFrame(final View root, final android.os.Handler handler) {
-        if (root == null || frameRequested || isPresenting) {
+        if (!isCurrentRoot(root) || frameRequested || isPresenting) {
             return;
         }
         frameRequested = true;
         handler.post(new Runnable() {
             @Override public void run() {
                 frameRequested = false;
-                present(root);
+                if (isCurrentRoot(root)) present(root);
             }
         });
+    }
+
+    private static boolean isCurrentRoot(View root) {
+        WeakReference<View> ref = currentRoot;
+        return root != null && ref != null && ref.get() == root;
     }
 
     /**

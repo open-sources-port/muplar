@@ -389,7 +389,8 @@ std::filesystem::path stage_art_apk_for_sysroot(
 
     std::error_code ec;
     std::filesystem::create_directories(staging_dir, ec);
-    std::filesystem::create_directories(absolute_sysroot / "data" / "user" / "0", ec);
+    std::filesystem::create_directories(
+        absolute_sysroot / "data" / "user" / "0", ec);
     if (ec) {
         throw std::runtime_error(
             "unable to create ART APK staging directory: " +
@@ -422,7 +423,8 @@ ArtBootstrapPlan build_art_bootstrap_plan(const ArtBootstrapConfig &config)
             : std::filesystem::absolute(config.sysroot).lexically_normal();
     plan.package_name = config.apk_classification.manifest_package;
     plan.launch_activity = config.apk_classification.manifest_launch_activity;
-    plan.application_class = config.apk_classification.manifest_application_class;
+    plan.application_class =
+        config.apk_classification.manifest_application_class;
     plan.dex_files = config.apk_classification.dex_files;
 
     if (plan.sysroot.empty()) {
@@ -526,7 +528,8 @@ ArtBootstrapPlan build_art_bootstrap_plan(const ArtBootstrapConfig &config)
                 if (!plan.bootstrap_jar.empty() &&
                     !plan.bootstrap_jar_guest_path.empty()) {
                     plan.bootclasspath.push_back(plan.bootstrap_jar);
-                    guest_bootclasspath.push_back(plan.bootstrap_jar_guest_path);
+                    guest_bootclasspath.push_back(
+                        plan.bootstrap_jar_guest_path);
                 }
                 continue;
             }
@@ -659,8 +662,13 @@ ArtBootstrapPlan build_art_bootstrap_plan(const ArtBootstrapConfig &config)
     if (const char *frame_socket =
             std::getenv("MUPLAR_HOST_WINDOW_FRAME_SOCKET");
         frame_socket && *frame_socket) {
+        // The embedded HostWindow already owns the socket when it relays
+        // software frames. A second guest connection blocks behind that
+        // persistent client and can wedge the Android main looper in write().
+        const char *relay_path =
+            std::getenv("MUPLAR_HOST_WINDOW_SOFTWARE_FRAME_PATH");
         plan.env.push_back(std::string("MUPLAR_HOST_WINDOW_FRAME_SOCKET=") +
-                           frame_socket);
+                           (relay_path && *relay_path ? "" : frame_socket));
     }
     plan.env.push_back("ANDROID_PRINTF_LOG=stdio");
 
@@ -735,7 +743,8 @@ void print_art_bootstrap_plan(const ArtBootstrapPlan &plan)
     if (plan.launch_activity)
         std::cerr << "[ART] launch activity=" << *plan.launch_activity << "\n";
     if (plan.application_class)
-        std::cerr << "[ART] application class=" << *plan.application_class << "\n";
+        std::cerr << "[ART] application class=" << *plan.application_class
+                  << "\n";
     std::cerr << "[ART] dex files=" << plan.dex_files.size() << "\n";
     for (const std::string &dex : plan.dex_files)
         std::cerr << "[ART]   dex: " << dex << "\n";
