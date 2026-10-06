@@ -1458,12 +1458,23 @@ int GuestRunner::run(const GuestRunnerConfig &cfg)
         log_set_level(LOG_WARN);
     else
         log_set_level(LOG_INFO);
+    std::string abs_sysroot;
+    if (!cfg.sysroot.empty()) {
+        abs_sysroot =
+            std::filesystem::absolute(cfg.sysroot).lexically_normal().string();
+    }
+    std::string abs_elf_path;
+    if (!cfg.elf_path.empty()) {
+        abs_elf_path =
+            std::filesystem::absolute(cfg.elf_path).lexically_normal().string();
+    }
+
     ScopedHostCwd scoped_host_cwd(cfg.host_cwd);
 
     bool is_shared_lib = false;
     if (cfg.is_android) {
         is_shared_lib = cfg.force_android_so;
-        FILE *ef = std::fopen(cfg.elf_path.c_str(), "rb");
+        FILE *ef = std::fopen(abs_elf_path.c_str(), "rb");
         if (ef) {
             Elf64_Ehdr ehdr{};
             if (std::fread(&ehdr, sizeof(ehdr), 1, ef) == 1) {
@@ -1478,11 +1489,11 @@ int GuestRunner::run(const GuestRunnerConfig &cfg)
     bool is_android_run = cfg.is_android;
     bool install_synthetic_jni = is_android_run && !cfg.real_art_vm;
 
-    const char *elf_path = cfg.elf_path.c_str();
+    const char *elf_path = abs_elf_path.c_str();
     std::string guest_elf_path_storage =
         cfg.guest_elf_path.empty() ? cfg.elf_path : cfg.guest_elf_path;
     const char *guest_elf_path = guest_elf_path_storage.c_str();
-    const char *sysroot = cfg.sysroot.empty() ? nullptr : cfg.sysroot.c_str();
+    const char *sysroot = abs_sysroot.empty() ? nullptr : abs_sysroot.c_str();
     int guest_argc = static_cast<int>(cfg.argv.size());
     const char **guest_argv = to_cstrings(cfg.argv);
     if (!guest_argv)

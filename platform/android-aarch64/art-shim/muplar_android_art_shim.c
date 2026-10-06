@@ -17,6 +17,7 @@
 #endif
 #include <unistd.h>
 #include <sys/socket.h>
+#include <sys/stat.h>
 #include <sys/un.h>
 #include <signal.h>
 #include <ucontext.h>
@@ -82,6 +83,53 @@ static void muplar_install_crash_handler(void)
     sigaction(SIGSEGV, &sa, NULL);
     sigaction(SIGBUS, &sa, NULL);
     sigaction(SIGABRT, &sa, NULL);
+}
+
+#include <stdarg.h>
+
+JNIEXPORT int __android_log_write(int prio, const char *tag, const char *text)
+{
+    (void) prio;
+    fprintf(stderr, "[AndroidLog/%s] %s\n", tag ? tag : "log",
+            text ? text : "");
+    fflush(stderr);
+    return 1;
+}
+
+JNIEXPORT int __android_log_print(int prio, const char *tag, const char *fmt, ...)
+{
+    (void) prio;
+    va_list ap;
+    va_start(ap, fmt);
+    fprintf(stderr, "[AndroidLog/%s] ", tag ? tag : "log");
+    vfprintf(stderr, fmt, ap);
+    fprintf(stderr, "\n");
+    fflush(stderr);
+    va_end(ap);
+    return 1;
+}
+
+JNIEXPORT int __android_log_buf_write(int bufID, int prio, const char *tag,
+                                       const char *text)
+{
+    (void) bufID;
+    return __android_log_write(prio, tag, text);
+}
+
+JNIEXPORT void __android_log_assert(const char *cond, const char *tag,
+                                     const char *fmt, ...)
+{
+    fprintf(stderr, "[AndroidLogAssert/%s] cond: %s ", tag ? tag : "assert",
+            cond ? cond : "");
+    if (fmt) {
+        va_list ap;
+        va_start(ap, fmt);
+        vfprintf(stderr, fmt, ap);
+        va_end(ap);
+    }
+    fprintf(stderr, "\n");
+    fflush(stderr);
+    abort();
 }
 
 #define PROP_VALUE_MAX 92
@@ -379,6 +427,25 @@ static int muplar_get_frame_socket(void)
     return muplar_frame_socket_fd;
 }
 
+static void muplar_ensure_parent_dir(const char *file_path) {
+    char dir[512];
+    char *p;
+    if (!file_path || !*file_path) return;
+    snprintf(dir, sizeof(dir), "%s", file_path);
+    p = strrchr(dir, '/');
+    if (p) {
+        *p = '\0';
+        for (p = dir + 1; *p; p++) {
+            if (*p == '/') {
+                *p = '\0';
+                mkdir(dir, 0755);
+                *p = '/';
+            }
+        }
+        mkdir(dir, 0755);
+    }
+}
+
 static int muplar_write_bitmap_frame(struct muplar_bitmap_state *bitmap,
                                      const char *path)
 {
@@ -439,26 +506,122 @@ static int muplar_write_bitmap_frame(struct muplar_bitmap_state *bitmap,
     }
 
 write_file:
-    if (strlen(path) + 5 >= sizeof(tmp_path)) {
-        free(rgba);
-        return 0;
-    }
-    snprintf(tmp_path, sizeof(tmp_path), "%s.tmp", path);
-    int fd = open(tmp_path, O_CREAT | O_TRUNC | O_WRONLY, 0600);
-    if (fd < 0) {
-        free(rgba);
-        return 0;
-    }
-    if (!muplar_write_all(fd, &header, sizeof(header)) ||
-        !muplar_write_all(fd, rgba, count * 4)) {
+    {
+        const char *file_path = path;
+        if (strncmp(file_path, "/data/local/tmp/", 16) == 0) file_path += 16;
+        else if (strncmp(file_path, "data/local/tmp/", 15) == 0) file_path += 15;
+        while (file_path[0] == '/') file_path++;
+        if (strlen(file_path) + 5 >= sizeof(tmp_path)) {
+            free(rgba);
+            return 0;
+        }
+        snprintf(tmp_path, sizeof(tmp_path), "%s.tmp", file_path);
+        muplar_ensure_parent_dir(tmp_path);
+        int fd = open(tmp_path, O_CREAT | O_TRUNC | O_WRONLY, 0600);
+        if (fd < 0) {
+            free(rgba);
+            return 0;
+        }
+        if (!muplar_write_all(fd, &header, sizeof(header)) ||
+            !muplar_write_all(fd, rgba, count * 4)) {
+            close(fd);
+            unlink(tmp_path);
+            free(rgba);
+            return 0;
+        }
         close(fd);
-        unlink(tmp_path);
+        free(rgba);
+        return rename(tmp_path, file_path) == 0;
+    }
+}
+
+static int muplar_write_raw_frame(const uint32_t *pixels, int width, int height,
+                                  const char *path)
+{
+    struct muplar_frame_header header;
+    uint8_t *rgba;
+    size_t count;
+    size_t i;
+    int sock_fd;
+    char tmp_path[512];
+
+    if (!pixels || width <= 0 || height <= 0)
+        return 0;
+
+    count = (size_t) width * (size_t) height;
+    rgba = malloc(count * 4);
+    if (!rgba)
+        return 0;
+    for (i = 0; i < count; i++) {
+        uint32_t argb = pixels[i];
+        uint8_t a = (uint8_t) (argb >> 24);
+        uint8_t r = (uint8_t) (argb >> 16);
+        uint8_t g = (uint8_t) (argb >> 8);
+        uint8_t b = (uint8_t) argb;
+        if (a < 255) {
+            r = (uint8_t) (((uint32_t) r * a + 238u * (255u - a)) / 255u);
+            g = (uint8_t) (((uint32_t) g * a + 238u * (255u - a)) / 255u);
+            b = (uint8_t) (((uint32_t) b * a + 238u * (255u - a)) / 255u);
+        }
+        rgba[i * 4 + 0] = r;
+        rgba[i * 4 + 1] = g;
+        rgba[i * 4 + 2] = b;
+        rgba[i * 4 + 3] = 255;
+    }
+
+    header.magic = 0x4d485231u;
+    header.width = (uint32_t) width;
+    header.height = (uint32_t) height;
+    header.stride_pixels = (uint32_t) width;
+    header.bytes = count * 4;
+
+    sock_fd = muplar_get_frame_socket();
+    if (sock_fd >= 0) {
+        if (muplar_write_all(sock_fd, &header, sizeof(header)) &&
+            muplar_write_all(sock_fd, rgba, count * 4)) {
+            if (!path || !*path) {
+                free(rgba);
+                return 1;
+            }
+            goto write_file;
+        }
+        close(sock_fd);
+        muplar_frame_socket_fd = -1;
+    }
+
+    if (!path || !*path) {
         free(rgba);
         return 0;
     }
-    close(fd);
-    free(rgba);
-    return rename(tmp_path, path) == 0;
+
+write_file:
+    {
+        const char *file_path = path;
+        if (strncmp(file_path, "/data/local/tmp/", 16) == 0) file_path += 16;
+        else if (strncmp(file_path, "data/local/tmp/", 15) == 0) file_path += 15;
+        while (file_path[0] == '/') file_path++;
+        if (strlen(file_path) + 5 >= sizeof(tmp_path)) {
+            free(rgba);
+            return 0;
+        }
+        snprintf(tmp_path, sizeof(tmp_path), "%s.tmp", file_path);
+        muplar_ensure_parent_dir(tmp_path);
+        int fd = open(tmp_path, O_CREAT | O_TRUNC | O_WRONLY, 0600);
+        if (fd < 0) {
+            free(rgba);
+            return 0;
+        }
+        if (!muplar_write_all(fd, &header, sizeof(header)) ||
+            !muplar_write_all(fd, rgba, count * 4)) {
+            close(fd);
+            unlink(tmp_path);
+            free(rgba);
+            return 0;
+        }
+        close(fd);
+        free(rgba);
+        return rename(tmp_path, file_path) == 0;
+    }
 }
 
 static struct muplar_canvas_state *muplar_find_canvas(jlong token)
@@ -7741,24 +7904,57 @@ jboolean Java_com_muplar_runtime_MuplarFramePresenter_writeBitmapNative(
     jfieldID native_ptr_field;
     jlong native_bitmap;
     const char *path_chars;
-    int ok;
+    int ok = 0;
     (void) clazz;
     if (!bitmap_object || !path)
         return JNI_FALSE;
     bitmap_class = (*env)->GetObjectClass(env, bitmap_object);
     if (!bitmap_class)
         return JNI_FALSE;
-    native_ptr_field = (*env)->GetFieldID(env, bitmap_class, "mNativePtr", "J");
-    if (!native_ptr_field) {
-        (*env)->ExceptionClear(env);
-        return JNI_FALSE;
-    }
-    native_bitmap = (*env)->GetLongField(env, bitmap_object, native_ptr_field);
     path_chars = (*env)->GetStringUTFChars(env, path, NULL);
     if (!path_chars)
         return JNI_FALSE;
-    ok = muplar_write_bitmap_frame(muplar_find_bitmap(native_bitmap),
-                                   path_chars);
+
+    native_ptr_field = (*env)->GetFieldID(env, bitmap_class, "mNativePtr", "J");
+    if (native_ptr_field) {
+        native_bitmap = (*env)->GetLongField(env, bitmap_object, native_ptr_field);
+        struct muplar_bitmap_state *bmp = muplar_find_bitmap(native_bitmap);
+        if (bmp) {
+            ok = muplar_write_bitmap_frame(bmp, path_chars);
+        }
+    } else {
+        (*env)->ExceptionClear(env);
+    }
+
+    if (!ok) {
+        jmethodID get_width = (*env)->GetMethodID(env, bitmap_class, "getWidth", "()I");
+        jmethodID get_height = (*env)->GetMethodID(env, bitmap_class, "getHeight", "()I");
+        jmethodID get_pixels = (*env)->GetMethodID(env, bitmap_class, "getPixels", "([IIIIIII)V");
+        if (get_width && get_height && get_pixels) {
+            jint w = (*env)->CallIntMethod(env, bitmap_object, get_width);
+            jint h = (*env)->CallIntMethod(env, bitmap_object, get_height);
+            if (w > 0 && h > 0) {
+                jintArray array = (*env)->NewIntArray(env, w * h);
+                if (array) {
+                    (*env)->CallVoidMethod(env, bitmap_object, get_pixels, array, 0, w, 0, 0, w, h);
+                    if (!(*env)->ExceptionCheck(env)) {
+                        jint *elements = (*env)->GetIntArrayElements(env, array, NULL);
+                        if (elements) {
+                            ok = muplar_write_raw_frame((const uint32_t *) elements, w, h, path_chars);
+                            (*env)->ReleaseIntArrayElements(env, array, elements, JNI_ABORT);
+                        }
+                    } else {
+                        (*env)->ExceptionClear(env);
+                    }
+                } else {
+                    (*env)->ExceptionClear(env);
+                }
+            }
+        } else {
+            (*env)->ExceptionClear(env);
+        }
+    }
+
     (*env)->ReleaseStringUTFChars(env, path, path_chars);
     return ok ? JNI_TRUE : JNI_FALSE;
 }

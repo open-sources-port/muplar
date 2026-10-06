@@ -39,30 +39,14 @@ Muplar hosts shared Android framework services and system manager shims through 
 
 ---
 
-## 2. Active Blocker: WorkManager Process Name NullPointerException
+## 2. Resolved Blocker: WorkManager Process Name NullPointerException
 
-### Symptom
-When F-Droid or apps using AndroidX WorkManager start up:
-```
-[Muplar/ART] Application onCreate failed: java.lang.NullPointerException: getProcessName() must not be null
-java.lang.NullPointerException: getProcessName() must not be null
-	at androidx.work.impl.WorkManagerImpl.<init>(WorkManagerImpl.java:261)
-	at androidx.work.impl.WorkManagerImplExtKt.createWorkManager(WorkManagerImplExt.kt:58)
-	at org.fdroid.fdroid.FDroidApp.onCreate(FDroidApp.java:357)
-```
-
-### Root Cause
-1. AndroidX WorkManager calls `Application.getProcessName()` during initialization.
-2. In AOSP, `Application.getProcessName()` delegates to `ActivityThread.currentProcessName()`.
-3. `ActivityThread.currentProcessName()` looks up `ActivityThread.currentActivityThread().mBoundApplication.processName`.
-4. In `ArtApkMain.java`, `ActivityThread` is instantiated via `allocateWithoutConstructor()`, leaving `mBoundApplication` as `null`.
-5. In addition, `ApplicationInfo.processName` is unpopulated in `MuplarContext.java`.
-
-### Required Fix
-1. Instantiate `ActivityThread$AppBindData` during `installActivityThreadForFramework()` and set `processName = packageName`.
-2. Populate `mBoundApplication` on the current `ActivityThread`.
-3. Set `this.applicationInfo.processName = this.packageName` in `MuplarContext.java`.
-4. Reflectively set `Process.sProcessName` and invoke `Process.setProcessName()`.
+### Resolution
+- Instantiated `ActivityThread$AppBindData` during `installActivityThreadForFramework()` and set `processName = packageName`.
+- Populated `mBoundApplication` on the active `ActivityThread`.
+- Set `this.applicationInfo.processName = this.packageName` in `MuplarContext.java`.
+- Reflectively set `Process.sProcessName` and invoked `Process.setProcessName()`.
+- Dynamically extracted custom `<application android:name="...">` subclasses from binary `AndroidManifest.xml` via `openXmlResourceParser`.
 
 ---
 
@@ -71,11 +55,12 @@ java.lang.NullPointerException: getProcessName() must not be null
 | Service | Target Package | Status | Priority |
 | :--- | :--- | :---: | :---: |
 | **SQLite & CursorWindow** | `android.database.sqlite` | ✅ Genuine AOSP Bound | Completed |
+| **App Identity / ProcessName** | `android.app.ActivityThread` | ✅ Resolved & Verified | Completed |
+| **LauncherApps** | `android.content.pm` | ✅ Backed by Manifest Auto-Sync | Completed |
 | **ConnectivityManager** | `android.net` | 🟡 Bootstrap Stubbed | In Progress |
 | **JobScheduler** | `android.app.job` | 🟡 Bootstrap Stubbed | In Progress |
-| **App Identity / ProcessName** | `android.app.ActivityThread` | 🔴 Broken (NPE) | **P0 Active** |
-| **LauncherApps** | `android.content.pm` | 🔴 Empty / Unbacked | **P1 Next** |
+| **NotificationManager** | `android.app` | 🟡 Partial Stub | In Progress |
+| **AlarmManager** | `android.app` | 🟡 Basic Stub | In Progress |
 | **InputMethodManager (IME)**| `android.view.inputmethod` | 🔴 Missing | P2 |
-| **NotificationManager** | `android.app` | 🟡 Partial Stub | P2 |
-| **AlarmManager** | `android.app` | 🟡 Basic Stub | P2 |
 | **DownloadManager** | `android.app` | ⏳ Not Started | P3 |
+

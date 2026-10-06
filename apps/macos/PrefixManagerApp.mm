@@ -2135,13 +2135,12 @@ static NSString* MapLinuxIconToSFSymbol(NSString* icon)
     NSTextField* nameField = [NSTextField textFieldWithString:@"android"];
     NSTextField* locationField = [NSTextField textFieldWithString:@""];
     NSPopUpButton* kindPopup = [[NSPopUpButton alloc] init];
-    // [kindPopup addItemsWithTitles:@[@"Android", @"Linux", @"Windows"]];
-    [kindPopup addItemsWithTitles:@[@"Windows", @"Linux"]];
+    [kindPopup addItemsWithTitles:@[@"Windows", @"Linux", @"Android"]];
     NSPopUpButton* archPopup = [[NSPopUpButton alloc] init];
     [archPopup addItemsWithTitles:@[@"ARM64", @"x64"]];
     NSPopUpButton* distroPopup = [[NSPopUpButton alloc] init];
     // [distroPopup addItemsWithTitles:@[@"Ubuntu", @"Alpine", @"Debian", @"Fedora", @"Arch", @"openSUSE"]];
-    [distroPopup addItemsWithTitles:@[@"Ubuntu"]];
+    [distroPopup addItemsWithTitles:@[@"Ubuntu", @"Debian"]];
     distroPopup.enabled = NO; // Android selected by default
     NSTextField* sysrootField = [NSTextField textFieldWithString:@""];
     [self trackAutoNameField:nameField kindPopup:kindPopup archPopup:archPopup distroPopup:distroPopup sysrootField:sysrootField];
@@ -2427,6 +2426,26 @@ static NSString* MapLinuxIconToSFSymbol(NSString* icon)
                 usleep(100000);
         }
         [_linuxSessionTasks removeObjectForKey:sessionKey];
+        if (selected->kind == prefix::PrefixKind::Android) {
+            NSTask* androidTask = _androidSessionTasks[sessionKey];
+            if (androidTask && androidTask.isRunning) {
+                [androidTask terminate];
+                pid_t pid = androidTask.processIdentifier;
+                dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(300 * NSEC_PER_MSEC)),
+                               dispatch_get_global_queue(QOS_CLASS_DEFAULT, 0), ^{
+                    if (pid > 1 && kill(pid, 0) == 0) {
+                        kill(pid, SIGKILL);
+                    }
+                });
+            }
+            [_androidSessionTasks removeObjectForKey:sessionKey];
+            AndroidDeviceShell* shell = _androidDeviceShells[sessionKey];
+            if (shell) {
+                [shell.window close];
+                [_androidDeviceShells removeObjectForKey:sessionKey];
+            }
+            StopAndroidMuplard(*selected);
+        }
         if (_supervisor)
             _supervisor->on_prefix_deleted(selectedName);
         prefix::delete_prefix(selectedRoot);

@@ -11,6 +11,13 @@ LOG="${TMPDIR:-/tmp}/muplar-touch-interaction-test.log"
 mkdir -p "$(dirname "$LOG")"
 : > "$LOG"
 
+if [[ ! -f "$TEST_APK" ]]; then
+    echo "Building muplar-ui-test.apk..."
+    "$ROOT_DIR/tests/assets/android-ui/build-apk.sh"
+fi
+mkdir -p "$PREFIX_DIR/packages"
+cp -f "$TEST_APK" "$PREFIX_DIR/packages/muplar-ui-test.apk"
+
 # Sync latest builds into prefix
 "$ROOT_DIR/tools/build-android-art-shim.sh" >/dev/null
 "$ROOT_DIR/tools/build-art-bootstrap-jar.sh" >/dev/null

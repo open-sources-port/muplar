@@ -14,26 +14,16 @@ Stable area: Native execution, JNI bindings, windowing, input routing, process l
 - [x] Process lifecycle cleanup in `PrefixManagerApp.mm` with 500ms `SIGKILL` fallback.
 - [x] APK launch envelope, asset extraction, `AAssetManager`, and manifest parsing.
 - [x] AppKit device window (`AndroidDeviceShell`) with toolbar navigation controls.
+- [x] Frame presentation pipeline (`MuplarFramePresenter` DecorView snapshot delivering valid frames).
+- [x] Touch input routing end-to-end (pointer events from `AndroidDeviceShell` to `FrameworkDeviceController` and view dispatch).
+- [x] Back-button looper hang resolution (`performBack()` state-aware navigation on `QuickstepLauncher`).
+- [x] App identity & WorkManager stability (`ActivityThread.mBoundApplication` populated + manifest `Application` resolution).
+- [x] Installed apps query (`sync_packages_registry` from prefix `packages/` directory).
 
 ---
 
-## 2. Active Blockers & In Progress
+## 2. Active Focus & Next Steps
 
-- [ ] **Frame Presentation Broken**:
-  - `BLASTBufferQueue` is disconnected from host.
-  - `MuplarFramePresenter` software DecorView snapshot path frequently outputs black or blank frames.
-- [ ] **Touch Input Routing Broken**:
-  - Pointer events from `AndroidDeviceShell` fail to trigger clicks, view state changes, or scrolling.
-- [ ] **Back-Button Looper Hang**:
-  - Calling `onBackPressed()` on `QuickstepLauncher` enters an infinite looper hang, locking the session.
-- [ ] **WorkManager Crash**:
-  - `Application.getProcessName()` returns `null` because `ActivityThread.mBoundApplication` is unpopulated.
-
----
-
-## 3. Next Steps
-
-- [ ] Diagnose and fix `MuplarFramePresenter` to reliably output active DecorView pixels to `HostWindow`.
-- [ ] Connect mouse clicks from `AndroidDeviceShell` end-to-end to `dispatchTouchEvent()`.
-- [ ] Populate `ActivityThread.mBoundApplication` to stop WorkManager startup crashes.
-- [ ] Provide real `LauncherApps` query data from installed APK manifests.
+- [ ] Connect Metal hardware surface pipeline to replace software DecorView frame presentation.
+- [ ] Add support for multi-window / freeform window management mode.
+- [ ] Implement audio track forwarding via host CoreAudio bridge.

@@ -112,21 +112,22 @@ cleanup() {
 trap cleanup EXIT INT TERM
 
 ensure_linker_aliases() {
-    local system_bin="$SYSROOT/system/bin"
+    local target="${1:-$SYSROOT}"
+    local system_bin="$target/system/bin"
     mkdir -p "$system_bin"
 
     if [ ! -e "$system_bin/linker64" ] &&
-       [ -f "$SYSROOT/apex/com.android.runtime/bin/linker64" ]; then
+       [ -f "$target/apex/com.android.runtime/bin/linker64" ]; then
         ln -s ../../apex/com.android.runtime/bin/linker64 \
             "$system_bin/linker64"
-        echo "[android-sysroot] linked /system/bin/linker64"
+        echo "[android-sysroot] linked $target/system/bin/linker64"
     fi
 
     if [ ! -e "$system_bin/linker" ] &&
-       [ -f "$SYSROOT/apex/com.android.runtime/bin/linker" ]; then
+       [ -f "$target/apex/com.android.runtime/bin/linker" ]; then
         ln -s ../../apex/com.android.runtime/bin/linker \
             "$system_bin/linker"
-        echo "[android-sysroot] linked /system/bin/linker"
+        echo "[android-sysroot] linked $target/system/bin/linker"
     fi
 }
 
@@ -314,12 +315,13 @@ fi
 
 candidate_roots=("$WORK")
 while IFS= read -r dir; do
-    candidate_roots+=("$dir")
+    [ -n "$dir" ] && candidate_roots+=("$dir")
 done < <(find "$WORK" -maxdepth 3 -type d \( -name system -o -name apex \) -print |
     sed 's#/system$##; s#/apex$##' | sort -u)
 
 SOURCE_ROOT=""
 for candidate in "${candidate_roots[@]}"; do
+    ensure_linker_aliases "$candidate"
     if "$ROOT_DIR/tools/check-android-art-sysroot.sh" --sysroot "$candidate" --quiet >/dev/null 2>&1; then
         SOURCE_ROOT="$candidate"
         break
@@ -336,7 +338,13 @@ if [ -n "$SOURCE_ROOT" ]; then
         cp -Rp "$SOURCE_ROOT/." "$SYSROOT/"
     fi
 else
-    SOURCE_ROOT="${candidate_roots[1]:-$WORK}"
+    for candidate in "${candidate_roots[@]}"; do
+        if [ -d "$candidate/system" ] || [ -d "$candidate/apex" ]; then
+            SOURCE_ROOT="$candidate"
+            break
+        fi
+    done
+    [ -z "$SOURCE_ROOT" ] && SOURCE_ROOT="$WORK"
     echo "[android-sysroot] importing Android root from: $SOURCE_ROOT"
     rm -rf "$SYSROOT"
     mkdir -p "$SYSROOT"

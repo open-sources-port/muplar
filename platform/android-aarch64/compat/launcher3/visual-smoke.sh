@@ -11,9 +11,21 @@ SYSROOT_SCREENSHOT="$HOME/.muplar/sysroots/android-arm64/api-35/sysroot$GUEST_SC
 
 mkdir -p "$CLASSES" "$(dirname "$SCREENSHOT")"
 rm -f "$SCREENSHOT"
-rm -f "$SYSROOT_SCREENSHOT"
 MUPLAR_LAUNCHER3_SCREENSHOT="$GUEST_SCREENSHOT" "$SCRIPT_DIR/smoke-launch.sh"
-cp "$SYSROOT_SCREENSHOT" "$SCREENSHOT"
+SCREENSHOT_PATH=""
+for p in "$HOME/.muplar/prefixes/android-arm64/rootfs/data/local/tmp/muplar/launcher3-visual-smoke.png" \
+         "$HOME/.muplar/sysroots/android-arm64/api-35/sysroot/data/local/tmp/muplar/launcher3-visual-smoke.png" \
+         "/data/local/tmp/muplar/launcher3-visual-smoke.png"; do
+    if [[ -f "$p" ]]; then
+        SCREENSHOT_PATH="$p"
+        break
+    fi
+done
+if [[ -z "$SCREENSHOT_PATH" ]]; then
+    echo "FAIL: Screenshot file not found in any path" >&2
+    exit 1
+fi
+cp "$SCREENSHOT_PATH" "$SCREENSHOT"
 LOG="${TMPDIR:-/tmp}/muplar-launcher3-smoke.log"
 if grep -q "fallback screenshot written" "$LOG"; then
     echo "FAIL: Log indicates fallback screenshot was written instead of real Bitmap screenshot" >&2

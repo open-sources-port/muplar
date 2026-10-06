@@ -3135,6 +3135,10 @@ void delete_prefix(const std::string &spec)
 
 std::filesystem::path pid_file_path(const PrefixLayout &layout)
 {
+    if (layout.kind == PrefixKind::Android)
+        return layout.root / "run" / "muplard.pid";
+    if (layout.kind == PrefixKind::Linux)
+        return layout.root / "run" / "linux.pid";
     return layout.root / "run" / "wine.pid";
 }
 

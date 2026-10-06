@@ -29,6 +29,14 @@ final class MuplarScreenshot {
         if (path == null || path.isEmpty()) {
             return;
         }
+        if (path.startsWith("/data/local/tmp/")) {
+            path = path.substring(16);
+        } else if (path.startsWith("data/local/tmp/")) {
+            path = path.substring(15);
+        }
+        while (path.startsWith("/")) {
+            path = path.substring(1);
+        }
         captured = true;
         int width = root.getWidth();
         int height = root.getHeight();

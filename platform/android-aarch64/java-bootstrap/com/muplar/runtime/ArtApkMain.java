@@ -346,13 +346,13 @@ public final class ArtApkMain {
     }
 
     private static void loadSystemFontMap() {
+        Class<?> typeface = null;
         try {
-            Class<?> typeface = Class.forName("android.graphics.Typeface");
+            typeface = Class.forName("android.graphics.Typeface");
             java.lang.reflect.Method method =
                 typeface.getDeclaredMethod("loadPreinstalledSystemFontMap");
             method.setAccessible(true);
             method.invoke(null);
-            repairSystemFontDefaults(typeface);
             System.out.println("[Muplar/ART] system font map loaded");
         } catch (Throwable t) {
             Throwable detail = t instanceof java.lang.reflect.InvocationTargetException
@@ -361,51 +361,128 @@ public final class ArtApkMain {
                     : t;
             System.err.println("[Muplar/ART] system font map load failed: "
                 + detail.getClass().getName() + ": " + detail.getMessage());
-            detail.printStackTrace(System.err);
+        }
+        if (typeface != null) {
+            try {
+                repairSystemFontDefaults(typeface);
+            } catch (Throwable t) {
+                System.err.println("[Muplar/ART] repairSystemFontDefaults failed: " + t);
+            }
         }
     }
 
     @SuppressWarnings("unchecked")
     private static void repairSystemFontDefaults(Class<?> typeface) throws Exception {
-        java.lang.reflect.Method getSystemFontMap =
-            typeface.getDeclaredMethod("getSystemFontMap");
-        getSystemFontMap.setAccessible(true);
-        java.util.Map<String, Object> map =
-            (java.util.Map<String, Object>) getSystemFontMap.invoke(null);
-        Object sans = firstNonNull(
-            map.get("sans-serif"), map.get("sans"), map.values().isEmpty()
-                ? null : map.values().iterator().next());
+        java.util.Map<String, Object> map = null;
+        try {
+            java.lang.reflect.Method getSystemFontMap =
+                typeface.getDeclaredMethod("getSystemFontMap");
+            getSystemFontMap.setAccessible(true);
+            map = (java.util.Map<String, Object>) getSystemFontMap.invoke(null);
+        } catch (Throwable t) {
+            // Ignore
+        }
+        Object sans = null;
+        if (map != null && !map.isEmpty()) {
+            sans = firstNonNull(
+                map.get("sans-serif"), map.get("sans"),
+                map.values().iterator().next());
+        }
+        if (sans == null) {
+            try {
+                java.lang.reflect.Method createFromFile =
+                    typeface.getDeclaredMethod("createFromFile", String.class);
+                createFromFile.setAccessible(true);
+                sans = createFromFile.invoke(null, "/system/fonts/Roboto-Regular.ttf");
+                System.out.println("[Muplar/ART] Created fallback sans Typeface from /system/fonts/Roboto-Regular.ttf");
+            } catch (Throwable t) {
+                System.err.println("[Muplar/ART] createFromFile fallback failed: " + t);
+            }
+        }
         if (sans == null) {
             return;
         }
-        Object serif = firstNonNull(map.get("serif"), sans);
-        Object monospace = firstNonNull(map.get("monospace"), sans);
+        Object serif = map != null ? firstNonNull(map.get("serif"), sans) : sans;
+        Object monospace = map != null ? firstNonNull(map.get("monospace"), sans) : sans;
 
-        java.lang.reflect.Method create =
-            typeface.getDeclaredMethod("create", typeface, Integer.TYPE);
-        Object bold = create.invoke(null, sans, Integer.valueOf(1));
-        Object italic = create.invoke(null, sans, Integer.valueOf(2));
-        Object boldItalic = create.invoke(null, sans, Integer.valueOf(3));
+        Object bold = null;
+        Object italic = null;
+        Object boldItalic = null;
+        try {
+            java.lang.reflect.Method create =
+                typeface.getDeclaredMethod("create", typeface, Integer.TYPE);
+            bold = create.invoke(null, sans, Integer.valueOf(1));
+            italic = create.invoke(null, sans, Integer.valueOf(2));
+            boldItalic = create.invoke(null, sans, Integer.valueOf(3));
+        } catch (Throwable t) {
+            bold = sans;
+            italic = sans;
+            boldItalic = sans;
+        }
+
+        final Object defaultFont = sans;
+        try {
+            java.lang.reflect.Field sSystemFontMapField = typeface.getDeclaredField("sSystemFontMap");
+            sSystemFontMapField.setAccessible(true);
+            java.util.Map origMap = (java.util.Map) sSystemFontMapField.get(null);
+            java.util.Map fallbackMap = new java.util.HashMap(origMap != null ? origMap : new java.util.HashMap()) {
+                @Override
+                public Object get(Object key) {
+                    Object val = super.get(key);
+                    return val != null ? val : defaultFont;
+                }
+            };
+            sSystemFontMapField.set(null, java.util.Collections.unmodifiableMap(fallbackMap));
+            System.out.println("[Muplar/ART] sSystemFontMap set with fallback map");
+        } catch (Throwable t) {
+            System.err.println("[Muplar/ART] Failed to set fallback sSystemFontMap: " + t);
+        }
+
+        try {
+            java.lang.reflect.Field sDefaultsField = typeface.getDeclaredField("sDefaults");
+            sDefaultsField.setAccessible(true);
+            Object array = java.lang.reflect.Array.newInstance(typeface, 4);
+            java.lang.reflect.Array.set(array, 0, sans);
+            java.lang.reflect.Array.set(array, 1, bold != null ? bold : sans);
+            java.lang.reflect.Array.set(array, 2, italic != null ? italic : sans);
+            java.lang.reflect.Array.set(array, 3, boldItalic != null ? boldItalic : sans);
+            sDefaultsField.set(null, array);
+            System.out.println("[Muplar/ART] Installed sDefaults array into Typeface");
+        } catch (Throwable t) {
+            System.err.println("[Muplar/ART] Failed to set sDefaults: " + t);
+        }
 
         java.util.List<Object> defaults = java.util.Arrays.asList(
-            sans, bold, italic, boldItalic);
+            sans, bold != null ? bold : sans, italic != null ? italic : sans, boldItalic != null ? boldItalic : sans);
         java.util.List<Object> generics = java.util.Arrays.asList(
             sans, serif, monospace);
-        java.lang.reflect.Method change =
-            typeface.getDeclaredMethod(
-                "changeDefaultFontForTest",
-                java.util.List.class,
-                java.util.List.class);
-        change.setAccessible(true);
-        change.invoke(null, defaults, generics);
-        for (String fieldName : new String[]{"DEFAULT", "DEFAULT_BOLD", "sDefaultFlipfont"}) {
+        try {
+            java.lang.reflect.Method change =
+                typeface.getDeclaredMethod(
+                    "changeDefaultFontForTest",
+                    java.util.List.class,
+                    java.util.List.class);
+            change.setAccessible(true);
+            change.invoke(null, defaults, generics);
+        } catch (Throwable t) {
+            // Ignore
+        }
+        for (String fieldName : new String[]{"DEFAULT", "DEFAULT_BOLD", "SANS_SERIF", "SERIF", "MONOSPACE", "sDefaultFlipfont", "sDefaultTypeface"}) {
             try {
                 java.lang.reflect.Field f = typeface.getDeclaredField(fieldName);
                 f.setAccessible(true);
                 Object val = f.get(null);
                 System.out.println("[Muplar/ART] Typeface." + fieldName + "=" + val);
                 if (val == null) {
-                    f.set(null, fieldName.contains("BOLD") ? bold : sans);
+                    if (fieldName.equals("DEFAULT_BOLD")) {
+                        f.set(null, bold != null ? bold : sans);
+                    } else if (fieldName.equals("SERIF")) {
+                        f.set(null, serif);
+                    } else if (fieldName.equals("MONOSPACE")) {
+                        f.set(null, monospace);
+                    } else {
+                        f.set(null, sans);
+                    }
                     System.out.println("[Muplar/ART] Initialized Typeface." + fieldName);
                 }
             } catch (Throwable t) {
@@ -764,6 +841,9 @@ public final class ArtApkMain {
             }
         }
         if (className.isEmpty()) {
+            className = resolveApplicationClassFromManifest(context);
+        }
+        if (className.isEmpty()) {
             application =
                 new MuplarApplication((android.content.Context)context);
         } else {
@@ -818,6 +898,42 @@ public final class ArtApkMain {
             System.err.println("[Muplar/ART] application base attach failed: "
                 + t.getClass().getName() + ": " + t.getMessage());
         }
+    }
+
+    private static String resolveApplicationClassFromManifest(Object context) {
+        if (!(context instanceof android.content.Context)) return "";
+        try {
+            android.content.res.XmlResourceParser parser =
+                ((android.content.Context) context).getAssets().openXmlResourceParser("AndroidManifest.xml");
+            if (parser == null) return "";
+            try {
+                int eventType;
+                while ((eventType = parser.next()) != org.xmlpull.v1.XmlPullParser.END_DOCUMENT) {
+                    if (eventType == org.xmlpull.v1.XmlPullParser.START_TAG &&
+                        "application".equals(parser.getName())) {
+                        for (int i = 0; i < parser.getAttributeCount(); i++) {
+                            String attrName = parser.getAttributeName(i);
+                            if ("name".equals(attrName)) {
+                                String val = parser.getAttributeValue(i);
+                                if (val != null && !val.isEmpty()) {
+                                    return val;
+                                }
+                            }
+                        }
+                        String androidName = parser.getAttributeValue(
+                            "http://schemas.android.com/apk/res/android", "name");
+                        if (androidName != null && !androidName.isEmpty()) {
+                            return androidName;
+                        }
+                        break;
+                    }
+                }
+            } finally {
+                parser.close();
+            }
+        } catch (Throwable ignored) {
+        }
+        return "";
     }
 
     @SuppressWarnings("unchecked")

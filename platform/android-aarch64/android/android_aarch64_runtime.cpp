@@ -324,7 +324,8 @@ int handle_guest_art_apk_launch(const PlatformLaunchConfig &launch_cfg,
     guest_cfg.guest_elf_path = plan.app_process64_guest_path;
     guest_cfg.argv = plan.argv;
     guest_cfg.env = plan.env;
-    guest_cfg.sysroot = launch_cfg.sysroot;
+    guest_cfg.sysroot = launch_cfg.sysroot.empty() ? plan.sysroot.string()
+                                                  : launch_cfg.sysroot;
     guest_cfg.verbose = launch_cfg.verbose;
     guest_cfg.timeout_sec = launch_cfg.timeout_sec;
     guest_cfg.host_window = launch_cfg.host_window;
@@ -353,6 +354,81 @@ int handle_java_apk_launch(const PlatformLaunchConfig &launch_cfg,
     return handle_guest_art_apk_launch(launch_cfg, classification);
 }
 
+static void sync_packages_registry(const prefix::PrefixLayout &active_prefix)
+{
+    std::error_code ec;
+    if (!std::filesystem::is_directory(active_prefix.packages_dir, ec))
+        return;
+
+    std::filesystem::path registry_path =
+        active_prefix.registry_dir / "android-packages.properties";
+    std::filesystem::create_directories(active_prefix.registry_dir, ec);
+
+    std::string existing_content;
+    if (std::filesystem::is_regular_file(registry_path, ec)) {
+        std::ifstream ifs(registry_path);
+        std::stringstream buffer;
+        buffer << ifs.rdbuf();
+        existing_content = buffer.str();
+    }
+
+    std::string registry_text;
+    for (const auto &entry :
+         std::filesystem::directory_iterator(active_prefix.packages_dir, ec)) {
+        if (!entry.is_regular_file(ec) ||
+            entry.path().extension() != ".apk") {
+            continue;
+        }
+
+        std::string filename = entry.path().filename().string();
+        bool is_builtin_launcher = (filename == "muplar-launcher.apk" || filename == "Launcher3.apk");
+        try {
+            auto apk = muplar::runtime::apk::classify_apk(entry.path());
+            std::string name = entry.path().stem().string();
+            if (apk.manifest_application_label &&
+                !apk.manifest_application_label->empty() &&
+                apk.manifest_application_label->front() != '@') {
+                name = *apk.manifest_application_label;
+            } else if (apk.manifest_package && !apk.manifest_package->empty()) {
+                std::string pkg = *apk.manifest_package;
+                auto dot = pkg.rfind('.');
+                std::string last = (dot != std::string::npos) ? pkg.substr(dot + 1) : pkg;
+                if (!last.empty())
+                    last[0] = static_cast<char>(std::toupper(static_cast<unsigned char>(last[0])));
+                name = last;
+            }
+
+            if (!is_builtin_launcher && apk.manifest_package &&
+                !apk.manifest_package->empty() &&
+                apk.manifest_launch_activity &&
+                !apk.manifest_launch_activity->empty()) {
+                registry_text += "package=" + *apk.manifest_package + "\n";
+                registry_text += "activity=" + *apk.manifest_launch_activity + "\n";
+                registry_text += "label=" + name + "\n";
+                registry_text += "apk=" + entry.path().string() + "\n";
+                if (apk.manifest_application_class &&
+                    !apk.manifest_application_class->empty()) {
+                    registry_text += "application=" + *apk.manifest_application_class + "\n";
+                }
+                if (apk.manifest_application_icon_resource) {
+                    registry_text += "icon=" + std::to_string(*apk.manifest_application_icon_resource) + "\n";
+                }
+                if (apk.manifest_application_icon &&
+                    !apk.manifest_application_icon->empty()) {
+                    registry_text += "icon_path=" + *apk.manifest_application_icon + "\n";
+                }
+                registry_text += "---\n";
+            }
+        } catch (...) {
+        }
+    }
+
+    if (!registry_text.empty() && registry_text != existing_content) {
+        std::ofstream ofs(registry_path, std::ios::trunc);
+        ofs << registry_text;
+    }
+}
+
 }  // namespace
 
 std::filesystem::path ensure_muplard(const prefix::PrefixLayout &active_prefix)
@@ -372,6 +448,7 @@ std::filesystem::path ensure_muplard(const prefix::PrefixLayout &active_prefix)
     std::error_code ec;
     std::filesystem::create_directories(run_dir, ec);
     std::filesystem::create_directories(active_prefix.logs_dir, ec);
+    sync_packages_registry(active_prefix);
     std::filesystem::path registry =
         active_prefix.registry_dir / "android-packages.properties";
     std::filesystem::path pid_file = run_dir / "muplard.pid";

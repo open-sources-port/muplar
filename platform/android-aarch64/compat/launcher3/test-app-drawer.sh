@@ -12,7 +12,7 @@ mkdir -p "$(dirname "$LOG")"
 
 echo "Starting Launcher3..."
 export MUPLAR_SERVICE_SOCKET="$PREFIX_DIR/run/muplard.sock"
-export MUPLAR_ANDROID_SOFTWARE_FRAME_PATH="/data/local/tmp/muplar/frames/software-frame.mhr"
+export MUPLAR_ANDROID_SOFTWARE_FRAME_PATH="data/local/tmp/muplar/frames/software-frame.mhr"
 "$ROOT_DIR/build/bin/mup" --prefix android-arm64 --apk "$FIXTURE" \
     >"$LOG" 2>&1 &
 PID=$!
@@ -51,6 +51,7 @@ for _ in {1..200}; do
 done
 
 grep -q "software frame presented" "$LOG" || { echo "FAIL: no initial frame" >&2; exit 1; }
+grep "software frame presented" "$LOG" || true
 
 echo "Waiting for all apps to bind..."
 for _ in {1..200}; do
@@ -88,13 +89,19 @@ kill -0 "$PID" || { echo "FAIL: runtime exited" >&2; exit 1; }
 grep -q "openAllApps invoked=true" "$LOG" || { echo "FAIL: drawer did not open" >&2; exit 1; }
 
 # Dump frame to PNG
-FRAME_PATH="$HOME/.muplar/sysroots/android-arm64/api-35/sysroot/data/local/tmp/muplar/frames/software-frame.mhr"
 python3 -c "
 import os, struct, subprocess
 
-path = '$FRAME_PATH'
-if not os.path.exists(path):
-    print('Frame not found at', path)
+paths = [
+    os.environ.get('MUPLAR_SOFTWARE_FRAME_HOST_PATH', ''),
+    os.path.abspath('$ROOT_DIR/data/local/tmp/muplar/frames/software-frame.mhr'),
+    '/data/local/tmp/muplar/frames/software-frame.mhr',
+    os.path.expanduser('~/.muplar/prefixes/android-arm64/rootfs/data/local/tmp/muplar/frames/software-frame.mhr'),
+    os.path.expanduser('~/.muplar/sysroots/android-arm64/api-35/sysroot/data/local/tmp/muplar/frames/software-frame.mhr')
+]
+path = next((p for p in paths if p and os.path.exists(p)), None)
+if not path:
+    print('Frame not found in any candidate path:', [p for p in paths if p])
     exit(1)
 
 with open(path, 'rb') as f:

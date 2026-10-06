@@ -305,6 +305,8 @@ static NSView* AndroidDeviceTabChipView(NSString* title,
     _activeTabIdentifier = AndroidDeviceLauncherTabIdentifier;
     _frameServerFd = -1;
     _frameClientFd = -1;
+    _framePixelWidth = 1080;
+    _framePixelHeight = 1920;
 
     CGFloat devicePixelWidth = 1440.0;
     CGFloat devicePixelHeight = 3200.0;
