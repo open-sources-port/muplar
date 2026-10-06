@@ -120,12 +120,12 @@ static uint64_t read_guest_u64_or_zero(guest_t *g, uint64_t gpa)
 
 static void map_muplar_runtime_arena(guest_t *g)
 {
-    pthread_mutex_lock(&mmap_lock);
+    mmap_lock_acquire();
     int rc = guest_extend_page_tables(
         g, MUPLAR_RUNTIME_ARENA_GPA,
         MUPLAR_RUNTIME_ARENA_GPA + MUPLAR_RUNTIME_ARENA_SIZE,
         MEM_PERM_R | MEM_PERM_W | MEM_PERM_X);
-    pthread_mutex_unlock(&mmap_lock);
+    mmap_lock_release();
     if (rc < 0)
         throw std::runtime_error(
             "GuestRunner: failed to map Muplar runtime arena");
@@ -824,9 +824,9 @@ static bool map_direct_so_object(guest_t *g,
         return false;
     }
 
-    pthread_mutex_lock(&mmap_lock);
+    mmap_lock_acquire();
     int rc = guest_extend_page_tables(g, map_start, map_end, MEM_PERM_RW);
-    pthread_mutex_unlock(&mmap_lock);
+    mmap_lock_release();
     if (rc < 0) {
         std::fclose(f);
         return false;
@@ -855,10 +855,10 @@ static bool map_direct_so_object(guest_t *g,
         uint64_t seg_start = align_down_u64(obj.load_base + ph.p_vaddr, 0x1000);
         uint64_t seg_end =
             align_up_u64(obj.load_base + ph.p_vaddr + ph.p_memsz, 0x1000);
-        pthread_mutex_lock(&mmap_lock);
+        mmap_lock_acquire();
         rc = guest_update_perms(g, seg_start, seg_end,
                                 phdr_mem_perms(ph.p_flags));
-        pthread_mutex_unlock(&mmap_lock);
+        mmap_lock_release();
         if (rc < 0) {
             std::fclose(f);
             return false;
