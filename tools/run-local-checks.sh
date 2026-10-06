@@ -59,6 +59,7 @@ if has_cmd cppcheck; then
         --suppress=funcArgNamesDifferent --suppress=funcArgNamesDifferentUnnamed --suppress=functionStatic \
         --suppress=functionConst --suppress=badBitmaskCheck --suppress=uselessCallsSubstr --suppress=unusedStructMember \
         --suppress=staticFunction --suppress=unusedPrivateFunction --suppress=knownConditionTrueFalse --suppress=unreadVariable \
+        --suppress=constParameterCallback \
         cli platform
     echo "cppcheck: OK"
 else

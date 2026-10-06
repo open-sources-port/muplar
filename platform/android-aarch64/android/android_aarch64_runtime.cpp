@@ -324,8 +324,8 @@ int handle_guest_art_apk_launch(const PlatformLaunchConfig &launch_cfg,
     guest_cfg.guest_elf_path = plan.app_process64_guest_path;
     guest_cfg.argv = plan.argv;
     guest_cfg.env = plan.env;
-    guest_cfg.sysroot = launch_cfg.sysroot.empty() ? plan.sysroot.string()
-                                                  : launch_cfg.sysroot;
+    guest_cfg.sysroot =
+        launch_cfg.sysroot.empty() ? plan.sysroot.string() : launch_cfg.sysroot;
     guest_cfg.verbose = launch_cfg.verbose;
     guest_cfg.timeout_sec = launch_cfg.timeout_sec;
     guest_cfg.host_window = launch_cfg.host_window;
@@ -375,13 +375,13 @@ static void sync_packages_registry(const prefix::PrefixLayout &active_prefix)
     std::string registry_text;
     for (const auto &entry :
          std::filesystem::directory_iterator(active_prefix.packages_dir, ec)) {
-        if (!entry.is_regular_file(ec) ||
-            entry.path().extension() != ".apk") {
+        if (!entry.is_regular_file(ec) || entry.path().extension() != ".apk") {
             continue;
         }
 
         std::string filename = entry.path().filename().string();
-        bool is_builtin_launcher = (filename == "muplar-launcher.apk" || filename == "Launcher3.apk");
+        bool is_builtin_launcher =
+            (filename == "muplar-launcher.apk" || filename == "Launcher3.apk");
         try {
             auto apk = muplar::runtime::apk::classify_apk(entry.path());
             std::string name = entry.path().stem().string();
@@ -392,9 +392,11 @@ static void sync_packages_registry(const prefix::PrefixLayout &active_prefix)
             } else if (apk.manifest_package && !apk.manifest_package->empty()) {
                 std::string pkg = *apk.manifest_package;
                 auto dot = pkg.rfind('.');
-                std::string last = (dot != std::string::npos) ? pkg.substr(dot + 1) : pkg;
+                std::string last =
+                    (dot != std::string::npos) ? pkg.substr(dot + 1) : pkg;
                 if (!last.empty())
-                    last[0] = static_cast<char>(std::toupper(static_cast<unsigned char>(last[0])));
+                    last[0] = static_cast<char>(
+                        std::toupper(static_cast<unsigned char>(last[0])));
                 name = last;
             }
 
@@ -403,19 +405,26 @@ static void sync_packages_registry(const prefix::PrefixLayout &active_prefix)
                 apk.manifest_launch_activity &&
                 !apk.manifest_launch_activity->empty()) {
                 registry_text += "package=" + *apk.manifest_package + "\n";
-                registry_text += "activity=" + *apk.manifest_launch_activity + "\n";
+                registry_text +=
+                    "activity=" + *apk.manifest_launch_activity + "\n";
                 registry_text += "label=" + name + "\n";
                 registry_text += "apk=" + entry.path().string() + "\n";
                 if (apk.manifest_application_class &&
                     !apk.manifest_application_class->empty()) {
-                    registry_text += "application=" + *apk.manifest_application_class + "\n";
+                    registry_text +=
+                        "application=" + *apk.manifest_application_class + "\n";
                 }
                 if (apk.manifest_application_icon_resource) {
-                    registry_text += "icon=" + std::to_string(*apk.manifest_application_icon_resource) + "\n";
+                    registry_text +=
+                        "icon=" +
+                        std::to_string(
+                            *apk.manifest_application_icon_resource) +
+                        "\n";
                 }
                 if (apk.manifest_application_icon &&
                     !apk.manifest_application_icon->empty()) {
-                    registry_text += "icon_path=" + *apk.manifest_application_icon + "\n";
+                    registry_text +=
+                        "icon_path=" + *apk.manifest_application_icon + "\n";
                 }
                 registry_text += "---\n";
             }
