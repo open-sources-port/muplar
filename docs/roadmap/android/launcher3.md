@@ -6,17 +6,27 @@ Launcher3 is the compatibility target for Android home-screen behavior in Muplar
 
 ## 1. Ground Truth & Current Reality
 
-Although headless test logs show `onResume completed successfully` and view hierarchy inflation (`FrameLayout -> LauncherRootView -> DragLayer`), **Launcher3 is currently non-functional for real interactive use**:
+Launcher3 is **functional and verified for interactive use**:
 
-- 🔴 **Empty Home Screen & App Drawer**: No installed applications appear on the home screen or app drawer because `MuplarServices.launcherAppsValue()` does not query real installed APK manifest data.
-- 🔴 **Touch Input Does Not Work**: Mouse clicks and pointer events forwarded from `AndroidDeviceShell` do not trigger icon clicks, long presses, or view interactions.
-- 🔴 **Back Button Looper Hang**: Pressing Back on `QuickstepLauncher` enters an infinite hang in `onBackPressed()`, causing the entire session to become unresponsive.
-- 🔴 **Frame Presentation Failure**: The 200ms software DecorView snapshot path in `MuplarFramePresenter` frequently delivers black, blank, or frozen frames to `HostWindow`.
+- 🟢 **Dynamic App Binding**: Installed applications appear dynamically on the home screen and in the all-apps drawer via manifest synchronization (`test-app-drawer.sh`, `test-install-ux.sh`).
+- 🟢 **Touch & Click Dispatch**: Pointer events translated from `AndroidDeviceShell` through `muplard` dispatch into `dispatchTouchEvent()`, triggering icon launches and drawer drag transitions (`test-touch-interaction.sh`, `test-click-icon.sh`).
+- 🟢 **Back Button Stability**: Back navigation in `QuickstepLauncher` uses state-aware navigation without entering unhandled looper deadlocks (`test-backstack.sh`).
+- 🟢 **Frame Presentation**: Event-driven software DecorView snapshots reliably present valid 1080x1920 frames to `HostWindow` (`visual-smoke.sh`, `test-framework-rendering.sh`).
 
 ---
 
-## 2. Resolved Items & Progress
+## 2. Resolved Items & Completed Milestones
 
+- [x] **Dynamic `LauncherApps` Installed-App Query**:
+  - Auto-populates `android-packages.properties` from installed APKs in `~/.muplar/prefixes/<name>/packages/`.
+  - Dispatches `onPackageAdded` notifications to `LauncherApps.Callback` on dynamic package installation.
+- [x] **Touch Input Routing (`MotionEvent.nativeInitialize`)**:
+  - Bound genuine `MotionEvent` native allocation and field accessors in `muplar_android_art_shim.c`.
+  - Scaled and mapped macOS window coordinates (1080x1920) through `FrameworkDeviceController`.
+- [x] **Back Button Navigation**:
+  - State-aware `performBack()` returns to normal home workspace state or finishes current task without wedging the looper.
+- [x] **Frame Presenter Stabilization**:
+  - Resolved main-looper starvation; `MuplarFramePresenter` captures valid multi-color UI frames and writes to MHR frame transport.
 - [x] **ART JIT Stability (`art_bootstrap.cpp`)**:
   - Capped ART's JIT code cache to 1 MiB (`-Xjitmaxsize:1m`, `-Xjitinitialsize:512k`, `-Xjitthreshold:200`) so it does not overflow elfuse's pre-mapped 2 MiB RX window (`0x10000000`–`0x10200000`), eliminating HVF W^X translation fault panics.
 - [x] **Genuine SQLite & CursorWindow Natives (`muplar_android_art_shim.c`)**:
@@ -24,28 +34,20 @@ Although headless test logs show `onResume completed successfully` and view hier
   - Removed mock JNI stubs that hardcoded Launcher3 favorites table columns.
 - [x] **IPC Native Socket Bridge (`MuplarSocketClient.java`)**:
   - Replaced guest `ProcessBuilder` execution with direct `AF_UNIX` socket IPC, avoiding elfuse `execve` failures.
+- [x] **Trackpad & Mouse Scroll Wheel Support (`AndroidDeviceShell.mm`)**:
+  - Implemented `scrollWheel:` event mapping translating macOS trackpad phases and mouse wheel deltas into smooth Android pointer drag sequences.
 - [x] **Process Cleanup Hardening (`PrefixManagerApp.mm`)**:
   - Added 500ms `SIGKILL` fallback when closing the session window, preventing orphaned `mup` and `muplard` background processes.
 
 ---
 
-## 3. Active Blockers & Execution Priorities
+## 3. Active Focus & Next Enhancements
 
-### Blocker 1: Unbacked `LauncherApps` Installed-App Query
-- **Problem**: Launcher3 queries `ILauncherApps` to populate workspace icons and the all-apps drawer. `MuplarServices.java` currently returns empty or hardcoded lists.
-- **Fix**: Parse installed APK manifests in `~/.muplar/prefixes/<name>/packages/` and dynamically populate `LauncherApps.getActivityList()`.
+### Priority 1: Text Input & IME Integration
+- Support software keyboard and text input events for Launcher3 search bar and app inputs.
 
-### Blocker 2: Touch Input Routing & View Dispatch
-- **Problem**: Clicks in `AndroidDeviceShell` pass into `muplard`, but `FrameworkDeviceController` either fails to construct valid `MotionEvent` instances or fails to deliver them to the targeted child view.
-- **Fix**: Trace `AndroidDeviceShell.mm` coordinates -> `FrameworkDeviceController.dispatchTouchEvent()` -> `LauncherRootView.dispatchTouchEvent()`. Ensure taps produce visible icon focus and press states.
-
-### Blocker 3: Back Button Session Hang
-- **Problem**: Calling `onBackPressed()` on `QuickstepLauncher` enters an unhandled looper wait, wedging the entire guest session.
-- **Fix**: Ensure `onBackPressed()` does not block on missing window animations or unhandled Choreographer callbacks. Provide an immediate return or no-op when already at the Home workspace root.
-
-### Blocker 4: Real Frame Delivery via Presenter
-- **Problem**: `MuplarFramePresenter` frequently fails to capture valid pixels or captures an empty black surface.
-- **Fix**: Audit `MuplarFramePresenter.drawViewToBitmap()` to ensure the active decor view is valid, dirty flags are respected, and pixel data is written to the MHR frame.
+### Priority 2: Hardware-Accelerated Rendering (P2)
+- Transition from software DecorView MHR frame capture to hardware-accelerated ANGLE/Metal backing `BLASTBufferQueue`.
 
 ---
 
@@ -60,4 +62,11 @@ platform/android-aarch64/compat/launcher3/smoke-launch.sh
 
 # Capture visual frame to verify non-black pixels
 platform/android-aarch64/compat/launcher3/visual-smoke.sh
+
+# Run end-to-end interactive compat suite
+platform/android-aarch64/compat/launcher3/test-touch-interaction.sh
+platform/android-aarch64/compat/launcher3/test-app-drawer.sh
+platform/android-aarch64/compat/launcher3/test-click-icon.sh
+platform/android-aarch64/compat/launcher3/test-backstack.sh
+platform/android-aarch64/compat/launcher3/test-install-ux.sh
 ```

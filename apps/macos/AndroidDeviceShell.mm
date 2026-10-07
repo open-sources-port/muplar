@@ -3,6 +3,7 @@
 
 #include "android_keycodes.h"
 
+#include <algorithm>
 #include <sys/socket.h>
 #include <sys/un.h>
 #include <unistd.h>
@@ -29,7 +30,13 @@
 @property(nonatomic, assign) int frameClientFd;
 @property(nonatomic, assign) NSUInteger framePixelWidth;
 @property(nonatomic, assign) NSUInteger framePixelHeight;
+@property(nonatomic, assign) BOOL scrollActive;
+@property(nonatomic, assign) NSPoint scrollCurrentPoint;
+@property(nonatomic, strong) NSTimer* scrollEndTimer;
 - (void)sendPointerEvent:(NSEvent*)event action:(int32_t)action;
+- (void)sendPointerAtX:(float)x y:(float)y action:(int32_t)action;
+- (void)handleScrollWheel:(NSEvent*)event;
+- (void)endScrollGesture;
 - (void)sendKeyEvent:(NSEvent*)event action:(int32_t)action;
 @end
 
@@ -195,6 +202,7 @@ static NSView* AndroidDeviceTabChipView(NSString* title,
     NSLog(@"[PointerDebug] mouseDown");
 #endif
     [self.window makeFirstResponder:self];
+    [self.deviceShell endScrollGesture];
     [self.deviceShell sendPointerEvent:event action:0];
 }
 
@@ -212,6 +220,11 @@ static NSView* AndroidDeviceTabChipView(NSString* title,
     NSLog(@"[PointerDebug] mouseUp");
 #endif
     [self.deviceShell sendPointerEvent:event action:1];
+}
+
+- (void)scrollWheel:(NSEvent*)event
+{
+    [self.deviceShell handleScrollWheel:event];
 }
 
 - (void)keyDown:(NSEvent*)event
@@ -742,16 +755,43 @@ static NSView* AndroidDeviceTabChipView(NSString* title,
     });
 }
 
-- (void)sendPointerEvent:(NSEvent*)event action:(int32_t)action
+- (void)sendPointerAtX:(float)x y:(float)y action:(int32_t)action
 {
-    if (!event)
-        return;
     if (self.frameClientFd < 0 && !self.inputHandler) {
 #ifdef DEBUG
         NSLog(@"[PointerDebug] drop: no client and no inputHandler");
 #endif
         return;
     }
+    AndroidDeviceInputPacket packet{};
+    packet.magic = AndroidDeviceInputMagic;
+    packet.type = 2;
+    packet.action = action;
+    packet.source = 0x1002;
+    packet.deviceId = 1;
+    packet.x = x;
+    packet.y = y;
+    if (self.inputHandler)
+        self.inputHandler(self.activeTabIdentifier, packet.type, packet.action,
+                          packet.source, packet.deviceId, packet.keyCode,
+                          packet.x, packet.y);
+    if (self.frameClientFd >= 0) {
+        BOOL wrote = AndroidDeviceWriteAll(self.frameClientFd, &packet, sizeof(packet));
+#ifdef DEBUG
+        NSLog(@"[PointerDebug] send action=%d x=%.1f y=%.1f fd=%d wrote=%d",
+              action, packet.x, packet.y, (int)self.frameClientFd, (int)wrote);
+#endif
+        if (!wrote) {
+            close(self.frameClientFd);
+            self.frameClientFd = -1;
+        }
+    }
+}
+
+- (void)sendPointerEvent:(NSEvent*)event action:(int32_t)action
+{
+    if (!event)
+        return;
     NSRect bounds = self.frameView.bounds;
     if (bounds.size.width <= 0 || bounds.size.height <= 0) {
 #ifdef DEBUG
@@ -774,28 +814,129 @@ static NSView* AndroidDeviceTabChipView(NSString* title,
     CGFloat scaleY = self.framePixelHeight > 0
         ? (CGFloat)self.framePixelHeight / bounds.size.height
         : 1.0;
-    AndroidDeviceInputPacket packet{};
-    packet.magic = AndroidDeviceInputMagic;
-    packet.type = 2;
-    packet.action = action;
-    packet.source = 0x1002;
-    packet.deviceId = 1;
-    packet.x = (float)(point.x * scaleX);
-    packet.y = (float)((bounds.size.height - point.y) * scaleY);
-    if (self.inputHandler)
-        self.inputHandler(self.activeTabIdentifier, packet.type, packet.action,
-                          packet.source, packet.deviceId, packet.keyCode,
-                          packet.x, packet.y);
-    if (self.frameClientFd >= 0) {
-        BOOL wrote = AndroidDeviceWriteAll(self.frameClientFd, &packet, sizeof(packet));
-#ifdef DEBUG
-        NSLog(@"[PointerDebug] send action=%d x=%.1f y=%.1f fd=%d wrote=%d",
-              action, packet.x, packet.y, (int)self.frameClientFd, (int)wrote);
-#endif
-        if (!wrote) {
-            close(self.frameClientFd);
-            self.frameClientFd = -1;
+    float x = (float)(point.x * scaleX);
+    float y = (float)((bounds.size.height - point.y) * scaleY);
+    [self sendPointerAtX:x y:y action:action];
+}
+
+- (void)endScrollGesture
+{
+    if (self.scrollEndTimer) {
+        [self.scrollEndTimer invalidate];
+        self.scrollEndTimer = nil;
+    }
+    if (self.scrollActive) {
+        self.scrollActive = NO;
+        [self sendPointerAtX:(float)self.scrollCurrentPoint.x
+                           y:(float)self.scrollCurrentPoint.y
+                      action:1 /* ACTION_UP */];
+    }
+}
+
+- (void)handleScrollWheel:(NSEvent*)event
+{
+    if (!event)
+        return;
+    NSRect bounds = self.frameView.bounds;
+    if (bounds.size.width <= 0 || bounds.size.height <= 0)
+        return;
+    NSPoint mouseLoc = [self.frameView convertPoint:event.locationInWindow fromView:nil];
+    if (mouseLoc.x < 0.0 || mouseLoc.y < 0.0 ||
+        mouseLoc.x > bounds.size.width || mouseLoc.y > bounds.size.height) {
+        if (!self.scrollActive)
+            return;
+    }
+
+    CGFloat scaleX = self.framePixelWidth > 0
+        ? (CGFloat)self.framePixelWidth / bounds.size.width
+        : 1.0;
+    CGFloat scaleY = self.framePixelHeight > 0
+        ? (CGFloat)self.framePixelHeight / bounds.size.height
+        : 1.0;
+    CGFloat maxW = self.framePixelWidth > 0 ? (CGFloat)self.framePixelWidth : bounds.size.width;
+    CGFloat maxH = self.framePixelHeight > 0 ? (CGFloat)self.framePixelHeight : bounds.size.height;
+
+    CGFloat deltaX = 0;
+    CGFloat deltaY = 0;
+    if (event.hasPreciseScrollingDeltas) {
+        deltaX = event.scrollingDeltaX;
+        deltaY = event.scrollingDeltaY;
+    } else {
+        deltaX = event.deltaX * 30.0;
+        deltaY = event.deltaY * 30.0;
+    }
+
+    NSEventPhase phase = event.phase;
+    NSEventPhase momentum = event.momentumPhase;
+
+    if (momentum != NSEventPhaseNone && phase == NSEventPhaseNone) {
+        if (self.scrollActive) {
+            [self endScrollGesture];
         }
+        return;
+    }
+
+    if (phase == NSEventPhaseBegan) {
+        if (self.scrollEndTimer) {
+            [self.scrollEndTimer invalidate];
+            self.scrollEndTimer = nil;
+        }
+        float startX = (float)(mouseLoc.x * scaleX);
+        float startY = (float)((bounds.size.height - mouseLoc.y) * scaleY);
+        self.scrollCurrentPoint = NSMakePoint(startX, startY);
+        self.scrollActive = YES;
+        [self sendPointerAtX:startX y:startY action:0 /* ACTION_DOWN */];
+        return;
+    }
+
+    if (phase == NSEventPhaseChanged) {
+        if (!self.scrollActive) {
+            float startX = (float)(mouseLoc.x * scaleX);
+            float startY = (float)((bounds.size.height - mouseLoc.y) * scaleY);
+            self.scrollCurrentPoint = NSMakePoint(startX, startY);
+            self.scrollActive = YES;
+            [self sendPointerAtX:startX y:startY action:0 /* ACTION_DOWN */];
+        }
+        CGFloat nextX = self.scrollCurrentPoint.x + (deltaX * scaleX);
+        CGFloat nextY = self.scrollCurrentPoint.y + (deltaY * scaleY);
+        nextX = std::max(0.0, std::min((double)maxW, (double)nextX));
+        nextY = std::max(0.0, std::min((double)maxH, (double)nextY));
+        self.scrollCurrentPoint = NSMakePoint(nextX, nextY);
+        [self sendPointerAtX:(float)nextX y:(float)nextY action:2 /* ACTION_MOVE */];
+        return;
+    }
+
+    if (phase == NSEventPhaseEnded || phase == NSEventPhaseCancelled) {
+        [self endScrollGesture];
+        return;
+    }
+
+    if (phase == NSEventPhaseNone) {
+        if (deltaX == 0 && deltaY == 0)
+            return;
+        if (!self.scrollActive) {
+            float startX = (float)(mouseLoc.x * scaleX);
+            float startY = (float)((bounds.size.height - mouseLoc.y) * scaleY);
+            self.scrollCurrentPoint = NSMakePoint(startX, startY);
+            self.scrollActive = YES;
+            [self sendPointerAtX:startX y:startY action:0 /* ACTION_DOWN */];
+        }
+        CGFloat nextX = self.scrollCurrentPoint.x + (deltaX * scaleX);
+        CGFloat nextY = self.scrollCurrentPoint.y + (deltaY * scaleY);
+        nextX = std::max(0.0, std::min((double)maxW, (double)nextX));
+        nextY = std::max(0.0, std::min((double)maxH, (double)nextY));
+        self.scrollCurrentPoint = NSMakePoint(nextX, nextY);
+        [self sendPointerAtX:(float)nextX y:(float)nextY action:2 /* ACTION_MOVE */];
+
+        if (self.scrollEndTimer) {
+            [self.scrollEndTimer invalidate];
+        }
+        __weak typeof(self) weakSelf = self;
+        self.scrollEndTimer = [NSTimer scheduledTimerWithTimeInterval:0.1
+                                                              repeats:NO
+                                                                block:^(NSTimer* _Nonnull timer) {
+            [weakSelf endScrollGesture];
+        }];
     }
 }
 
@@ -1015,6 +1156,11 @@ static NSView* AndroidDeviceTabChipView(NSString* title,
 - (void)windowWillClose:(NSNotification*)notification
 {
     (void)notification;
+    if (self.scrollEndTimer) {
+        [self.scrollEndTimer invalidate];
+        self.scrollEndTimer = nil;
+    }
+    self.scrollActive = NO;
     if (self.frameClientFd >= 0) {
         close(self.frameClientFd);
         self.frameClientFd = -1;
