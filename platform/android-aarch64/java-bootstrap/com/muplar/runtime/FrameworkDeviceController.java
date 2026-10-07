@@ -787,15 +787,54 @@ public final class FrameworkDeviceController {
         }
     }
 
+    public static volatile int sLastUnicodeChar = 0;
+
     private static void dispatchKeyInput(ActivityRecord record,
                                          DeviceInput input)
         throws Exception {
-        android.view.KeyEvent event = new android.view.KeyEvent(input.action,
-            input.keyCode);
+        int metaState = (int) input.x;
+        int unicodeChar = (int) input.y;
+        sLastUnicodeChar = unicodeChar;
+        long now = android.os.SystemClock.uptimeMillis();
+        android.view.KeyEvent event;
+        try {
+            java.lang.reflect.Constructor<android.view.KeyEvent> ctor =
+                android.view.KeyEvent.class.getConstructor(
+                    long.class, long.class, int.class, int.class, int.class,
+                    int.class, int.class, int.class, int.class, int.class);
+            event = ctor.newInstance(
+                now, now, input.action, input.keyCode, 0 /* repeat */,
+                metaState, input.deviceId > 0 ? input.deviceId : 1,
+                0 /* scancode */, 0 /* flags */,
+                input.source > 0 ? input.source : android.view.InputDevice.SOURCE_KEYBOARD);
+        } catch (Throwable t) {
+            event = new android.view.KeyEvent(input.action, input.keyCode);
+        }
+
+        System.out.println("[DeviceController] dispatchKeyInput: keyCode=" + input.keyCode +
+            " action=" + input.action + " meta=" + metaState + " unicode=" + unicodeChar);
+        System.out.flush();
+
+        boolean consumed = false;
         if (!invokeInputDispatch(record.activity, "dispatchKeyEvent",
                 android.view.KeyEvent.class, event)) {
-            dispatchToDecorView(record.activity, "dispatchKeyEvent",
+            consumed = dispatchToDecorView(record.activity, "dispatchKeyEvent",
                 android.view.KeyEvent.class, event);
+        } else {
+            consumed = true;
+        }
+
+        if (!consumed && input.action == android.view.KeyEvent.ACTION_DOWN) {
+            try {
+                java.lang.reflect.Method getFocus =
+                    record.activity.getClass().getMethod("getCurrentFocus");
+                Object focused = getFocus.invoke(record.activity);
+                if (focused instanceof android.view.View) {
+                    android.view.View v = (android.view.View) focused;
+                    v.onKeyDown(input.keyCode, event);
+                }
+            } catch (Throwable ignored) {
+            }
         }
     }
 
@@ -930,11 +969,8 @@ public final class FrameworkDeviceController {
         android.os.Handler.createAsync(looper).post(new Runnable() {
             @Override public void run() {
                 try {
-                    ActivityRecord record = findActivityByToken(token);
-                    if (record == null) {
-                        record = activeRecord();
-                    }
-                    if (record != null) {
+                    ActivityRecord record = token != null ? findActivityByToken(token) : activeRecord();
+                    if (record != null && !record.finishing) {
                         System.out.println("[DeviceController] finishActivityByToken: " + record.activityName);
                         finishAndRemoveActivity(record);
                     }
@@ -997,7 +1033,9 @@ public final class FrameworkDeviceController {
         } catch (Throwable t) {
             System.err.println("[DeviceController] onBackPressed error: " + t.getMessage());
         }
-        finishAndRemoveActivity(record);
+        if (!record.finishing) {
+            finishAndRemoveActivity(record);
+        }
         System.out.println("[DeviceController] back dispatched");
     }
 

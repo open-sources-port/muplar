@@ -36,6 +36,10 @@ Launcher3 is **functional and verified for interactive use**:
   - Replaced guest `ProcessBuilder` execution with direct `AF_UNIX` socket IPC, avoiding elfuse `execve` failures.
 - [x] **Trackpad & Mouse Scroll Wheel Support (`AndroidDeviceShell.mm`)**:
   - Implemented `scrollWheel:` event mapping translating macOS trackpad phases and mouse wheel deltas into smooth Android pointer drag sequences.
+- [x] **Keyboard Input & Text Typing (`AndroidDeviceShell.mm`, `EditText.java`, `FrameworkDeviceController.java`)**:
+  - Wired modifier flags and Unicode character forwarding through opcode 27.
+  - Implemented text editing, backspace, forward delete, DPAD cursor positioning, home/end, and shifted symbols in `EditText`.
+  - Added AIDL proxy support for `IActivityClientController` and hardened `finishActivityByToken` token matching.
 - [x] **Process Cleanup Hardening (`PrefixManagerApp.mm`)**:
   - Added 500ms `SIGKILL` fallback when closing the session window, preventing orphaned `mup` and `muplard` background processes.
 
@@ -43,11 +47,11 @@ Launcher3 is **functional and verified for interactive use**:
 
 ## 3. Active Focus & Next Enhancements
 
-### Priority 1: Text Input & IME Integration
-- Support software keyboard and text input events for Launcher3 search bar and app inputs.
-
-### Priority 2: Hardware-Accelerated Rendering (P2)
+### Priority 1: Hardware-Accelerated Rendering (P1)
 - Transition from software DecorView MHR frame capture to hardware-accelerated ANGLE/Metal backing `BLASTBufferQueue`.
+
+### Priority 2: Clipboard & Pasteboard Synchronization (P2)
+- Bi-directional clipboard sync between macOS `NSPasteboard` and Android `ClipboardManager`.
 
 ---
 
@@ -65,8 +69,10 @@ platform/android-aarch64/compat/launcher3/visual-smoke.sh
 
 # Run end-to-end interactive compat suite
 platform/android-aarch64/compat/launcher3/test-touch-interaction.sh
+platform/android-aarch64/compat/launcher3/test-keyboard-input.sh
 platform/android-aarch64/compat/launcher3/test-app-drawer.sh
 platform/android-aarch64/compat/launcher3/test-click-icon.sh
+platform/android-aarch64/compat/launcher3/test-launcher-drag.sh
 platform/android-aarch64/compat/launcher3/test-backstack.sh
 platform/android-aarch64/compat/launcher3/test-install-ux.sh
 ```

@@ -119,6 +119,9 @@ public final class MuplarServices {
         if ("activity_task".equals(name)) {
             return "android.app.IActivityTaskManager";
         }
+        if ("activity_client".equals(name)) {
+            return "android.app.IActivityClientController";
+        }
         if ("package".equals(name)) {
             return "android.content.pm.IPackageManager";
         }
@@ -356,7 +359,8 @@ public final class MuplarServices {
                 }
             }
             if ("android.app.IActivityTaskManager".equals(descriptor)
-                || "android.app.IActivityManager".equals(descriptor)) {
+                || "android.app.IActivityManager".equals(descriptor)
+                || "android.app.IActivityClientController".equals(descriptor)) {
                 Object value = activityTaskManagerValue(method, args);
                 if (value != null) {
                     return value;
@@ -390,6 +394,21 @@ public final class MuplarServices {
 
         private Object activityTaskManagerValue(Method method, Object[] args) {
             String name = method.getName();
+            if ("getActivityClientController".equals(name)) {
+                try {
+                    Class<?> type = resolveInterfaceClass("android.app.IActivityClientController");
+                    Binder binder = new Binder();
+                    ClassLoader loader = getSafeClassLoader(type);
+                    IInterface owner = (IInterface) Proxy.newProxyInstance(
+                        loader,
+                        new Class<?>[] { type },
+                        new LocalInterfaceHandler(binder, "android.app.IActivityClientController"));
+                    binder.attachInterface(owner, "android.app.IActivityClientController");
+                    return owner;
+                } catch (Throwable t) {
+                    System.err.println("[Muplar/ART] getActivityClientController proxy failed: " + t);
+                }
+            }
             if ("finishActivity".equals(name) || "finishActivityAffinity".equals(name)) {
                 android.os.IBinder token = null;
                 if (args != null) {

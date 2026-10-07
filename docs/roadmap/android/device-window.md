@@ -69,13 +69,21 @@ graph TD
 - **Current reality**: Pointer events translated from `AndroidDeviceShell.mm` through `muplard` dispatch into `dispatchTouchEvent()`, triggering icon launches, button clicks, and gesture transitions (`test-touch-interaction.sh`, `test-click-icon.sh`, `test-launcher-drag.sh`).
 - `scrollWheel:` event mapping in `AndroidDeviceFrameView` translates macOS trackpad phases and mouse wheel deltas into smooth Android pointer drag sequences for natural list and view scrolling.
 
+### Step 7: Keyboard & Text Input (Typing & IME)
+- **Status**: 🟢 **Implemented & Verified**.
+- **Current reality**: `AndroidDeviceShell.mm` extracts macOS modifier flags (`metaState`) and Unicode codepoints from `NSEvent` key events and delivers them via `muplard` opcode 27.
+- `FrameworkDeviceController` reconstructs 10-argument `KeyEvent`s and dispatches them through decor view down to the active focus view.
+- `EditText` implements complete keyboard typing, backspace/del, home/end, DPAD cursor positioning, shifted symbols, and Unicode character insertion (`test-keyboard-input.sh`).
+- Proxy handling in `MuplarServices` for `IActivityClientController` and `IActivityTaskManager` ensures activity-level lifecycle actions (e.g. `finish()`) properly interact with the task stack.
+
 ---
 
 ## 3. Engineering Priorities for the Device Window
 
-1. **Text Typing & IME Integration (P1)**:
-   - Provide character input and software keyboard bridge for `EditText` views.
-2. **Hardware Surface Pipeline via ANGLE / Metal (P2)**:
+1. **Hardware Surface Pipeline via ANGLE / Metal (P1)**:
    - Replace the software bitmap MHR file with a direct ANGLE / Metal surface swapchain.
-3. **macOS Notification Forwarding (P2)**:
+2. **macOS Notification Forwarding (P2)**:
+   - Surface Android notification toasts and channels into native macOS notification banners.
+3. **Clipboard & Drag-and-Drop Sync (P2)**:
+   - Bi-directional clipboard text synchronization between macOS pasteboard and Android `ClipboardManager`.
    - Bridge Android `NotificationManager` alerts to macOS `UNUserNotificationCenter`.

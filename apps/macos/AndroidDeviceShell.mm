@@ -956,6 +956,28 @@ static NSView* AndroidDeviceTabChipView(NSString* title,
         muplar::runtime::android_key_code_from_mac_key(event.keyCode);
     if (packet.keyCode == 0)
         return;
+
+    NSEventModifierFlags flags = event.modifierFlags;
+    int32_t metaState = 0;
+    if (flags & NSEventModifierFlagShift)
+        metaState |= 0x1;
+    if (flags & NSEventModifierFlagOption)
+        metaState |= 0x2;
+    if (flags & NSEventModifierFlagControl)
+        metaState |= 0x1000;
+    if (flags & NSEventModifierFlagCommand)
+        metaState |= 0x10000;
+    if (flags & NSEventModifierFlagCapsLock)
+        metaState |= 0x100000;
+
+    uint32_t unicodeChar = 0;
+    if (action == 0 && event.characters.length > 0) {
+        unicodeChar = [event.characters characterAtIndex:0];
+    }
+
+    packet.x = static_cast<float>(metaState);
+    packet.y = static_cast<float>(unicodeChar);
+
     if (self.inputHandler)
         self.inputHandler(self.activeTabIdentifier, packet.type, packet.action,
                           packet.source, packet.deviceId, packet.keyCode,
