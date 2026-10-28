@@ -17,9 +17,10 @@ Launcher3 is **functional and verified for interactive use**:
 
 ## 2. Resolved Items & Completed Milestones
 
-- [x] **Dynamic `LauncherApps` Installed-App Query**:
+- [x] **Dynamic `LauncherApps` Installed-App Query & Shortcut Binding**:
   - Auto-populates `android-packages.properties` from installed APKs in `~/.muplar/prefixes/<name>/packages/`.
   - Dispatches `onPackageAdded` notifications to `LauncherApps.Callback` on dynamic package installation.
+  - Implemented `resolveLauncherActivityInternal` and `getApplicationInfo` proxy handlers in `MuplarServices.java`, allowing `LoaderTask` to resolve shortcuts, bind workspace items, and inflate hotseat icons without missing-activity errors.
 - [x] **Touch Input Routing (`MotionEvent.nativeInitialize`)**:
   - Bound genuine `MotionEvent` native allocation and field accessors in `muplar_android_art_shim.c`.
   - Scaled and mapped macOS window coordinates (1080x1920) through `FrameworkDeviceController`.

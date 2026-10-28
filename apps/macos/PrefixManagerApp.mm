@@ -4907,7 +4907,7 @@ static NSString* MapLinuxIconToSFSymbol(NSString* icon)
     NSString* sessionSocketPath = NSStringFromPath(selected->root / "run" / "muplard.sock");
     NSString* frameSocketPath =
         NSStringFromPath(selected->root / "run" / "android-frame.sock");
-    std::filesystem::path androidRuntimeRootfs = selected->runtime_sysroot.empty()
+    std::filesystem::path androidRuntimeRootfs = !selected->rootfs.empty()
         ? selected->rootfs
         : selected->runtime_sysroot;
     NSString* softwareFrameHostPath = NSStringFromPath(

@@ -161,12 +161,57 @@ static bool read_all_fd(int fd, void *data, size_t size)
     return true;
 }
 
+static std::string resolve_software_frame_path(const std::string &primary)
+{
+    if (primary.empty())
+        return primary;
+    struct stat st = {};
+    if (stat(primary.c_str(), &st) == 0)
+        return primary;
+
+    // Check if sysroots / rootfs can be swapped
+    auto sysroot_pos = primary.find("/sysroots/");
+    if (sysroot_pos != std::string::npos) {
+        auto data_pos = primary.find("/data/local/tmp/", sysroot_pos);
+        if (data_pos != std::string::npos) {
+            const char *home = std::getenv("HOME");
+            if (home) {
+                std::string fallback = std::string(home) +
+                    "/.muplar/prefixes/android-arm64/rootfs" +
+                    primary.substr(data_pos);
+                if (stat(fallback.c_str(), &st) == 0)
+                    return fallback;
+            }
+        }
+    }
+
+    auto rootfs_pos = primary.find("/rootfs/data/local/tmp/");
+    if (rootfs_pos != std::string::npos) {
+        const char *home = std::getenv("HOME");
+        if (home) {
+            std::string fallback = std::string(home) +
+                "/.muplar/sysroots/android-arm64/api-35/sysroot" +
+                primary.substr(rootfs_pos + 7);
+            if (stat(fallback.c_str(), &st) == 0)
+                return fallback;
+        }
+    }
+
+    return primary;
+}
+
 static void poll_software_frame(HostWindow::Impl *impl)
 {
-    if (!impl || impl->frame_fd < 0 || impl->software_frame_path.empty())
+    if (!impl || impl->software_frame_path.empty())
         return;
+    if (impl->embedded && impl->frame_fd < 0)
+        return;
+    if (!impl->embedded && !impl->image_view)
+        return;
+
+    std::string frame_path = resolve_software_frame_path(impl->software_frame_path);
     struct stat st = {};
-    if (stat(impl->software_frame_path.c_str(), &st) != 0)
+    if (stat(frame_path.c_str(), &st) != 0)
         return;
 #ifdef __APPLE__
     long nsec = st.st_mtimespec.tv_nsec;
@@ -178,7 +223,7 @@ static void poll_software_frame(HostWindow::Impl *impl)
         nsec == impl->software_frame_mtime_nsec) {
         return;
     }
-    int fd = open(impl->software_frame_path.c_str(), O_RDONLY);
+    int fd = open(frame_path.c_str(), O_RDONLY);
     if (fd < 0)
         return;
     HostFrameHeader header;
@@ -197,6 +242,33 @@ static void poll_software_frame(HostWindow::Impl *impl)
     close(fd);
     if (!ok)
         return;
+
+    if (!impl->embedded && impl->image_view) {
+        @autoreleasepool {
+            NSBitmapImageRep *rep = [[NSBitmapImageRep alloc]
+                initWithBitmapDataPlanes:nullptr
+                              pixelsWide:header.width
+                              pixelsHigh:header.height
+                           bitsPerSample:8
+                         samplesPerPixel:4
+                                hasAlpha:YES
+                                isPlanar:NO
+                          colorSpaceName:NSDeviceRGBColorSpace
+                             bytesPerRow:header.stride_pixels * 4
+                            bitsPerPixel:32];
+            std::memcpy([rep bitmapData], pixels.data(), pixels.size());
+            NSImage *image = [[NSImage alloc]
+                initWithSize:NSMakeSize(header.width, header.height)];
+            [image addRepresentation:rep];
+            [impl->image_view setImage:image];
+            [impl->window displayIfNeeded];
+        }
+        impl->software_frame_size = st.st_size;
+        impl->software_frame_mtime_sec = st.st_mtime;
+        impl->software_frame_mtime_nsec = nsec;
+        return;
+    }
+
     if (!write_all(impl->frame_fd, &header, sizeof(header)) ||
         !write_all(impl->frame_fd, pixels.data(), pixels.size())) {
         close(impl->frame_fd);
@@ -299,14 +371,18 @@ HostWindow::HostWindow(int width, int height)
             return;
 
         impl_ = new Impl();
+        const char *software_frame_path =
+            std::getenv("MUPLAR_HOST_WINDOW_SOFTWARE_FRAME_PATH");
+        if (!software_frame_path || !*software_frame_path)
+            software_frame_path =
+                std::getenv("MUPLAR_ANDROID_SOFTWARE_FRAME_PATH");
+        if (software_frame_path && *software_frame_path)
+            impl_->software_frame_path = software_frame_path;
+
         impl_->frame_fd = connect_frame_socket(
             std::getenv("MUPLAR_HOST_WINDOW_FRAME_SOCKET"));
         if (impl_->frame_fd >= 0) {
             impl_->embedded = true;
-            const char *software_frame_path =
-                std::getenv("MUPLAR_HOST_WINDOW_SOFTWARE_FRAME_PATH");
-            if (software_frame_path && *software_frame_path)
-                impl_->software_frame_path = software_frame_path;
             return;
         }
 
@@ -438,6 +514,7 @@ void HostWindow::pump_events()
         poll_software_frame(impl_);
         return;
     }
+    poll_software_frame(impl_);
     pump_appkit_once(impl_);
 }
 

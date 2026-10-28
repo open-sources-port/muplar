@@ -998,6 +998,37 @@ public final class MuplarServices {
                     || "isPackageEnabled".equals(name)) {
                     return Boolean.TRUE;
                 }
+                if ("resolveLauncherActivityInternal".equals(name)) {
+                    android.content.ComponentName component = null;
+                    if (args != null) {
+                        for (Object arg : args) {
+                            if (arg instanceof android.content.ComponentName) {
+                                component = (android.content.ComponentName) arg;
+                                break;
+                            }
+                        }
+                    }
+                    if (component != null) {
+                        InstalledPackage pkg = findInstalledPackage(component.getPackageName());
+                        if (pkg != null) {
+                            return buildLauncherActivityInfoInternal(pkg, component.getClassName());
+                        }
+                    }
+                    return null;
+                }
+                if ("getApplicationInfo".equals(name)) {
+                    String pkgName = null;
+                    if (args != null && args.length > 1 && args[1] instanceof String) {
+                        pkgName = (String) args[1];
+                    }
+                    if (pkgName != null) {
+                        InstalledPackage pkg = findInstalledPackage(pkgName);
+                        if (pkg != null) {
+                            return buildApplicationInfo(pkg);
+                        }
+                    }
+                    return null;
+                }
                 if ("startActivityAsUser".equals(name)) {
                     android.content.ComponentName component = null;
                     if (args != null && args.length > 3 && args[3] instanceof android.content.ComponentName) {
@@ -1192,6 +1223,11 @@ public final class MuplarServices {
 
     private static Object buildLauncherActivityInfoInternal(
         InstalledPackage pkg) throws Exception {
+        return buildLauncherActivityInfoInternal(pkg, null);
+    }
+
+    private static Object buildLauncherActivityInfoInternal(
+        InstalledPackage pkg, String activityClass) throws Exception {
         Object appInfo = buildApplicationInfo(pkg);
 
         Class<?> activityInfoType =
@@ -1199,7 +1235,8 @@ public final class MuplarServices {
         Object activityInfo = activityInfoType.getDeclaredConstructor()
             .newInstance();
         setFieldIfPresent(activityInfo, "packageName", pkg.packageName);
-        setFieldIfPresent(activityInfo, "name", pkg.activity);
+        setFieldIfPresent(activityInfo, "name",
+            (activityClass != null && !activityClass.isEmpty()) ? activityClass : pkg.activity);
         setFieldIfPresent(activityInfo, "processName", pkg.packageName);
         setFieldIfPresent(activityInfo, "applicationInfo", appInfo);
         setFieldIfPresent(activityInfo, "enabled", Boolean.TRUE);
