@@ -5152,6 +5152,7 @@ static NSString* MapLinuxIconToSFSymbol(NSString* icon)
         AndroidDeviceShell* strongShell = weakShell;
         if (!strongSelf || !strongShell)
             return;
+        [strongShell stopClipboardSync];
         NSTask* running = strongSelf->_androidSessionTasks[capturedSessionKey];
         NSTask* pending =
             strongSelf->_pendingAndroidSessionTasks[capturedSessionKey];
@@ -5307,6 +5308,8 @@ static NSString* MapLinuxIconToSFSymbol(NSString* icon)
                                       socketPath:capturedSocketPath
                                          logPath:capturedLogPath];
     };
+    if (capturedSocketPath.length > 0)
+        [shell startClipboardSyncWithSocketPath:capturedSocketPath];
     shell.window.title = [NSString stringWithFormat:@"%@ - %@",
                                                     app.name ?: @"Android",
                                                     deviceKey];

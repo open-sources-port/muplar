@@ -28,6 +28,7 @@ The interactive device experience across the core loop is now **functioning and 
 | **App Identity** | `ActivityThread` / `AppBindData` | 🟢 **Working** | `mBoundApplication` populated, `Process.sProcessName` set, manifest Application class resolved. | [java-art-surface.md](./java-art-surface.md) |
 | **Network & Jobs** | `ConnectivityManager` & `JobScheduler` | 🟡 **Stubbed** | Bootstrap classes added for WorkManager initialization. | [framework-services.md](./framework-services.md) |
 | **Host Bridge** | `MuplarSocketClient` | 🟢 **Working** | Direct `AF_UNIX` socket IPC replaces guest `execve`. | [runtime.md](./runtime.md) |
+| **Clipboard** | `NSPasteboard` & `ClipboardManager` | 🟢 **Working** | Bi-directional clipboard text synchronization and shortcuts (Cmd+C/V/X/A). | [device-window.md](./device-window.md) |
 | **Process Model** | `mup` / `muplard` | 🟢 **Working** | 500ms `SIGKILL` fallback terminates rogue tasks on exit; package registry auto-synced. | [device-window.md](./device-window.md) |
 | **Kernel / HVF** | `elfuse` ARM64 VM | 🟢 **Stable** | JIT capped to 1 MiB (`-Xjitmaxsize:1m`) preventing W^X collisions with elfuse RX window. | [runtime.md](./runtime.md) |
 
@@ -56,6 +57,7 @@ The interactive device experience across the core loop is now **functioning and 
 - [x] In-session app install UX dynamically refreshes Launcher3 (`test-install-ux.sh`).
 
 ### Milestone 5 (P2): Hardware Accelerated Rendering & Extended Services
+- [x] Bi-directional clipboard synchronization between macOS `NSPasteboard` and Android `ClipboardManager` (`test-clipboard-sync.sh`).
 - [ ] Hardware-accelerated HWUI rendering via ANGLE/Metal backing `BLASTBufferQueue`.
 - [ ] InputMethodManager (IME) software keyboard integration for text input.
 - [ ] Extended NotificationManager and AlarmManager service delivery.

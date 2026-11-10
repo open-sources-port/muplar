@@ -43,6 +43,8 @@ public:
                       std::string &generation) const;
     bool query_device_state(std::string &state) const;
     bool query_tab_finished(std::string &state) const;
+    bool set_clipboard(const std::string &text, std::string &generation) const;
+    bool get_clipboard(std::string &text) const;
 
 private:
     bool request(uint16_t opcode,

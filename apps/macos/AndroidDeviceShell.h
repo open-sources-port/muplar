@@ -28,4 +28,7 @@
 - (void)showInstallSuccess:(NSString*)message;
 - (void)dismissInstallProgress;
 - (void)deviceInstall:(id)sender;
+- (void)startClipboardSyncWithSocketPath:(NSString*)socketPath;
+- (void)stopClipboardSync;
+- (void)syncClipboardNow;
 @end

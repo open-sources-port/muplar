@@ -122,6 +122,19 @@ bool MuplardClient::query_tab_finished(std::string &state) const
     return request(static_cast<uint16_t>(Opcode::QueryTabFinished), {}, state);
 }
 
+bool MuplardClient::set_clipboard(const std::string &text,
+                                  std::string &generation) const
+{
+    return request(static_cast<uint16_t>(Opcode::SetClipboard), text,
+                   generation) &&
+           generation != "0";
+}
+
+bool MuplardClient::get_clipboard(std::string &text) const
+{
+    return request(static_cast<uint16_t>(Opcode::GetClipboard), {}, text);
+}
+
 bool MuplardClient::request(uint16_t opcode,
                             const std::string &payload,
                             std::string &reply) const

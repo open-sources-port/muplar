@@ -76,6 +76,13 @@ graph TD
 - `EditText` implements complete keyboard typing, backspace/del, home/end, DPAD cursor positioning, shifted symbols, and Unicode character insertion (`test-keyboard-input.sh`).
 - Proxy handling in `MuplarServices` for `IActivityClientController` and `IActivityTaskManager` ensures activity-level lifecycle actions (e.g. `finish()`) properly interact with the task stack.
 
+### Step 8: Clipboard Synchronization
+- **Status**: 🟢 **Implemented & Verified**.
+- Bi-directional synchronization between macOS `NSPasteboard` and Android `ClipboardManager` via `muplard` socket IPC (`GetClipboard` opcode 32, `SetClipboard` opcode 33).
+- `AndroidDeviceShell` automatically syncs macOS pasteboard on window focus and change notifications, and pushes copied text from Android guest back to `NSPasteboard`.
+- `EditText` implements complete clipboard shortcuts: Cmd+C (Copy), Cmd+X (Cut), Cmd+V (Paste), and Cmd+A (Select All).
+- Automated integration test in `test-clipboard-sync.sh`.
+
 ---
 
 ## 3. Engineering Priorities for the Device Window
@@ -83,7 +90,6 @@ graph TD
 1. **Hardware Surface Pipeline via ANGLE / Metal (P1)**:
    - Replace the software bitmap MHR file with a direct ANGLE / Metal surface swapchain.
 2. **macOS Notification Forwarding (P2)**:
-   - Surface Android notification toasts and channels into native macOS notification banners.
-3. **Clipboard & Drag-and-Drop Sync (P2)**:
-   - Bi-directional clipboard text synchronization between macOS pasteboard and Android `ClipboardManager`.
-   - Bridge Android `NotificationManager` alerts to macOS `UNUserNotificationCenter`.
+   - Surface Android notification toasts and channels into native macOS notification banners (`UNUserNotificationCenter`).
+3. **IME Software Keyboard Integration (P2)**:
+   - Integrate virtual on-screen keyboard and advanced composition.

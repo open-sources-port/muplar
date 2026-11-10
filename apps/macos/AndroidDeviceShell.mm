@@ -2,6 +2,7 @@
 #import <UniformTypeIdentifiers/UniformTypeIdentifiers.h>
 
 #include "android_keycodes.h"
+#include "muplard_client.h"
 
 #include <algorithm>
 #include <sys/socket.h>
@@ -33,6 +34,10 @@
 @property(nonatomic, assign) BOOL scrollActive;
 @property(nonatomic, assign) NSPoint scrollCurrentPoint;
 @property(nonatomic, strong) NSTimer* scrollEndTimer;
+@property(nonatomic, copy) NSString* sessionSocketPath;
+@property(nonatomic, strong) NSTimer* clipboardSyncTimer;
+@property(nonatomic, assign) NSInteger lastPasteboardChangeCount;
+@property(nonatomic, copy) NSString* lastSyncedClipboardText;
 - (void)sendPointerEvent:(NSEvent*)event action:(int32_t)action;
 - (void)sendPointerAtX:(float)x y:(float)y action:(int32_t)action;
 - (void)handleScrollWheel:(NSEvent*)event;
@@ -1175,9 +1180,105 @@ static NSView* AndroidDeviceTabChipView(NSString* title,
     return [alert runModal] == NSAlertFirstButtonReturn;
 }
 
+- (void)windowDidBecomeKey:(NSNotification*)notification
+{
+    (void)notification;
+    [self syncClipboardNow];
+}
+
+- (void)startClipboardSyncWithSocketPath:(NSString*)socketPath
+{
+    if (socketPath.length == 0)
+        return;
+    self.sessionSocketPath = [socketPath copy];
+    self.lastPasteboardChangeCount = [NSPasteboard generalPasteboard].changeCount;
+    self.lastSyncedClipboardText =
+        [[NSPasteboard generalPasteboard] stringForType:NSPasteboardTypeString] ?: @"";
+
+    if (self.lastSyncedClipboardText.length > 0) {
+        NSString* socketCopy = [self.sessionSocketPath copy];
+        NSString* textCopy = [self.lastSyncedClipboardText copy];
+        dispatch_async(dispatch_get_global_queue(QOS_CLASS_UTILITY, 0), ^{
+            muplar::services::MuplardClient client(std::string(socketCopy.UTF8String));
+            std::string gen;
+            client.set_clipboard(std::string(textCopy.UTF8String), gen);
+        });
+    }
+
+    if (self.clipboardSyncTimer) {
+        [self.clipboardSyncTimer invalidate];
+        self.clipboardSyncTimer = nil;
+    }
+    __weak AndroidDeviceShell* weakSelf = self;
+    self.clipboardSyncTimer =
+        [NSTimer scheduledTimerWithTimeInterval:0.5
+                                        repeats:YES
+                                          block:^(NSTimer* _Nonnull timer) {
+            (void)timer;
+            [weakSelf syncClipboardNow];
+        }];
+}
+
+- (void)stopClipboardSync
+{
+    if (self.clipboardSyncTimer) {
+        [self.clipboardSyncTimer invalidate];
+        self.clipboardSyncTimer = nil;
+    }
+    self.sessionSocketPath = nil;
+}
+
+- (void)syncClipboardNow
+{
+    if (self.sessionSocketPath.length == 0)
+        return;
+
+    NSPasteboard* pboard = [NSPasteboard generalPasteboard];
+    NSInteger currentChangeCount = pboard.changeCount;
+    if (currentChangeCount != self.lastPasteboardChangeCount) {
+        self.lastPasteboardChangeCount = currentChangeCount;
+        NSString* text = [pboard stringForType:NSPasteboardTypeString] ?: @"";
+        if (![text isEqualToString:self.lastSyncedClipboardText ?: @""]) {
+            self.lastSyncedClipboardText = [text copy];
+            NSString* socketCopy = [self.sessionSocketPath copy];
+            NSString* textCopy = [text copy];
+            dispatch_async(dispatch_get_global_queue(QOS_CLASS_UTILITY, 0), ^{
+                muplar::services::MuplardClient client(std::string(socketCopy.UTF8String));
+                std::string gen;
+                client.set_clipboard(std::string(textCopy.UTF8String), gen);
+            });
+        }
+    } else {
+        NSString* socketCopy = [self.sessionSocketPath copy];
+        __weak AndroidDeviceShell* weakSelf = self;
+        dispatch_async(dispatch_get_global_queue(QOS_CLASS_UTILITY, 0), ^{
+            muplar::services::MuplardClient client(std::string(socketCopy.UTF8String));
+            std::string guestText;
+            if (client.get_clipboard(guestText)) {
+                dispatch_async(dispatch_get_main_queue(), ^{
+                    AndroidDeviceShell* strongSelf = weakSelf;
+                    if (!strongSelf)
+                        return;
+                    NSString* guestStr =
+                        [NSString stringWithUTF8String:guestText.c_str()] ?: @"";
+                    if (guestStr.length > 0 &&
+                        ![guestStr isEqualToString:strongSelf.lastSyncedClipboardText ?: @""]) {
+                        strongSelf.lastSyncedClipboardText = [guestStr copy];
+                        NSPasteboard* pb = [NSPasteboard generalPasteboard];
+                        [pb clearContents];
+                        [pb setString:guestStr forType:NSPasteboardTypeString];
+                        strongSelf.lastPasteboardChangeCount = pb.changeCount;
+                    }
+                });
+            }
+        });
+    }
+}
+
 - (void)windowWillClose:(NSNotification*)notification
 {
     (void)notification;
+    [self stopClipboardSync];
     if (self.scrollEndTimer) {
         [self.scrollEndTimer invalidate];
         self.scrollEndTimer = nil;

@@ -176,7 +176,8 @@ static std::string resolve_software_frame_path(const std::string &primary)
         if (data_pos != std::string::npos) {
             const char *home = std::getenv("HOME");
             if (home) {
-                std::string fallback = std::string(home) +
+                std::string fallback =
+                    std::string(home) +
                     "/.muplar/prefixes/android-arm64/rootfs" +
                     primary.substr(data_pos);
                 if (stat(fallback.c_str(), &st) == 0)
@@ -189,7 +190,8 @@ static std::string resolve_software_frame_path(const std::string &primary)
     if (rootfs_pos != std::string::npos) {
         const char *home = std::getenv("HOME");
         if (home) {
-            std::string fallback = std::string(home) +
+            std::string fallback =
+                std::string(home) +
                 "/.muplar/sysroots/android-arm64/api-35/sysroot" +
                 primary.substr(rootfs_pos + 7);
             if (stat(fallback.c_str(), &st) == 0)
@@ -209,7 +211,8 @@ static void poll_software_frame(HostWindow::Impl *impl)
     if (!impl->embedded && !impl->image_view)
         return;
 
-    std::string frame_path = resolve_software_frame_path(impl->software_frame_path);
+    std::string frame_path =
+        resolve_software_frame_path(impl->software_frame_path);
     struct stat st = {};
     if (stat(frame_path.c_str(), &st) != 0)
         return;

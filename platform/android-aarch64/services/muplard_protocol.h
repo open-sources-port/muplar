@@ -42,6 +42,8 @@ enum class Opcode : uint16_t {
     DeviceInputChanged = 29,
     TabFinished = 30,
     QueryTabFinished = 31,
+    GetClipboard = 32,
+    SetClipboard = 33,
 };
 
 struct MessageHeader {

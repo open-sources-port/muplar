@@ -167,7 +167,7 @@ lock = pathlib.Path('Cargo.lock')
 if lock.exists():
     pathlib.Path('Cargo.lock.orig').write_text(lock.read_text())
 modified = content
-if '[dependencies]' in modified:
+if '[dependencies]' in modified and 'wayland-sys' not in modified:
     # Inject wayland-sys with dlopen feature right under [dependencies]
     modified = modified.replace('[dependencies]', '[dependencies]\nwayland-sys = { version = \"0.31\", features = [\"dlopen\"] }')
 p.write_text(modified)

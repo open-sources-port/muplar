@@ -43,6 +43,12 @@ Launcher3 is **functional and verified for interactive use**:
   - Added AIDL proxy support for `IActivityClientController` and hardened `finishActivityByToken` token matching.
 - [x] **Process Cleanup Hardening (`PrefixManagerApp.mm`)**:
   - Added 500ms `SIGKILL` fallback when closing the session window, preventing orphaned `mup` and `muplard` background processes.
+- [x] **Bi-directional Clipboard Synchronization (`muplard`, `AndroidDeviceShell.mm`, `MuplarServices.java`, `EditText.java`)**:
+  - Added opcodes 32 (`GetClipboard`) and 33 (`SetClipboard`) to `muplard` protocol.
+  - Implemented `android.content.IClipboard` proxy in `MuplarServices.java` to support `getPrimaryClip`, `setPrimaryClip`, `hasPrimaryClip`, `getPrimaryClipDescription`, `clearPrimaryClip`, and `addPrimaryClipChangedListener`.
+  - Added seamless background clipboard synchronization between macOS `NSPasteboard` and guest Android clipboard in `AndroidDeviceShell.mm`.
+  - Added Cmd+C, Cmd+V, Cmd+X, Cmd+A shortcut handlers in `EditText.java`.
+  - Verified via `test-clipboard-sync.sh`.
 
 ---
 
@@ -51,8 +57,8 @@ Launcher3 is **functional and verified for interactive use**:
 ### Priority 1: Hardware-Accelerated Rendering (P1)
 - Transition from software DecorView MHR frame capture to hardware-accelerated ANGLE/Metal backing `BLASTBufferQueue`.
 
-### Priority 2: Clipboard & Pasteboard Synchronization (P2)
-- Bi-directional clipboard sync between macOS `NSPasteboard` and Android `ClipboardManager`.
+### Priority 2: Native macOS Notifications Bridge (P2)
+- Surface Android notification toasts and channels (`NotificationManager`) into native macOS notification banners (`UNUserNotificationCenter`).
 
 ---
 

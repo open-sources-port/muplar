@@ -83,6 +83,54 @@ public class EditText extends TextView {
         if (selStart < 0) selStart = editable.length();
         if (selEnd < 0) selEnd = editable.length();
 
+        boolean isCtrlOrCmd = event != null &&
+            ((event.getMetaState() & (KeyEvent.META_CTRL_ON | 0x10000 /* META_COMMAND_ON */)) != 0);
+
+        if (isCtrlOrCmd) {
+            if (keyCode == KeyEvent.KEYCODE_A) {
+                setSelection(0);
+                extendSelection(editable.length());
+                return true;
+            }
+            if (keyCode == KeyEvent.KEYCODE_C || keyCode == KeyEvent.KEYCODE_X) {
+                if (selStart != selEnd) {
+                    int start = Math.min(selStart, selEnd);
+                    int end = Math.max(selStart, selEnd);
+                    CharSequence selected = editable.subSequence(start, end);
+                    android.content.ClipboardManager cm = (android.content.ClipboardManager)
+                        getContext().getSystemService(Context.CLIPBOARD_SERVICE);
+                    if (cm != null) {
+                        cm.setPrimaryClip(android.content.ClipData.newPlainText("text", selected));
+                    }
+                    if (keyCode == KeyEvent.KEYCODE_X) {
+                        editable.delete(start, end);
+                        setSelection(start);
+                        super.setText(editable, BufferType.SPANNABLE);
+                    }
+                    return true;
+                }
+            }
+            if (keyCode == KeyEvent.KEYCODE_V) {
+                android.content.ClipboardManager cm = (android.content.ClipboardManager)
+                    getContext().getSystemService(Context.CLIPBOARD_SERVICE);
+                if (cm != null && cm.hasPrimaryClip()) {
+                    android.content.ClipData clip = cm.getPrimaryClip();
+                    if (clip != null && clip.getItemCount() > 0) {
+                        CharSequence pasteText = clip.getItemAt(0).coerceToText(getContext());
+                        if (pasteText != null && pasteText.length() > 0) {
+                            int start = Math.min(selStart, selEnd);
+                            int end = Math.max(selStart, selEnd);
+                            editable.replace(start, end, pasteText);
+                            setSelection(start + pasteText.length());
+                            super.setText(editable, BufferType.SPANNABLE);
+                            return true;
+                        }
+                    }
+                }
+                return true;
+            }
+        }
+
         if (keyCode == KeyEvent.KEYCODE_DEL) {
             if (selStart != selEnd) {
                 int start = Math.min(selStart, selEnd);

@@ -388,6 +388,11 @@ struct TabFinishedState {
     std::string tab;
 };
 
+struct ClipboardState {
+    uint64_t generation = 0;
+    std::string text;
+};
+
 bool parse_int32(const std::string &value, int32_t &out)
 {
     try {
@@ -919,6 +924,7 @@ int main(int argc, char **argv)
     DeviceState device_state;
     DeviceInputState device_input_state;
     TabFinishedState tab_finished_state;
+    ClipboardState clipboard_state;
     uint64_t next_transaction_id = 1;
     std::vector<Client> clients;
     uint64_t package_generation = 1;
@@ -1196,6 +1202,16 @@ int main(int argc, char **argv)
                             send_message(
                                 clients[i].fd, opcode, header.request_id,
                                 tab_finished_reply(tab_finished_state));
+                        } else if (opcode == Opcode::SetClipboard) {
+                            clipboard_state.generation++;
+                            clipboard_state.text = payload;
+                            send_message(
+                                clients[i].fd, opcode, header.request_id,
+                                std::to_string(clipboard_state.generation));
+                        } else if (opcode == Opcode::GetClipboard) {
+                            send_message(clients[i].fd, opcode,
+                                         header.request_id,
+                                         clipboard_state.text);
                         } else if (opcode == Opcode::BinderTransact) {
                             size_t separator = payload.find('\n');
                             std::string service = payload.substr(0, separator);

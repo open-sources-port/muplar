@@ -26,6 +26,23 @@ public final class MuplarServices {
     private static ClassLoader servicesClassLoader;
     private static volatile int defaultIconResource;
 
+    private static final int OPCODE_GET_CLIPBOARD = 32;
+    private static final int OPCODE_SET_CLIPBOARD = 33;
+    private static volatile String sClipboardText = "";
+    private static final List<Object> sPrimaryClipListeners =
+        new java.util.concurrent.CopyOnWriteArrayList<>();
+
+    private static void notifyPrimaryClipChanged() {
+        for (Object listener : sPrimaryClipListeners) {
+            try {
+                Method m = listener.getClass().getMethod("dispatchPrimaryClipChanged");
+                m.setAccessible(true);
+                m.invoke(listener);
+            } catch (Throwable ignored) {
+            }
+        }
+    }
+
     private MuplarServices() {
     }
 
@@ -389,6 +406,12 @@ public final class MuplarServices {
                     return "us";
                 }
             }
+            if ("android.content.IClipboard".equals(descriptor)) {
+                Object value = clipboardValue(method, args);
+                if (value != null || method.getReturnType().equals(Void.TYPE)) {
+                    return value;
+                }
+            }
             return defaultValue(method.getReturnType());
         }
 
@@ -614,6 +637,105 @@ public final class MuplarServices {
                 return Boolean.TRUE;
             }
             return defaultValue(returnType);
+        }
+
+        private Object clipboardValue(Method method, Object[] args) {
+            String name = method.getName();
+            if ("getPrimaryClip".equals(name)) {
+                String socket = FrameworkServiceClient.getServiceSocket();
+                if (!socket.isEmpty()) {
+                    String reply = MuplarSocketClient.request(socket, OPCODE_GET_CLIPBOARD, "");
+                    if (reply != null) {
+                        sClipboardText = reply;
+                    }
+                }
+                if (sClipboardText != null && !sClipboardText.isEmpty()) {
+                    return android.content.ClipData.newPlainText("text", sClipboardText);
+                }
+                return null;
+            }
+            if ("getPrimaryClipDescription".equals(name)) {
+                String socket = FrameworkServiceClient.getServiceSocket();
+                if (!socket.isEmpty()) {
+                    String reply = MuplarSocketClient.request(socket, OPCODE_GET_CLIPBOARD, "");
+                    if (reply != null) {
+                        sClipboardText = reply;
+                    }
+                }
+                if (sClipboardText != null && !sClipboardText.isEmpty()) {
+                    return new android.content.ClipDescription(
+                        "text",
+                        new String[] { android.content.ClipDescription.MIMETYPE_TEXT_PLAIN });
+                }
+                return null;
+            }
+            if ("hasPrimaryClip".equals(name) || "hasClipboardText".equals(name)) {
+                String socket = FrameworkServiceClient.getServiceSocket();
+                if (!socket.isEmpty()) {
+                    String reply = MuplarSocketClient.request(socket, OPCODE_GET_CLIPBOARD, "");
+                    if (reply != null) {
+                        sClipboardText = reply;
+                    }
+                }
+                return Boolean.valueOf(sClipboardText != null && !sClipboardText.isEmpty());
+            }
+            if ("getPrimaryClipSource".equals(name)) {
+                return "muplar";
+            }
+            if ("setPrimaryClip".equals(name) || "setPrimaryClipAsPackage".equals(name)) {
+                String text = "";
+                if (args != null && args.length > 0 && args[0] instanceof android.content.ClipData) {
+                    android.content.ClipData cd = (android.content.ClipData) args[0];
+                    if (cd.getItemCount() > 0) {
+                        android.content.ClipData.Item item = cd.getItemAt(0);
+                        CharSequence cs = item.getText();
+                        if (cs == null) {
+                            try {
+                                cs = item.coerceToText(null);
+                            } catch (Throwable ignored) {
+                            }
+                        }
+                        if (cs != null) {
+                            text = cs.toString();
+                        }
+                    }
+                }
+                sClipboardText = text;
+                String socket = FrameworkServiceClient.getServiceSocket();
+                if (!socket.isEmpty()) {
+                    MuplarSocketClient.request(socket, OPCODE_SET_CLIPBOARD, text);
+                }
+                notifyPrimaryClipChanged();
+                return null;
+            }
+            if ("clearPrimaryClip".equals(name)) {
+                sClipboardText = "";
+                String socket = FrameworkServiceClient.getServiceSocket();
+                if (!socket.isEmpty()) {
+                    MuplarSocketClient.request(socket, OPCODE_SET_CLIPBOARD, "");
+                }
+                notifyPrimaryClipChanged();
+                return null;
+            }
+            if ("addPrimaryClipChangedListener".equals(name)) {
+                if (args != null && args.length > 0 && args[0] != null) {
+                    sPrimaryClipListeners.add(args[0]);
+                }
+                return null;
+            }
+            if ("removePrimaryClipChangedListener".equals(name)) {
+                if (args != null && args.length > 0 && args[0] != null) {
+                    sPrimaryClipListeners.remove(args[0]);
+                }
+                return null;
+            }
+            if ("areClipboardAccessNotificationsEnabledForUser".equals(name)) {
+                return Boolean.FALSE;
+            }
+            if ("setClipboardAccessNotificationsEnabledForUser".equals(name)) {
+                return null;
+            }
+            return defaultValue(method.getReturnType());
         }
 
         private static Object buildMockNetwork() {
