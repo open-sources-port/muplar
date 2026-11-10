@@ -277,8 +277,37 @@ void apply_apk_launch(const PlatformLaunchConfig &launch_cfg,
               << guest_cfg.elf_path << "\n";
 }
 
+std::string publish_guest_service_socket(const std::filesystem::path &sysroot,
+                                         const std::filesystem::path &host_socket)
+{
+    // elfuse resolves Unix socket paths inside the guest sysroot. Link the
+    // same socket inode there so existing host clients can keep using run/.
+    constexpr char guest_socket[] = "/data/local/tmp/muplar/muplard.sock";
+    const auto destination = sysroot / (guest_socket + 1);
+    std::error_code ec;
+    if (std::filesystem::equivalent(host_socket, destination, ec))
+        return guest_socket;
+
+    auto staging = destination;
+    staging += "." + std::to_string(getpid());
+    std::filesystem::create_directories(destination.parent_path(), ec);
+    if (!ec)
+        std::filesystem::create_hard_link(host_socket, staging, ec);
+    if (!ec) {
+        std::filesystem::rename(staging, destination, ec);
+        if (!ec)
+            return guest_socket;
+        std::error_code cleanup_error;
+        std::filesystem::remove(staging, cleanup_error);
+    }
+    std::cerr << "[ART] could not publish guest service socket: "
+              << ec.message() << "\n";
+    return {};
+}
+
 int handle_guest_art_apk_launch(const PlatformLaunchConfig &launch_cfg,
-                                const apk::ApkClassification &classification)
+                                const apk::ApkClassification &classification,
+                                const std::filesystem::path &host_service_socket)
 {
     std::filesystem::path sysroot = launch_cfg.sysroot;
     if (sysroot.empty() &&
@@ -297,12 +326,15 @@ int handle_guest_art_apk_launch(const PlatformLaunchConfig &launch_cfg,
     }
 
     std::filesystem::path staged_apk =
-        stage_art_apk_for_sysroot(launch_cfg.input_path, sysroot.string());
+        apk::stage_apk_for_sysroot(launch_cfg.input_path, sysroot);
 
     ArtBootstrapConfig art_cfg;
     art_cfg.apk_path = staged_apk;
     art_cfg.sysroot = sysroot.string();
     art_cfg.apk_classification = classification;
+    if (!host_service_socket.empty())
+        art_cfg.guest_service_socket =
+            publish_guest_service_socket(sysroot, host_service_socket);
 
     ArtBootstrapPlan plan = build_art_bootstrap_plan(art_cfg);
     print_art_bootstrap_plan(plan);
@@ -335,7 +367,7 @@ int handle_guest_art_apk_launch(const PlatformLaunchConfig &launch_cfg,
     if (plan.package_name)
         guest_cfg.package_name = *plan.package_name;
     if (launch_cfg.active_prefix) {
-        guest_cfg.service_socket = ensure_muplard(*launch_cfg.active_prefix);
+        guest_cfg.service_socket = host_service_socket;
         guest_cfg.host_cwd =
             default_host_cwd(*launch_cfg.active_prefix).string();
     }
@@ -344,14 +376,6 @@ int handle_guest_art_apk_launch(const PlatformLaunchConfig &launch_cfg,
     std::cerr << "[ART] executing app_process64 bootstrap path\n";
     elf::GuestRunner runner;
     return runner.run(guest_cfg);
-}
-
-int handle_java_apk_launch(const PlatformLaunchConfig &launch_cfg,
-                           const apk::ApkClassification &classification)
-{
-    (void) classification;
-    std::cerr << "[ART] using guest ART/app_process64\n";
-    return handle_guest_art_apk_launch(launch_cfg, classification);
 }
 
 static void sync_packages_registry(const prefix::PrefixLayout &active_prefix)
@@ -404,11 +428,15 @@ static void sync_packages_registry(const prefix::PrefixLayout &active_prefix)
                 !apk.manifest_package->empty() &&
                 apk.manifest_launch_activity &&
                 !apk.manifest_launch_activity->empty()) {
+                const auto &sysroot = active_prefix.rootfs.empty()
+                    ? active_prefix.runtime_sysroot
+                    : active_prefix.rootfs;
+                std::string guest_apk = apk::stage_apk_guest_path(entry.path(), sysroot);
                 registry_text += "package=" + *apk.manifest_package + "\n";
                 registry_text +=
                     "activity=" + *apk.manifest_launch_activity + "\n";
                 registry_text += "label=" + name + "\n";
-                registry_text += "apk=" + entry.path().string() + "\n";
+                registry_text += "apk=" + guest_apk + "\n";
                 if (apk.manifest_application_class &&
                     !apk.manifest_application_class->empty()) {
                     registry_text +=
@@ -433,8 +461,15 @@ static void sync_packages_registry(const prefix::PrefixLayout &active_prefix)
     }
 
     if (!registry_text.empty() && registry_text != existing_content) {
-        std::ofstream ofs(registry_path, std::ios::trunc);
-        ofs << registry_text;
+        auto temporary = registry_path;
+        temporary += ".tmp-" + std::to_string(getpid());
+        std::ofstream output(temporary, std::ios::trunc);
+        output << registry_text;
+        output.close();
+        if (output)
+            std::filesystem::rename(temporary, registry_path, ec);
+        if (!output || ec)
+            std::filesystem::remove(temporary, ec);
     }
 }
 
@@ -444,6 +479,7 @@ std::filesystem::path ensure_muplard(const prefix::PrefixLayout &active_prefix)
 {
     std::filesystem::path run_dir = active_prefix.root / "run";
     std::filesystem::path socket_path = run_dir / "muplard.sock";
+    sync_packages_registry(active_prefix);
     if (unix_socket_is_live(socket_path))
         return socket_path;
 
@@ -457,7 +493,6 @@ std::filesystem::path ensure_muplard(const prefix::PrefixLayout &active_prefix)
     std::error_code ec;
     std::filesystem::create_directories(run_dir, ec);
     std::filesystem::create_directories(active_prefix.logs_dir, ec);
-    sync_packages_registry(active_prefix);
     std::filesystem::path registry =
         active_prefix.registry_dir / "android-packages.properties";
     std::filesystem::path pid_file = run_dir / "muplard.pid";
@@ -757,8 +792,11 @@ int AndroidAarch64Runtime::run(const PlatformLaunchConfig &config)
                 classification.runtime_kind == apk::ApkRuntimeKind::JavaOnly ||
                 (!classification.dex_files.empty() &&
                  !guest_cfg.native_activity);
-            if (is_java_app)
-                return handle_java_apk_launch(config, classification);
+            if (is_java_app) {
+                std::cerr << "[ART] using guest ART/app_process64\n";
+                return handle_guest_art_apk_launch(config, classification,
+                                                   guest_cfg.service_socket);
+            }
 
             apply_apk_launch(config, guest_cfg);
         } catch (const std::exception &e) {

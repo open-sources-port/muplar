@@ -3,12 +3,15 @@
 #include <algorithm>
 #include <cctype>
 #include <cstdint>
+#include <cstdlib>
 #include <cstring>
 #include <fstream>
+#include <functional>
 #include <iomanip>
 #include <sstream>
 #include <stdexcept>
 #include <unordered_map>
+#include <unistd.h>
 
 #include <zlib.h>
 
@@ -242,8 +245,7 @@ std::string sanitize_path_component(std::string value)
     return value;
 }
 
-std::filesystem::path default_extract_dir(const std::filesystem::path &apk_path,
-                                          const std::filesystem::path &base_dir)
+std::string apk_cache_key(const std::filesystem::path &apk_path)
 {
     std::string seed = std::filesystem::absolute(apk_path).string();
     try {
@@ -259,12 +261,16 @@ std::filesystem::path default_extract_dir(const std::filesystem::path &apk_path,
 
     std::ostringstream hash;
     hash << std::hex << std::hash<std::string>{}(seed);
-    std::string dir =
-        sanitize_path_component(apk_path.stem().string()) + "-" + hash.str();
+    return sanitize_path_component(apk_path.stem().string()) + "-" + hash.str();
+}
+
+std::filesystem::path default_extract_dir(const std::filesystem::path &apk_path,
+                                          const std::filesystem::path &base_dir)
+{
     std::filesystem::path base =
         base_dir.empty() ? std::filesystem::current_path() / "build" / "apk"
                          : base_dir;
-    return base / dir;
+    return base / apk_cache_key(apk_path);
 }
 
 std::string utf8_length_string(const std::vector<uint8_t> &data, size_t off)
@@ -1219,6 +1225,23 @@ ApkClassification classify_entries(const std::filesystem::path &apk_path,
     return classification;
 }
 
+bool is_inside_path(const std::filesystem::path &path,
+                    const std::filesystem::path &root)
+{
+    std::filesystem::path normalized_path =
+        std::filesystem::absolute(path).lexically_normal();
+    std::filesystem::path normalized_root =
+        std::filesystem::absolute(root).lexically_normal();
+
+    auto path_it = normalized_path.begin();
+    auto root_it = normalized_root.begin();
+    for (; root_it != normalized_root.end(); ++root_it, ++path_it) {
+        if (path_it == normalized_path.end() || *path_it != *root_it)
+            return false;
+    }
+    return true;
+}
+
 }  // namespace
 
 std::string to_string(ApkRuntimeKind kind)
@@ -1421,6 +1444,67 @@ ApkLaunchResult prepare_apk_launch(const ApkLaunchConfig &config)
         throw std::runtime_error(
             "internal APK extraction error: selected lib missing");
     return result;
+}
+
+std::filesystem::path stage_apk_for_sysroot(
+    const std::filesystem::path &apk_path,
+    const std::filesystem::path &sysroot)
+{
+    if (sysroot.empty())
+        return std::filesystem::absolute(apk_path).lexically_normal();
+
+    std::filesystem::path absolute_apk =
+        std::filesystem::absolute(apk_path).lexically_normal();
+    std::filesystem::path absolute_sysroot =
+        std::filesystem::absolute(sysroot).lexically_normal();
+    if (is_inside_path(absolute_apk, absolute_sysroot))
+        return absolute_apk;
+
+    std::filesystem::path staging_dir =
+        absolute_sysroot / "data" / "local" / "tmp" / "muplar" / "apks";
+    std::string filename =
+        apk_cache_key(absolute_apk) + absolute_apk.extension().string();
+    std::filesystem::path staged_apk = staging_dir / filename;
+
+    std::error_code ec;
+    std::filesystem::create_directories(staging_dir, ec);
+    std::filesystem::create_directories(
+        absolute_sysroot / "data" / "user" / "0", ec);
+    if (ec) {
+        throw std::runtime_error(
+            "unable to create ART APK staging directory: " +
+            staging_dir.string() + ": " + ec.message());
+    }
+    if (std::filesystem::is_regular_file(staged_apk, ec))
+        return staged_apk;
+
+    std::string temporary = staged_apk.string() + ".XXXXXX";
+    int fd = mkstemp(temporary.data());
+    if (fd < 0)
+        throw std::runtime_error("unable to create temporary APK: " + temporary);
+    close(fd);
+    std::filesystem::copy_file(absolute_apk, temporary,
+                              std::filesystem::copy_options::overwrite_existing,
+                              ec);
+    if (!ec)
+        std::filesystem::rename(temporary, staged_apk, ec);
+    if (ec) {
+        std::error_code cleanup_error;
+        std::filesystem::remove(temporary, cleanup_error);
+        throw std::runtime_error("unable to stage APK: " + absolute_apk.string() +
+                                 ": " + ec.message());
+    }
+    return staged_apk;
+}
+
+std::string stage_apk_guest_path(const std::filesystem::path &apk_path,
+                                 const std::filesystem::path &sysroot)
+{
+    const auto staged = stage_apk_for_sysroot(apk_path, sysroot);
+    if (sysroot.empty())
+        return staged.string();
+    const auto root = std::filesystem::absolute(sysroot).lexically_normal();
+    return "/" + staged.lexically_relative(root).generic_string();
 }
 
 }  // namespace muplar::runtime::apk

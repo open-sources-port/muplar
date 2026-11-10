@@ -14,6 +14,7 @@ struct ArtBootstrapConfig {
     std::filesystem::path apk_path;
     std::filesystem::path sysroot;
     apk::ApkClassification apk_classification;
+    std::string guest_service_socket;
 };
 
 struct ArtBootstrapPlan {
@@ -44,9 +45,6 @@ struct ArtBootstrapPlan {
 };
 
 ArtBootstrapPlan build_art_bootstrap_plan(const ArtBootstrapConfig &config);
-std::filesystem::path stage_art_apk_for_sysroot(
-    const std::filesystem::path &apk_path,
-    const std::filesystem::path &sysroot);
 void print_art_bootstrap_plan(const ArtBootstrapPlan &plan);
 std::string art_bootstrap_missing_summary(const ArtBootstrapPlan &plan);
 

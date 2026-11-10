@@ -63,4 +63,9 @@ bool extract_apk_entry(const std::filesystem::path &apk_path,
                        const std::filesystem::path &output_path);
 ApkLaunchResult prepare_apk_launch(const ApkLaunchConfig &config);
 
+std::filesystem::path stage_apk_for_sysroot(
+    const std::filesystem::path &apk_path, const std::filesystem::path &sysroot);
+std::string stage_apk_guest_path(const std::filesystem::path &apk_path,
+                                 const std::filesystem::path &sysroot);
+
 }  // namespace muplar::runtime::apk

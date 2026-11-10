@@ -5,6 +5,7 @@
 #include "muplard_client.h"
 
 #include <algorithm>
+#include <cmath>
 #include <sys/socket.h>
 #include <sys/un.h>
 #include <unistd.h>
@@ -22,6 +23,7 @@
 @property(nonatomic, strong) NSTextField* titleLabel;
 @property(nonatomic, strong) NSTextField* statusLabel;
 @property(nonatomic, strong) NSProgressIndicator* spinner;
+@property(nonatomic, strong) NSStackView* homeActions;
 @property(nonatomic, strong) NSStackView* tabStripStack;
 @property(nonatomic, strong) NSLayoutConstraint* tabStripHeightConstraint;
 @property(nonatomic, strong) NSMutableArray<NSDictionary<NSString*, NSString*>*>* tabs;
@@ -44,6 +46,9 @@
 - (void)endScrollGesture;
 - (void)sendKeyEvent:(NSEvent*)event action:(int32_t)action;
 @end
+
+static constexpr CGFloat AndroidDeviceStackSpacing = 8.0;
+static constexpr CGFloat AndroidDeviceTabHeight = 30.0;
 
 static NSString* const AndroidDeviceLauncherTabIdentifier = @"launcher";
 static const uint32_t AndroidDeviceFrameMagic = 0x4d485231;  // MHR1
@@ -326,19 +331,16 @@ static NSView* AndroidDeviceTabChipView(NSString* title,
     _framePixelWidth = 1080;
     _framePixelHeight = 1920;
 
-    CGFloat devicePixelWidth = 1440.0;
-    CGFloat devicePixelHeight = 3200.0;
-    (void) devicePixelWidth;
-    (void) devicePixelHeight;
-    CGFloat screenWidth = 460.0;
-    CGFloat screenHeight = 800.0;
-    CGFloat toolbarHeight = 56.0;
-    CGFloat tabStripHeight = 42.0;
-    CGFloat outerPadding = 18.0;
+    CGFloat outerPadding = 10.0;
+    CGFloat bezel = 4.0;
+    CGFloat screenWidth = 440.0;
+    CGFloat screenHeight =
+        std::round(screenWidth * _framePixelHeight / _framePixelWidth);
+    CGFloat toolbarHeight = 30.0;
     NSRect frame =
-        NSMakeRect(0, 0, screenWidth + outerPadding * 2,
-                   screenHeight + toolbarHeight + tabStripHeight +
-                       outerPadding * 2);
+        NSMakeRect(0, 0, screenWidth + 2 * (bezel + outerPadding),
+                   screenHeight + 2 * (bezel + outerPadding) +
+                       toolbarHeight + AndroidDeviceStackSpacing);
 
     _window = [[NSWindow alloc]
         initWithContentRect:frame
@@ -350,8 +352,6 @@ static NSView* AndroidDeviceTabChipView(NSString* title,
     _window.title = @"Android Device";
     _window.releasedWhenClosed = NO;
     _window.delegate = self;
-    _window.minSize = frame.size;
-    _window.maxSize = frame.size;
     _window.appearance =
         [NSAppearance appearanceNamed:NSAppearanceNameDarkAqua];
 
@@ -362,8 +362,10 @@ static NSView* AndroidDeviceTabChipView(NSString* title,
 
     NSStackView* root = [[NSStackView alloc] init];
     root.orientation = NSUserInterfaceLayoutOrientationVertical;
-    root.spacing = 12.0;
-    root.edgeInsets = NSEdgeInsetsMake(14, 14, 14, 14);
+    root.spacing = AndroidDeviceStackSpacing;
+    root.detachesHiddenViews = YES;
+    root.edgeInsets =
+        NSEdgeInsetsMake(outerPadding, outerPadding, outerPadding, outerPadding);
     root.translatesAutoresizingMaskIntoConstraints = NO;
     [content addSubview:root];
 
@@ -408,6 +410,7 @@ static NSView* AndroidDeviceTabChipView(NSString* title,
                                     @"power", @"Turn Off", self,
                                     @selector(deviceClose:))];
     [root addArrangedSubview:toolbar];
+    [toolbar.heightAnchor constraintEqualToConstant:toolbarHeight].active = YES;
 
     _tabStripStack = [[NSStackView alloc] init];
     _tabStripStack.orientation = NSUserInterfaceLayoutOrientationHorizontal;
@@ -415,26 +418,31 @@ static NSView* AndroidDeviceTabChipView(NSString* title,
     _tabStripStack.spacing = 6.0;
     _tabStripStack.translatesAutoresizingMaskIntoConstraints = NO;
     [root addArrangedSubview:_tabStripStack];
-    [_tabStripStack.widthAnchor constraintEqualToConstant:460.0].active = YES;
+    _tabStripStack.hidden = YES;
+    [_tabStripStack.widthAnchor
+        constraintEqualToConstant:screenWidth + 2 * bezel].active = YES;
     _tabStripHeightConstraint =
         [_tabStripStack.heightAnchor constraintEqualToConstant:0.0];
     _tabStripHeightConstraint.active = YES;
 
     NSView* deviceFrame = [[NSView alloc] init];
     deviceFrame.wantsLayer = YES;
-    deviceFrame.layer.cornerRadius = 28.0;
+    deviceFrame.layer.cornerRadius = 10.0;
     deviceFrame.layer.borderWidth = 1.0;
     deviceFrame.layer.borderColor =
         [NSColor colorWithCalibratedWhite:0.22 alpha:1.0].CGColor;
     deviceFrame.layer.backgroundColor = NSColor.blackColor.CGColor;
     deviceFrame.translatesAutoresizingMaskIntoConstraints = NO;
     [root addArrangedSubview:deviceFrame];
-    [deviceFrame.widthAnchor constraintEqualToConstant:screenWidth].active = YES;
-    [deviceFrame.heightAnchor constraintEqualToConstant:screenHeight].active = YES;
+    [deviceFrame.widthAnchor
+        constraintEqualToConstant:screenWidth + 2 * bezel].active = YES;
+    [deviceFrame.heightAnchor
+        constraintEqualToConstant:screenHeight + 2 * bezel].active = YES;
 
     NSView* screen = [[NSView alloc] init];
     screen.wantsLayer = YES;
-    screen.layer.cornerRadius = 20.0;
+    screen.layer.cornerRadius = 6.0;
+    screen.layer.masksToBounds = YES;
     screen.layer.backgroundColor =
         [NSColor colorWithCalibratedWhite:0.10 alpha:1.0].CGColor;
     screen.translatesAutoresizingMaskIntoConstraints = NO;
@@ -446,6 +454,34 @@ static NSView* AndroidDeviceTabChipView(NSString* title,
     [_frameView registerForDraggedTypes:@[NSPasteboardTypeFileURL]];
     _frameView.translatesAutoresizingMaskIntoConstraints = NO;
     [screen addSubview:_frameView];
+
+    NSTextField* homeHeading = [NSTextField labelWithString:@"Android Home"];
+    homeHeading.font = [NSFont systemFontOfSize:22 weight:NSFontWeightSemibold];
+    homeHeading.textColor = NSColor.blackColor;
+    NSTextField* homeHint = [NSTextField labelWithString:
+        @"Open your installed apps or add an APK."];
+    homeHint.textColor = [NSColor colorWithWhite:0.25 alpha:1.0];
+    NSButton* allApps = [NSButton buttonWithTitle:@"All Apps" target:self
+                                         action:@selector(deviceAllApps:)];
+    NSButton* install = [NSButton buttonWithTitle:@"Install APK…" target:self
+                                         action:@selector(deviceInstall:)];
+    allApps.bezelStyle = NSBezelStyleRounded;
+    install.bezelStyle = NSBezelStyleRounded;
+    NSStackView* buttons = [NSStackView stackViewWithViews:@[allApps, install]];
+    buttons.spacing = 8.0;
+    _homeActions = [NSStackView stackViewWithViews:@[homeHeading, homeHint, buttons]];
+    // The panel has a light background inside a dark device window.
+    _homeActions.appearance = [NSAppearance appearanceNamed:NSAppearanceNameAqua];
+    _homeActions.orientation = NSUserInterfaceLayoutOrientationVertical;
+    _homeActions.alignment = NSLayoutAttributeCenterX;
+    _homeActions.spacing = 12.0;
+    _homeActions.edgeInsets = NSEdgeInsetsMake(20, 24, 20, 24);
+    _homeActions.wantsLayer = YES;
+    _homeActions.layer.backgroundColor = [NSColor colorWithWhite:0.96 alpha:1.0].CGColor;
+    _homeActions.layer.cornerRadius = 12.0;
+    _homeActions.translatesAutoresizingMaskIntoConstraints = NO;
+    _homeActions.hidden = YES;
+    [screen addSubview:_homeActions];
 
     _titleLabel = [NSTextField labelWithString:prefixName ?: @"Android"];
     _titleLabel.font = [NSFont systemFontOfSize:20 weight:NSFontWeightSemibold];
@@ -469,15 +505,18 @@ static NSView* AndroidDeviceTabChipView(NSString* title,
     [screen addSubview:_spinner];
 
     [NSLayoutConstraint activateConstraints:@[
-        [screen.leadingAnchor constraintEqualToAnchor:deviceFrame.leadingAnchor constant:10.0],
-        [screen.trailingAnchor constraintEqualToAnchor:deviceFrame.trailingAnchor constant:-10.0],
-        [screen.topAnchor constraintEqualToAnchor:deviceFrame.topAnchor constant:10.0],
-        [screen.bottomAnchor constraintEqualToAnchor:deviceFrame.bottomAnchor constant:-10.0],
+        [screen.leadingAnchor constraintEqualToAnchor:deviceFrame.leadingAnchor constant:bezel],
+        [screen.trailingAnchor constraintEqualToAnchor:deviceFrame.trailingAnchor constant:-bezel],
+        [screen.topAnchor constraintEqualToAnchor:deviceFrame.topAnchor constant:bezel],
+        [screen.bottomAnchor constraintEqualToAnchor:deviceFrame.bottomAnchor constant:-bezel],
 
         [_frameView.leadingAnchor constraintEqualToAnchor:screen.leadingAnchor],
         [_frameView.trailingAnchor constraintEqualToAnchor:screen.trailingAnchor],
         [_frameView.topAnchor constraintEqualToAnchor:screen.topAnchor],
         [_frameView.bottomAnchor constraintEqualToAnchor:screen.bottomAnchor],
+
+        [_homeActions.centerXAnchor constraintEqualToAnchor:screen.centerXAnchor],
+        [_homeActions.centerYAnchor constraintEqualToAnchor:screen.centerYAnchor],
 
         [_titleLabel.leadingAnchor constraintEqualToAnchor:screen.leadingAnchor constant:24.0],
         [_titleLabel.trailingAnchor constraintEqualToAnchor:screen.trailingAnchor constant:-24.0],
@@ -520,8 +559,16 @@ static NSView* AndroidDeviceTabChipView(NSString* title,
 - (void)updateTabControl
 {
     BOOL showTabs = self.tabs.count > 1;
-    self.tabStripStack.hidden = !showTabs;
-    self.tabStripHeightConstraint.constant = showTabs ? 30.0 : 0.0;
+    if (showTabs == self.tabStripStack.hidden) {
+        self.tabStripStack.hidden = !showTabs;
+        self.tabStripHeightConstraint.constant = showTabs ? AndroidDeviceTabHeight : 0.0;
+        CGFloat delta = (AndroidDeviceTabHeight + AndroidDeviceStackSpacing) *
+            (showTabs ? 1.0 : -1.0);
+        NSRect frame = self.window.frame;
+        frame.origin.y -= delta;
+        frame.size.height += delta;
+        [self.window setFrame:frame display:YES];
+    }
 
     for (NSView* chip in self.tabStripStack.arrangedSubviews.copy) {
         [self.tabStripStack removeArrangedSubview:chip];
@@ -582,6 +629,8 @@ static NSView* AndroidDeviceTabChipView(NSString* title,
         ? @"Home"
         : AndroidDeviceTabTitle(self.tabs[(NSUInteger)index]);
     self.titleLabel.stringValue = title;
+    if (![self.activeTabIdentifier isEqualToString:AndroidDeviceLauncherTabIdentifier])
+        self.homeActions.hidden = YES;
 }
 
 - (void)focusOrCreateTabWithIdentifier:(NSString*)identifier title:(NSString*)title
@@ -693,6 +742,18 @@ static NSView* AndroidDeviceTabChipView(NSString* title,
                 }
                 NSUInteger width = (NSUInteger)header.width;
                 NSUInteger height = (NSUInteger)header.height;
+                // An unconfigured Launcher3 workspace can be a solid color.
+                // Keep a visible route into the drawer while that frame is shown.
+                const auto* pixels = static_cast<const uint32_t*>(frameData.bytes);
+                const NSUInteger pixelCount = width * height;
+                const NSUInteger sampleStep = MAX((NSUInteger)1, pixelCount / 4096);
+                BOOL uniform = YES;
+                for (NSUInteger i = sampleStep; i < pixelCount; i += sampleStep) {
+                    if (pixels[i] != pixels[0]) {
+                        uniform = NO;
+                        break;
+                    }
+                }
                 static uint64_t receivedFrameCount = 0;
                 uint64_t frameNumber = ++receivedFrameCount;
                 if (frameNumber == 1 || frameNumber % 30 == 0) {
@@ -740,6 +801,9 @@ static NSView* AndroidDeviceTabChipView(NSString* title,
                         [[NSImage alloc] initWithSize:NSMakeSize(width, height)];
                     [image addRepresentation:rep];
                     strongSelf.frameView.image = image;
+                    strongSelf.homeActions.hidden = !uniform ||
+                        ![strongSelf.activeTabIdentifier
+                            isEqualToString:AndroidDeviceLauncherTabIdentifier];
                     strongSelf.frameView.needsDisplay = YES;
                     strongSelf.frameView.layer.needsDisplayOnBoundsChange = YES;
                     [strongSelf.frameView setNeedsDisplay:YES];
@@ -999,6 +1063,7 @@ static NSView* AndroidDeviceTabChipView(NSString* title,
 {
     (void)appName;
     [self updateActiveTabLabels];
+    self.homeActions.hidden = YES;
     self.titleLabel.hidden = NO;
     self.statusLabel.hidden = NO;
     self.statusLabel.stringValue = @"Starting Android session...";
@@ -1017,6 +1082,7 @@ static NSView* AndroidDeviceTabChipView(NSString* title,
 
 - (void)showStoppedWithMessage:(NSString*)message
 {
+    self.homeActions.hidden = YES;
     self.titleLabel.hidden = NO;
     self.statusLabel.hidden = NO;
     self.statusLabel.stringValue = message ?: @"Android session stopped.";
@@ -1025,6 +1091,7 @@ static NSView* AndroidDeviceTabChipView(NSString* title,
 
 - (void)showInstallProgress:(NSString*)message
 {
+    self.homeActions.hidden = YES;
     self.titleLabel.hidden = NO;
     self.statusLabel.hidden = NO;
     self.statusLabel.stringValue = message ?: @"Installing APK...";
@@ -1065,7 +1132,10 @@ static NSView* AndroidDeviceTabChipView(NSString* title,
 - (void)deviceAllApps:(id)sender
 {
     (void)sender;
-    [self focusLauncherTab];
+    // The guest's All Apps action already focuses Launcher3.
+    self.activeTabIdentifier = AndroidDeviceLauncherTabIdentifier;
+    [self updateTabSelectionHighlight];
+    [self updateActiveTabLabels];
     if (self.actionHandler)
         self.actionHandler(@"all-apps", self.activeTabIdentifier);
 }

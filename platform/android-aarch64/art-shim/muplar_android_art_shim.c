@@ -846,6 +846,28 @@ static int muplar_ceil_to_int(float value)
     return i;
 }
 
+// The shim stores straight ARGB. Keep the destination alpha when drawing
+// translucent content into an intermediate bitmap, such as Launcher3's scrims.
+static uint32_t muplar_composite_over(uint32_t src, uint32_t dst,
+                                      uint32_t src_alpha)
+{
+    if (src_alpha == 255)
+        return 0xff000000u | (src & 0x00ffffffu);
+    if (src_alpha == 0)
+        return dst;
+
+    uint32_t src_weight = src_alpha * 255;
+    uint32_t dst_weight = (dst >> 24) * (255 - src_alpha);
+    uint32_t total = src_weight + dst_weight;
+    uint32_t red = (((src >> 16) & 0xff) * src_weight +
+                    ((dst >> 16) & 0xff) * dst_weight) / total;
+    uint32_t green = (((src >> 8) & 0xff) * src_weight +
+                      ((dst >> 8) & 0xff) * dst_weight) / total;
+    uint32_t blue = ((src & 0xff) * src_weight +
+                     (dst & 0xff) * dst_weight) / total;
+    return ((total / 255) << 24) | (red << 16) | (green << 8) | blue;
+}
+
 static void muplar_fill_rect(struct muplar_bitmap_state *bitmap,
                              int left,
                              int top,
@@ -877,22 +899,11 @@ static void muplar_fill_rect(struct muplar_bitmap_state *bitmap,
                     ->pixels[(size_t) y * (size_t) bitmap->width + (size_t) x] =
                     color;
     } else {
-        uint32_t r = (color >> 16) & 0xff;
-        uint32_t g = (color >> 8) & 0xff;
-        uint32_t b = color & 0xff;
-        uint32_t inv_a = 255 - alpha;
         for (y = top; y < bottom; y++) {
             for (x = left; x < right; x++) {
                 size_t idx = (size_t) y * (size_t) bitmap->width + (size_t) x;
-                uint32_t dst = bitmap->pixels[idx];
-                uint32_t dr = (dst >> 16) & 0xff;
-                uint32_t dg = (dst >> 8) & 0xff;
-                uint32_t db = dst & 0xff;
-                uint32_t nr = (r * alpha + dr * inv_a) / 255;
-                uint32_t ng = (g * alpha + dg * inv_a) / 255;
-                uint32_t nb = (b * alpha + db * inv_a) / 255;
                 bitmap->pixels[idx] =
-                    (0xffu << 24) | (nr << 16) | (ng << 8) | nb;
+                    muplar_composite_over(color, bitmap->pixels[idx], alpha);
             }
         }
     }
@@ -6161,8 +6172,10 @@ void Java_android_graphics_BaseCanvas_nDrawPaint(JNIEnv *env,
                     c->clip_right - c->clip_left, c->clip_bottom - c->clip_top,
                     0, 0, src->width, src->height, c->clip_left, c->clip_top,
                     c->clip_right, c->clip_bottom, paint, 0);
-                return;
             }
+            // A shader without a software implementation cannot be drawn as
+            // a solid paint color. That turns transparent scrims into bands.
+            return;
         }
         muplar_fill_rect(bitmap, c->clip_left, c->clip_top, c->clip_right,
                          c->clip_bottom, color);
@@ -6648,25 +6661,9 @@ static void muplar_blit_bitmap(struct muplar_bitmap_state *dst,
                 src_color =
                     ((uint32_t) alpha << 24) | (src_color & 0x00ffffffu);
             }
-            if (alpha == 255) {
-                dst->pixels[(size_t) py * (size_t) dst->width + (size_t) px] =
-                    src_color;
-            } else {
-                uint32_t dst_color =
-                    dst->pixels[(size_t) py * (size_t) dst->width +
-                                (size_t) px];
-                uint32_t out_r = (((src_color >> 16) & 0xff) * alpha +
-                                  ((dst_color >> 16) & 0xff) * (255 - alpha)) /
-                                 255;
-                uint32_t g = (((src_color >> 8) & 0xff) * alpha +
-                              ((dst_color >> 8) & 0xff) * (255 - alpha)) /
-                             255;
-                uint32_t b = ((src_color & 0xff) * alpha +
-                              (dst_color & 0xff) * (255 - alpha)) /
-                             255;
-                dst->pixels[(size_t) py * (size_t) dst->width + (size_t) px] =
-                    0xff000000u | (out_r << 16) | (g << 8) | b;
-            }
+            size_t dst_index = (size_t) py * (size_t) dst->width + (size_t) px;
+            dst->pixels[dst_index] =
+                muplar_composite_over(src_color, dst->pixels[dst_index], alpha);
             drawn_count++;
         }
     }

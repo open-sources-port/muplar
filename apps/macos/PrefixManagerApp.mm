@@ -3063,11 +3063,16 @@ static NSString* MapLinuxIconToSFSymbol(NSString* icon)
                 !apk.manifest_package->empty() &&
                 apk.manifest_launch_activity &&
                 !apk.manifest_launch_activity->empty()) {
+                const auto& sysroot = selected->rootfs.empty()
+                    ? selected->runtime_sysroot
+                    : selected->rootfs;
+                std::string guestApk = muplar::runtime::apk::stage_apk_guest_path(
+                    entry.path(), sysroot);
                 registryText += "package=" + *apk.manifest_package + "\n";
                 registryText +=
                     "activity=" + *apk.manifest_launch_activity + "\n";
                 registryText += "label=" + std::string(name.UTF8String) + "\n";
-                registryText += "apk=" + entry.path().string() + "\n";
+                registryText += "apk=" + guestApk + "\n";
                 if (apk.manifest_application_class &&
                     !apk.manifest_application_class->empty()) {
                     registryText +=
@@ -5385,22 +5390,9 @@ static NSString* MapLinuxIconToSFSymbol(NSString* icon)
         return nil;
     NSString* guestApkPath = @"";
     @try {
-        std::filesystem::path source(appPath.UTF8String);
-        std::filesystem::path stagingDir =
-            std::filesystem::path(rootfsPath.UTF8String) / "data" / "local" /
-            "tmp" / "muplar" / "apks";
-        std::error_code ec;
-        std::filesystem::create_directories(stagingDir, ec);
-        std::filesystem::path target = stagingDir / source.filename();
-        std::filesystem::copy_file(
-            source, target,
-            std::filesystem::copy_options::overwrite_existing, ec);
-        if (!ec) {
-            guestApkPath =
-                [@"/data/local/tmp/muplar/apks"
-                    stringByAppendingPathComponent:NSStringFromPath(
-                                                       source.filename())];
-        }
+        guestApkPath = NSStringFromStdString(
+            muplar::runtime::apk::stage_apk_guest_path(
+                appPath.fileSystemRepresentation, rootfsPath.fileSystemRepresentation));
     } @catch (...) {
     }
 

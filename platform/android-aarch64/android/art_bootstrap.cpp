@@ -1,8 +1,6 @@
 #include "art_bootstrap.h"
 
 #include <algorithm>
-#include <cctype>
-#include <functional>
 #include <iostream>
 #include <set>
 #include <sstream>
@@ -33,23 +31,6 @@ bool exists_dir(const std::filesystem::path &path)
 {
     std::error_code ec;
     return std::filesystem::is_directory(path, ec);
-}
-
-bool is_inside_path(const std::filesystem::path &path,
-                    const std::filesystem::path &root)
-{
-    std::filesystem::path normalized_path =
-        std::filesystem::absolute(path).lexically_normal();
-    std::filesystem::path normalized_root =
-        std::filesystem::absolute(root).lexically_normal();
-
-    auto path_it = normalized_path.begin();
-    auto root_it = normalized_root.begin();
-    for (; root_it != normalized_root.end(); ++root_it, ++path_it) {
-        if (path_it == normalized_path.end() || *path_it != *root_it)
-            return false;
-    }
-    return true;
 }
 
 std::string guest_path_for(const std::filesystem::path &host_path,
@@ -291,36 +272,6 @@ std::string candidate_summary(const GuestPathCandidates &candidates)
     return join_strings(paths, " or ");
 }
 
-std::string sanitize_path_component(std::string value)
-{
-    for (char &c : value) {
-        unsigned char uc = static_cast<unsigned char>(c);
-        if (!std::isalnum(uc) && c != '-' && c != '_' && c != '.')
-            c = '_';
-    }
-    if (value.empty())
-        value = "apk";
-    return value;
-}
-
-std::string file_stamp(const std::filesystem::path &path)
-{
-    std::string seed = std::filesystem::absolute(path).string();
-    try {
-        seed += ":" + std::to_string(std::filesystem::file_size(path));
-        seed += ":" + std::to_string(static_cast<long long>(
-                          std::filesystem::last_write_time(path)
-                              .time_since_epoch()
-                              .count()));
-    } catch (const std::exception &) {
-        seed += ":unknown";
-    }
-
-    std::ostringstream out;
-    out << std::hex << std::hash<std::string>{}(seed);
-    return out.str();
-}
-
 std::filesystem::path first_existing_regular(
     const std::filesystem::path &sysroot,
     const GuestPathCandidates &candidates)
@@ -365,50 +316,6 @@ std::filesystem::path stage_optional_art_file(
 }
 
 }  // namespace
-
-std::filesystem::path stage_art_apk_for_sysroot(
-    const std::filesystem::path &apk_path,
-    const std::filesystem::path &sysroot)
-{
-    if (sysroot.empty())
-        return std::filesystem::absolute(apk_path).lexically_normal();
-
-    std::filesystem::path absolute_apk =
-        std::filesystem::absolute(apk_path).lexically_normal();
-    std::filesystem::path absolute_sysroot =
-        std::filesystem::absolute(sysroot).lexically_normal();
-    if (is_inside_path(absolute_apk, absolute_sysroot))
-        return absolute_apk;
-
-    std::filesystem::path staging_dir =
-        absolute_sysroot / "data" / "local" / "tmp" / "muplar" / "apks";
-    std::string filename =
-        sanitize_path_component(absolute_apk.stem().string()) + "-" +
-        file_stamp(absolute_apk) + absolute_apk.extension().string();
-    std::filesystem::path staged_apk = staging_dir / filename;
-
-    std::error_code ec;
-    std::filesystem::create_directories(staging_dir, ec);
-    std::filesystem::create_directories(
-        absolute_sysroot / "data" / "user" / "0", ec);
-    if (ec) {
-        throw std::runtime_error(
-            "unable to create ART APK staging directory: " +
-            staging_dir.string() + ": " + ec.message());
-    }
-    std::filesystem::copy_file(
-        absolute_apk, staged_apk,
-        std::filesystem::copy_options::overwrite_existing, ec);
-    if (ec) {
-        throw std::runtime_error(
-            "unable to stage APK for ART bootstrap: " + absolute_apk.string() +
-            " -> " + staged_apk.string() + ": " + ec.message());
-    }
-
-    std::cerr << "[ART] staged APK for guest path: " << staged_apk.string()
-              << "\n";
-    return staged_apk;
-}
 
 ArtBootstrapPlan build_art_bootstrap_plan(const ArtBootstrapConfig &config)
 {
@@ -673,8 +580,10 @@ ArtBootstrapPlan build_art_bootstrap_plan(const ArtBootstrapConfig &config)
     plan.env.push_back("ANDROID_PRINTF_LOG=stdio");
 
     std::vector<std::string> service_property_args;
-    if (const char *service_socket = std::getenv("MUPLAR_SERVICE_SOCKET");
-        service_socket && *service_socket) {
+    const char *service_socket = config.guest_service_socket.empty()
+        ? std::getenv("MUPLAR_SERVICE_SOCKET")
+        : config.guest_service_socket.c_str();
+    if (service_socket && *service_socket) {
         service_property_args.push_back(
             std::string("-Dmuplar.service.socket=") + service_socket);
     }

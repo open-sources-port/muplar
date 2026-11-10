@@ -910,7 +910,9 @@ public final class FrameworkDeviceController {
         }
         MuplarServices.InstalledPackage pkg = MuplarServices.findInstalledPackage(packageName);
         if (pkg != null) {
-            if (apkPath.isEmpty()) apkPath = pkg.apk;
+            if (apkPath.isEmpty() || !new java.io.File(apkPath).canRead()) {
+                apkPath = pkg.apk;
+            }
             if (activityName.isEmpty()) activityName = pkg.activity;
             if (applicationName.isEmpty()) applicationName = pkg.application;
         }
@@ -925,9 +927,11 @@ public final class FrameworkDeviceController {
         }
         boolean launched = ArtApkMain.launchActivity(tab, apkPath,
             packageName, activityName, applicationName);
-        if (!launched)
+        if (!launched) {
             System.err.println("[DeviceController] app launch ignored package="
                 + packageName + " activity=" + activityName);
+            focusRecord(activeRecord());
+        }
     }
 
     public static void startActivityInCurrentTask(final ActivityRecord caller,
