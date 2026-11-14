@@ -12,6 +12,9 @@ import java.util.List;
 
 final class MuplarFramePresenter {
     private static final long LOOP_INTERVAL_MS = 500;
+    private static final long FRAME_INTERVAL_MS = 33;
+    private static final java.util.WeakHashMap<android.view.ViewTreeObserver, Boolean>
+        observedTrees = new java.util.WeakHashMap<>();
 
     private static boolean nativeAvailable = true;
     private static long lastFrameUptime;
@@ -112,9 +115,10 @@ final class MuplarFramePresenter {
     private static void attachObserver(final View root, final android.os.Handler handler) {
         try {
             android.view.ViewTreeObserver vto = root.getViewTreeObserver();
-            if (vto == null || !vto.isAlive()) {
+            if (vto == null || !vto.isAlive() || observedTrees.containsKey(vto)) {
                 return;
             }
+            observedTrees.put(vto, Boolean.TRUE);
             vto.addOnDrawListener(new android.view.ViewTreeObserver.OnDrawListener() {
                 @Override public void onDraw() {
                     if (isPresenting) {
@@ -140,12 +144,14 @@ final class MuplarFramePresenter {
             return;
         }
         frameRequested = true;
-        handler.post(new Runnable() {
+        long delay = Math.max(0, FRAME_INTERVAL_MS -
+            (android.os.SystemClock.uptimeMillis() - lastFrameUptime));
+        handler.postDelayed(new Runnable() {
             @Override public void run() {
                 frameRequested = false;
                 if (isCurrentRoot(root)) present(root);
             }
-        });
+        }, delay);
     }
 
     private static boolean isCurrentRoot(View root) {
@@ -221,7 +227,7 @@ final class MuplarFramePresenter {
             return;
         }
         long now = android.os.SystemClock.uptimeMillis();
-        if (!force && now - lastFrameUptime < 16) {
+        if (!force && now - lastFrameUptime < FRAME_INTERVAL_MS) {
             return;
         }
         lastFrameUptime = now;
@@ -262,7 +268,12 @@ final class MuplarFramePresenter {
                 reusableBitmap = Bitmap.createBitmap(width, height,
                     Bitmap.Config.ARGB_8888);
             }
-            reusableCanvas = new Canvas(reusableBitmap);
+            if (reusableCanvas == null) {
+                reusableCanvas = new Canvas(reusableBitmap);
+            } else {
+                reusableCanvas.setBitmap(reusableBitmap);
+            }
+            reusableBitmap.eraseColor(Color.TRANSPARENT);
             if (System.getenv("MUPLAR_DEBUG_VIEWS") != null) {
                 debugDumpViews(root, 0);
             }
@@ -280,6 +291,7 @@ final class MuplarFramePresenter {
             System.err.println("[Muplar/Window] software frame failed: " +
                 error.getClass().getName() + ": " + error.getMessage());
         } finally {
+            lastFrameUptime = android.os.SystemClock.uptimeMillis();
             isPresenting = false;
         }
     }
@@ -305,7 +317,11 @@ final class MuplarFramePresenter {
                     } catch (Throwable ignored) {
                     }
                     android.graphics.drawable.Drawable d = (android.graphics.drawable.Drawable) icon;
-                    d.setBounds(0, 0, iconSize, iconSize);
+                    android.graphics.Rect bounds = d.getBounds();
+                    if (bounds.left != 0 || bounds.top != 0 ||
+                        bounds.right != iconSize || bounds.bottom != iconSize) {
+                        d.setBounds(0, 0, iconSize, iconSize);
+                    }
                 }
                 java.lang.reflect.Field fIconSize = v.getClass().getDeclaredField("mIconSize");
                 fIconSize.setAccessible(true);
@@ -350,7 +366,11 @@ final class MuplarFramePresenter {
                             tv.setCompoundDrawables(null, (android.graphics.drawable.Drawable) icon, null, null);
                         }
                     } else {
-                        cds[1].setBounds(0, 0, iconSize, iconSize);
+                        android.graphics.Rect bounds = cds[1].getBounds();
+                        if (bounds.left != 0 || bounds.top != 0 ||
+                            bounds.right != iconSize || bounds.bottom != iconSize) {
+                            cds[1].setBounds(0, 0, iconSize, iconSize);
+                        }
                     }
                 }
             } catch (Throwable ignored) {

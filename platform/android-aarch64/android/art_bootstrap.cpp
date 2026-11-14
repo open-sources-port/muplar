@@ -581,8 +581,8 @@ ArtBootstrapPlan build_art_bootstrap_plan(const ArtBootstrapConfig &config)
 
     std::vector<std::string> service_property_args;
     const char *service_socket = config.guest_service_socket.empty()
-        ? std::getenv("MUPLAR_SERVICE_SOCKET")
-        : config.guest_service_socket.c_str();
+                                     ? std::getenv("MUPLAR_SERVICE_SOCKET")
+                                     : config.guest_service_socket.c_str();
     if (service_socket && *service_socket) {
         service_property_args.push_back(
             std::string("-Dmuplar.service.socket=") + service_socket);

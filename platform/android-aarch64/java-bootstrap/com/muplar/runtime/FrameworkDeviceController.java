@@ -1112,6 +1112,16 @@ public final class FrameworkDeviceController {
                     if (appsView.getVisibility() != android.view.View.VISIBLE) {
                         appsView.setVisibility(android.view.View.VISIBLE);
                     }
+                    if (appsView instanceof android.view.ViewGroup) {
+                        android.view.ViewGroup vg = (android.view.ViewGroup) appsView;
+                        for (int i = 0; i < vg.getChildCount(); i++) {
+                            android.view.View child = vg.getChildAt(i);
+                            if (child != null && "com.android.launcher3.allapps.search.AppsSearchContainerLayout"
+                                    .equals(child.getClass().getName())) {
+                                MuplarLayoutInflater.fixSearchContainerHint(child, child.getContext());
+                            }
+                        }
+                    }
                     int w = 1080;
                     int h = 1920;
                     if (appsView.getParent() instanceof android.view.View) {

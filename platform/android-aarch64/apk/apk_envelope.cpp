@@ -1481,18 +1481,19 @@ std::filesystem::path stage_apk_for_sysroot(
     std::string temporary = staged_apk.string() + ".XXXXXX";
     int fd = mkstemp(temporary.data());
     if (fd < 0)
-        throw std::runtime_error("unable to create temporary APK: " + temporary);
+        throw std::runtime_error("unable to create temporary APK: " +
+                                 temporary);
     close(fd);
-    std::filesystem::copy_file(absolute_apk, temporary,
-                              std::filesystem::copy_options::overwrite_existing,
-                              ec);
+    std::filesystem::copy_file(
+        absolute_apk, temporary,
+        std::filesystem::copy_options::overwrite_existing, ec);
     if (!ec)
         std::filesystem::rename(temporary, staged_apk, ec);
     if (ec) {
         std::error_code cleanup_error;
         std::filesystem::remove(temporary, cleanup_error);
-        throw std::runtime_error("unable to stage APK: " + absolute_apk.string() +
-                                 ": " + ec.message());
+        throw std::runtime_error("unable to stage APK: " +
+                                 absolute_apk.string() + ": " + ec.message());
     }
     return staged_apk;
 }

@@ -126,9 +126,16 @@ public final class MuplarLayoutInflater extends LayoutInflater {
                 java.lang.reflect.Constructor<?> ctor =
                     type.getConstructor(
                         Context.class, AttributeSet.class, Integer.TYPE);
-                View view = (View) ctor.newInstance(
-                    safeContext, null, Integer.valueOf(0));
+                View view;
+                try {
+                    view = (View) ctor.newInstance(
+                        safeContext, attrs, Integer.valueOf(0));
+                } catch (Throwable fallback) {
+                    view = (View) ctor.newInstance(
+                        safeContext, null, Integer.valueOf(0));
+                }
                 copyAndroidId(view, attrs);
+                fixSearchContainerHint(view, context);
                 return view;
             } catch (Throwable t) {
                 logInflateFailure(name, t);
@@ -197,6 +204,40 @@ public final class MuplarLayoutInflater extends LayoutInflater {
         }
     }
 
+    static void fixSearchContainerHint(View view, Context context) {
+        if (!(view instanceof android.widget.TextView)) {
+            return;
+        }
+        android.widget.TextView tv = (android.widget.TextView) view;
+        CharSequence currentHint = tv.getHint();
+        String hintStr = currentHint != null ? currentHint.toString().trim() : "";
+        if (currentHint == null || hintStr.isEmpty() || "null".equalsIgnoreCase(hintStr) || hintStr.endsWith("null")) {
+            CharSequence searchHint = "Search apps";
+            try {
+                int resId = context.getResources().getIdentifier(
+                    "all_apps_search_bar_hint", "string", context.getPackageName());
+                if (resId != 0) {
+                    searchHint = context.getResources().getText(resId);
+                }
+            } catch (Throwable ignored) {
+            }
+            try {
+                Class<?> utils = Class.forName("com.android.launcher3.Utilities", false, context.getClassLoader());
+                int iconRes = context.getResources().getIdentifier(
+                    "ic_allapps_search", "drawable", context.getPackageName());
+                if (iconRes != 0) {
+                    java.lang.reflect.Method prefixMethod = utils.getMethod(
+                        "prefixTextWithIcon", Context.class, Integer.TYPE, CharSequence.class);
+                    tv.setHint((CharSequence) prefixMethod.invoke(null, context, Integer.valueOf(iconRes), searchHint));
+                } else {
+                    tv.setHint(searchHint);
+                }
+            } catch (Throwable t) {
+                tv.setHint(searchHint);
+            }
+        }
+    }
+
     private static final class FrameworkThemeContext extends ContextWrapper {
         private final Resources.Theme theme;
 
@@ -261,6 +302,24 @@ public final class MuplarLayoutInflater extends LayoutInflater {
                 return super.getDrawable(id, theme);
             } catch (Throwable t) {
                 return fallback(id, t);
+            }
+        }
+
+        @Override
+        public android.content.res.ColorStateList getColorStateList(int id) throws NotFoundException {
+            try {
+                return super.getColorStateList(id);
+            } catch (Throwable t) {
+                return android.content.res.ColorStateList.valueOf(0x88888888);
+            }
+        }
+
+        @Override
+        public android.content.res.ColorStateList getColorStateList(int id, Theme theme) throws NotFoundException {
+            try {
+                return super.getColorStateList(id, theme);
+            } catch (Throwable t) {
+                return android.content.res.ColorStateList.valueOf(0x88888888);
             }
         }
 

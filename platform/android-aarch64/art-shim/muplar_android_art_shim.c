@@ -1,4 +1,7 @@
 #include <math.h>
+#include <errno.h>
+#include <poll.h>
+#include <sys/eventfd.h>
 #include <stdatomic.h>
 #include <stddef.h>
 #include <stdint.h>
@@ -143,7 +146,10 @@ JNIEXPORT void __android_log_assert(const char *cond,
 
 static uintptr_t muplar_system_namespace_token;
 static uintptr_t muplar_created_namespace_token;
-static uintptr_t muplar_message_queue_token;
+struct muplar_message_queue {
+    int wake_fd;
+    atomic_bool polling;
+};
 static uintptr_t muplar_next_matrix_token = 0x10000;
 static uintptr_t muplar_next_colorspace_token = 0x18000;
 static uintptr_t muplar_next_path_token = 0x1c000;
@@ -848,7 +854,8 @@ static int muplar_ceil_to_int(float value)
 
 // The shim stores straight ARGB. Keep the destination alpha when drawing
 // translucent content into an intermediate bitmap, such as Launcher3's scrims.
-static uint32_t muplar_composite_over(uint32_t src, uint32_t dst,
+static uint32_t muplar_composite_over(uint32_t src,
+                                      uint32_t dst,
                                       uint32_t src_alpha)
 {
     if (src_alpha == 255)
@@ -860,11 +867,13 @@ static uint32_t muplar_composite_over(uint32_t src, uint32_t dst,
     uint32_t dst_weight = (dst >> 24) * (255 - src_alpha);
     uint32_t total = src_weight + dst_weight;
     uint32_t red = (((src >> 16) & 0xff) * src_weight +
-                    ((dst >> 16) & 0xff) * dst_weight) / total;
-    uint32_t green = (((src >> 8) & 0xff) * src_weight +
-                      ((dst >> 8) & 0xff) * dst_weight) / total;
-    uint32_t blue = ((src & 0xff) * src_weight +
-                     (dst & 0xff) * dst_weight) / total;
+                    ((dst >> 16) & 0xff) * dst_weight) /
+                   total;
+    uint32_t green =
+        (((src >> 8) & 0xff) * src_weight + ((dst >> 8) & 0xff) * dst_weight) /
+        total;
+    uint32_t blue =
+        ((src & 0xff) * src_weight + (dst & 0xff) * dst_weight) / total;
     return ((total / 255) << 24) | (red << 16) | (green << 8) | blue;
 }
 
@@ -1689,9 +1698,20 @@ void Java_android_os_SystemProperties_native_1add_1change_1callback(
 
 jlong Java_android_os_MessageQueue_nativeInit(JNIEnv *env, jclass clazz)
 {
-    (void) env;
     (void) clazz;
-    return (jlong) (uintptr_t) &muplar_message_queue_token;
+    struct muplar_message_queue *queue = calloc(1, sizeof(*queue));
+    if (queue) {
+        queue->wake_fd = eventfd(0, EFD_CLOEXEC | EFD_NONBLOCK);
+        if (queue->wake_fd >= 0) {
+            atomic_init(&queue->polling, 0);
+            return (jlong) (uintptr_t) queue;
+        }
+        free(queue);
+    }
+    jclass error = (*env)->FindClass(env, "java/lang/IllegalStateException");
+    if (error)
+        (*env)->ThrowNew(env, error, "Unable to create Android message queue");
+    return 0;
 }
 
 void Java_android_os_MessageQueue_nativeDestroy(JNIEnv *env,
@@ -1700,7 +1720,11 @@ void Java_android_os_MessageQueue_nativeDestroy(JNIEnv *env,
 {
     (void) env;
     (void) clazz;
-    (void) ptr;
+    struct muplar_message_queue *queue = (void *) (uintptr_t) ptr;
+    if (queue) {
+        close(queue->wake_fd);
+        free(queue);
+    }
 }
 
 void Java_android_os_MessageQueue_nativePollOnce(JNIEnv *env,
@@ -1710,8 +1734,21 @@ void Java_android_os_MessageQueue_nativePollOnce(JNIEnv *env,
 {
     (void) env;
     (void) clazz;
-    (void) ptr;
-    (void) timeoutMillis;
+    struct muplar_message_queue *queue = (void *) (uintptr_t) ptr;
+    if (!queue)
+        return;
+    struct pollfd fd = { .fd = queue->wake_fd, .events = POLLIN };
+    atomic_store(&queue->polling, timeoutMillis != 0);
+    int ready = poll(&fd, 1, timeoutMillis);
+    atomic_store(&queue->polling, 0);
+    if (ready > 0 && (fd.revents & POLLIN)) {
+        uint64_t count;
+        // One read consumes pending wakes. A concurrent wake after the read
+        // remains readable for the next poll, so enqueue-before-poll is safe.
+        while (read(queue->wake_fd, &count, sizeof(count)) < 0 && errno == EINTR) {
+        }
+    }
+    // An interrupted wait returns to Java to recheck messages and deadlines.
 }
 
 void Java_android_os_MessageQueue_nativeWake(JNIEnv *env,
@@ -1720,7 +1757,13 @@ void Java_android_os_MessageQueue_nativeWake(JNIEnv *env,
 {
     (void) env;
     (void) clazz;
-    (void) ptr;
+    struct muplar_message_queue *queue = (void *) (uintptr_t) ptr;
+    if (!queue)
+        return;
+    uint64_t count = 1;
+    while (write(queue->wake_fd, &count, sizeof(count)) < 0 && errno == EINTR) {
+    }
+    // EAGAIN means a wake is already pending.
 }
 
 jboolean Java_android_os_MessageQueue_nativeIsPolling(JNIEnv *env,
@@ -1729,8 +1772,8 @@ jboolean Java_android_os_MessageQueue_nativeIsPolling(JNIEnv *env,
 {
     (void) env;
     (void) clazz;
-    (void) ptr;
-    return JNI_FALSE;
+    struct muplar_message_queue *queue = (void *) (uintptr_t) ptr;
+    return queue && atomic_load(&queue->polling) ? JNI_TRUE : JNI_FALSE;
 }
 
 void Java_android_os_MessageQueue_nativeSetFileDescriptorEvents(JNIEnv *env,
@@ -6332,7 +6375,18 @@ static void muplar_draw_text(JNIEnv *env,
     uint32_t tg = (text_color >> 8) & 0xff;
     uint32_t tb = text_color & 0xff;
 
-    if (len == 4 && memcmp(text, "null", 4) == 0) {
+    const char *p = text;
+    int plen = len;
+    while (plen > 0 && (*p == ' ' || *p == '\t')) {
+        p++;
+        plen--;
+    }
+    int tlen = plen;
+    while (tlen > 0 && (p[tlen - 1] == ' ' || p[tlen - 1] == '\t' ||
+                        p[tlen - 1] == '\r' || p[tlen - 1] == '\n')) {
+        tlen--;
+    }
+    if (tlen == 4 && memcmp(p, "null", 4) == 0) {
         text = "Search apps...";
         len = 14;
         tr = tg = tb = 128;

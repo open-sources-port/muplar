@@ -277,8 +277,9 @@ void apply_apk_launch(const PlatformLaunchConfig &launch_cfg,
               << guest_cfg.elf_path << "\n";
 }
 
-std::string publish_guest_service_socket(const std::filesystem::path &sysroot,
-                                         const std::filesystem::path &host_socket)
+std::string publish_guest_service_socket(
+    const std::filesystem::path &sysroot,
+    const std::filesystem::path &host_socket)
 {
     // elfuse resolves Unix socket paths inside the guest sysroot. Link the
     // same socket inode there so existing host clients can keep using run/.
@@ -305,9 +306,10 @@ std::string publish_guest_service_socket(const std::filesystem::path &sysroot,
     return {};
 }
 
-int handle_guest_art_apk_launch(const PlatformLaunchConfig &launch_cfg,
-                                const apk::ApkClassification &classification,
-                                const std::filesystem::path &host_service_socket)
+int handle_guest_art_apk_launch(
+    const PlatformLaunchConfig &launch_cfg,
+    const apk::ApkClassification &classification,
+    const std::filesystem::path &host_service_socket)
 {
     std::filesystem::path sysroot = launch_cfg.sysroot;
     if (sysroot.empty() &&
@@ -429,9 +431,10 @@ static void sync_packages_registry(const prefix::PrefixLayout &active_prefix)
                 apk.manifest_launch_activity &&
                 !apk.manifest_launch_activity->empty()) {
                 const auto &sysroot = active_prefix.rootfs.empty()
-                    ? active_prefix.runtime_sysroot
-                    : active_prefix.rootfs;
-                std::string guest_apk = apk::stage_apk_guest_path(entry.path(), sysroot);
+                                          ? active_prefix.runtime_sysroot
+                                          : active_prefix.rootfs;
+                std::string guest_apk =
+                    apk::stage_apk_guest_path(entry.path(), sysroot);
                 registry_text += "package=" + *apk.manifest_package + "\n";
                 registry_text +=
                     "activity=" + *apk.manifest_launch_activity + "\n";
