@@ -40,6 +40,7 @@ add_custom_command(
         "${CMAKE_SOURCE_DIR}/tools/build-art-bootstrap-jar.sh"
         "${CMAKE_SOURCE_DIR}/tools/build-android-art-shim.sh"
         "${CMAKE_SOURCE_DIR}/platform/android-aarch64/art-shim/muplar_android_art_shim.c"
+        "${CMAKE_SOURCE_DIR}/platform/android-aarch64/art-shim/muplar_font.h"
         ${ANDROID_BOOTSTRAP_JAVA}
     VERBATIM)
 

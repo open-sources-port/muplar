@@ -209,6 +209,17 @@ public final class MuplarLayoutInflater extends LayoutInflater {
             return;
         }
         android.widget.TextView tv = (android.widget.TextView) view;
+        float density = context.getResources().getDisplayMetrics().density;
+        tv.setTextSize(android.util.TypedValue.COMPLEX_UNIT_SP, 16);
+        tv.setTextColor(0xff202124);
+        tv.setHintTextColor(0xff5f6368);
+        tv.setGravity(android.view.Gravity.START | android.view.Gravity.CENTER_VERTICAL);
+        tv.setPadding((int) (20 * density), 0, (int) (20 * density), 0);
+        android.graphics.drawable.GradientDrawable background =
+            new android.graphics.drawable.GradientDrawable();
+        background.setColor(0xfff5f5fa);
+        background.setCornerRadius(24 * density);
+        tv.setBackground(background);
         CharSequence currentHint = tv.getHint();
         String hintStr = currentHint != null ? currentHint.toString().trim() : "";
         if (currentHint == null || hintStr.isEmpty() || "null".equalsIgnoreCase(hintStr) || hintStr.endsWith("null")) {

@@ -38,6 +38,7 @@ struct HostWindow::Impl {
     int frame_fd = -1;
     bool embedded = false;
     std::vector<uint8_t> input_buffer;
+    std::vector<uint8_t> software_frame_pixels;
     std::vector<HostInputEvent> pending_input;
     std::string software_frame_path;
     time_t software_frame_mtime_sec = 0;
@@ -239,7 +240,9 @@ static void poll_software_frame(HostWindow::Impl *impl)
              header.bytes <= 64ULL * 1024ULL * 1024ULL &&
              st.st_size >= static_cast<off_t>(sizeof(header) + header.bytes);
     }
-    std::vector<uint8_t> pixels(ok ? static_cast<size_t>(header.bytes) : 0);
+    auto &pixels = impl->software_frame_pixels;
+    if (ok && pixels.size() != static_cast<size_t>(header.bytes))
+        pixels.resize(static_cast<size_t>(header.bytes));
     if (ok && !pixels.empty())
         ok = read_all_fd(fd, pixels.data(), pixels.size());
     close(fd);

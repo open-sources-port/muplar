@@ -301,6 +301,22 @@ final class MuplarFramePresenter {
         if (v == null) return;
         String cls = v.getClass().getSimpleName();
         if (cls.contains("BubbleTextView")) {
+            if (v instanceof TextView) {
+                TextView label = (TextView) v;
+                float density = v.getResources().getDisplayMetrics().scaledDensity;
+                float textSize = 13 * density;
+                if (label.getPaddingLeft() != 0 || label.getPaddingTop() != 0 ||
+                    label.getPaddingRight() != 0 || label.getPaddingBottom() != 0) {
+                    label.setPadding(0, 0, 0, 0);
+                }
+                int iconGap = Math.round(4 * density);
+                if (label.getCompoundDrawablePadding() != iconGap) {
+                    label.setCompoundDrawablePadding(iconGap);
+                }
+                if (label.getTextSize() < textSize) {
+                    label.setTextSize(android.util.TypedValue.COMPLEX_UNIT_PX, textSize);
+                }
+            }
             try {
                 java.lang.reflect.Field fIcon = v.getClass().getDeclaredField("mIcon");
                 fIcon.setAccessible(true);
@@ -374,6 +390,21 @@ final class MuplarFramePresenter {
                     }
                 }
             } catch (Throwable ignored) {
+            }
+        }
+        if (cls.contains("BubbleTextView") && v instanceof TextView &&
+            ((TextView) v).getLayout() == null && v.getWidth() > 0 && v.getHeight() > 0) {
+            // Build the missing text layout directly. BubbleTextView can
+            // suppress relayout requests while rebinding its compound icon.
+            try {
+                java.lang.reflect.Method assumeLayout = TextView.class.getDeclaredMethod("assumeLayout");
+                assumeLayout.setAccessible(true);
+                assumeLayout.invoke(v);
+            } catch (ReflectiveOperationException error) {
+                v.forceLayout();
+                v.measure(View.MeasureSpec.makeMeasureSpec(v.getWidth(), View.MeasureSpec.EXACTLY),
+                          View.MeasureSpec.makeMeasureSpec(v.getHeight(), View.MeasureSpec.EXACTLY));
+                v.layout(v.getLeft(), v.getTop(), v.getRight(), v.getBottom());
             }
         }
         if (v instanceof ViewGroup) {

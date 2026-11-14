@@ -55,6 +55,8 @@ static void muplar_crash_handler(int sig, siginfo_t *info, void *ucontext)
     if (dladdr((void *) lr, &dlinfo)) {
         fprintf(stderr, "  lr in %s (%s+%p)\n", dlinfo.dli_fname,
                 dlinfo.dli_sname, (void *) (lr - (uintptr_t) dlinfo.dli_saddr));
+        fprintf(stderr, "  lr module offset %p\n",
+                (void *) (lr - (uintptr_t) dlinfo.dli_fbase));
     }
     for (int i = 0; i < 30 && fp > 0x1000; i++) {
         uintptr_t ret_addr = *(uintptr_t *) (fp + 8);
@@ -254,6 +256,10 @@ struct muplar_paint_state {
     jlong mask_filter;
     jlong shader;
     jfloat text_size;
+    jfloat text_scale_x;
+    jfloat letter_spacing;
+    jfloat word_spacing;
+    jint text_align;
     jfloat stroke_width;
     jfloat stroke_miter;
     jint style;
@@ -792,7 +798,11 @@ static struct muplar_paint_state *muplar_alloc_paint(jint color)
         muplar_paints[i].color_filter = 0;
         muplar_paints[i].mask_filter = 0;
         muplar_paints[i].shader = 0;
-        muplar_paints[i].text_size = 0.0f;
+        muplar_paints[i].text_size = 16.0f;
+        muplar_paints[i].text_scale_x = 1.0f;
+        muplar_paints[i].letter_spacing = 0;
+        muplar_paints[i].word_spacing = 0;
+        muplar_paints[i].text_align = 0;
         muplar_paints[i].stroke_width = 0.0f;
         muplar_paints[i].stroke_miter = 4.0f;
         muplar_paints[i].style = 0;
@@ -3147,6 +3157,10 @@ jlong Java_android_graphics_Paint_nInitWithPaint(JNIEnv *env,
             dst->mask_filter = src->mask_filter;
             dst->shader = src->shader;
             dst->text_size = src->text_size;
+            dst->text_scale_x = src->text_scale_x;
+            dst->letter_spacing = src->letter_spacing;
+            dst->word_spacing = src->word_spacing;
+            dst->text_align = src->text_align;
             dst->stroke_width = src->stroke_width;
             dst->stroke_miter = src->stroke_miter;
             dst->style = src->style;
@@ -3168,6 +3182,10 @@ void Java_android_graphics_Paint_nSet(jlong dst, jlong src)
         dst_paint->mask_filter = src_paint->mask_filter;
         dst_paint->shader = src_paint->shader;
         dst_paint->text_size = src_paint->text_size;
+        dst_paint->text_scale_x = src_paint->text_scale_x;
+        dst_paint->letter_spacing = src_paint->letter_spacing;
+        dst_paint->word_spacing = src_paint->word_spacing;
+        dst_paint->text_align = src_paint->text_align;
         dst_paint->stroke_width = src_paint->stroke_width;
         dst_paint->stroke_miter = src_paint->stroke_miter;
         dst_paint->style = src_paint->style;
@@ -3203,6 +3221,60 @@ jfloat Java_android_graphics_Paint_nGetTextSize(jlong paint)
 {
     struct muplar_paint_state *p = muplar_find_paint(paint);
     return p ? p->text_size : 16.0f;
+}
+
+void Java_android_graphics_Paint_nSetTextScaleX(jlong paint, jfloat value)
+{
+    struct muplar_paint_state *p = muplar_find_paint(paint);
+    if (p) p->text_scale_x = value;
+}
+
+void Java_android_graphics_Paint_nSetLetterSpacing(jlong paint, jfloat value)
+{
+    struct muplar_paint_state *p = muplar_find_paint(paint);
+    if (p) p->letter_spacing = value;
+}
+
+void Java_android_graphics_Paint_nSetWordSpacing(jlong paint, jfloat value)
+{
+    struct muplar_paint_state *p = muplar_find_paint(paint);
+    if (p) p->word_spacing = value;
+}
+
+void Java_android_graphics_Paint_nSetTextAlign(jlong paint, jint value)
+{
+    struct muplar_paint_state *p = muplar_find_paint(paint);
+    if (p) p->text_align = value;
+}
+
+void Java_android_graphics_Paint_nSetTextSkewX(jlong paint, jfloat value)
+{
+    (void) paint;
+    (void) value;
+}
+
+jfloat Java_android_graphics_Paint_nGetTextScaleX(jlong paint)
+{
+    struct muplar_paint_state *p = muplar_find_paint(paint);
+    return p ? p->text_scale_x : 1.0f;
+}
+
+jfloat Java_android_graphics_Paint_nGetTextSkewX(jlong paint)
+{
+    (void) paint;
+    return 0.0f;
+}
+
+jfloat Java_android_graphics_Paint_nGetWordSpacing(jlong paint)
+{
+    struct muplar_paint_state *p = muplar_find_paint(paint);
+    return p ? p->word_spacing : 0.0f;
+}
+
+jint Java_android_graphics_Paint_nGetTextAlign(jlong paint)
+{
+    struct muplar_paint_state *p = muplar_find_paint(paint);
+    return p ? p->text_align : 0;
 }
 
 void Java_android_graphics_Paint_nSetAntiAlias(jlong paint, jboolean aa)
@@ -3350,8 +3422,8 @@ void Java_android_graphics_Paint_nSetString(JNIEnv *env,
 
 jfloat Java_android_graphics_Paint_nGetLetterSpacing(jlong paint)
 {
-    (void) paint;
-    return 0.0f;
+    struct muplar_paint_state *p = muplar_find_paint(paint);
+    return p ? p->letter_spacing : 0.0f;
 }
 
 jlong Java_android_graphics_Paint_nSetTypeface(jlong paint, jlong typeface)
@@ -3402,7 +3474,12 @@ void Java_android_graphics_Paint_nReset(jlong paint)
 {
     struct muplar_paint_state *p = muplar_find_paint(paint);
     if (p) {
-        p->color = 0;
+        p->color = 0xff000000u;
+        p->text_size = 16;
+        p->text_scale_x = 1;
+        p->letter_spacing = 0;
+        p->word_spacing = 0;
+        p->text_align = 0;
         p->color_filter = 0;
         p->mask_filter = 0;
         p->shader = 0;
@@ -4994,7 +5071,7 @@ jint Java_android_graphics_Typeface_nativeGetWeight(jlong native_ptr)
 
 jlong Java_android_graphics_Typeface_nativeGetReleaseFunc(void)
 {
-    return 0;
+    return (jlong) (uintptr_t) &muplar_noop_finalizer;
 }
 
 void Java_android_graphics_Typeface_nativeRegisterGenericFamily(
@@ -5166,19 +5243,47 @@ static void muplar_set_float_field(JNIEnv *env,
     (*env)->SetFloatField(env, object, field, value);
 }
 
+static float muplar_text_scale(jlong paint)
+{
+    struct muplar_paint_state *p = muplar_find_paint(paint);
+    return p && isfinite(p->text_size) && p->text_size >= 0
+        ? p->text_size / MUPLAR_FONT_SIZE : 16.0f / MUPLAR_FONT_SIZE;
+}
+
+static float muplar_character_advance(jlong paint, jchar character)
+{
+    int index = character >= MUPLAR_FONT_FIRST_CHAR &&
+                character <= MUPLAR_FONT_LAST_CHAR
+        ? character - MUPLAR_FONT_FIRST_CHAR
+        : '?' - MUPLAR_FONT_FIRST_CHAR;
+    struct muplar_paint_state *p = muplar_find_paint(paint);
+    float scale_x = p ? p->text_scale_x : 1.0f;
+    float spacing = p ? p->letter_spacing * p->text_size : 0;
+    if (character == ' ' && p)
+        spacing += p->word_spacing;
+    return (muplar_font_advances[index] * muplar_text_scale(paint) + spacing) * scale_x;
+}
+
 jint Java_android_graphics_Paint_nGetFontMetricsInt(JNIEnv *env,
                                                     jclass clazz,
                                                     jlong paint,
                                                     jobject metrics)
 {
     (void) clazz;
-    (void) paint;
-    muplar_set_int_field(env, metrics, "top", -24);
-    muplar_set_int_field(env, metrics, "ascent", -20);
-    muplar_set_int_field(env, metrics, "descent", 6);
-    muplar_set_int_field(env, metrics, "bottom", 8);
+    float scale = muplar_text_scale(paint);
+    muplar_set_int_field(env, metrics, "top", (jint) (-30.0f * scale));
+    muplar_set_int_field(env, metrics, "ascent", (jint) (-30.0f * scale));
+    muplar_set_int_field(env, metrics, "descent", (jint) (8.0f * scale));
+    muplar_set_int_field(env, metrics, "bottom", (jint) (8.0f * scale));
     muplar_set_int_field(env, metrics, "leading", 0);
-    return 32;
+    return (jint) (38.0f * scale);
+}
+
+jint Java_android_graphics_Paint_nGetFontMetricsIntWithFallback(
+    JNIEnv *env, jclass clazz, jlong paint, jobject metrics, jboolean use_fallback)
+{
+    (void) use_fallback;
+    return Java_android_graphics_Paint_nGetFontMetricsInt(env, clazz, paint, metrics);
 }
 
 void Java_android_graphics_Paint_nGetFontMetricsIntForText(JNIEnv *env,
@@ -5207,13 +5312,13 @@ jfloat Java_android_graphics_Paint_nGetFontMetrics(JNIEnv *env,
                                                    jobject metrics)
 {
     (void) clazz;
-    (void) paint;
-    muplar_set_float_field(env, metrics, "top", -24.0f);
-    muplar_set_float_field(env, metrics, "ascent", -20.0f);
-    muplar_set_float_field(env, metrics, "descent", 6.0f);
-    muplar_set_float_field(env, metrics, "bottom", 8.0f);
+    float scale = muplar_text_scale(paint);
+    muplar_set_float_field(env, metrics, "top", (-30.0f * scale));
+    muplar_set_float_field(env, metrics, "ascent", (-30.0f * scale));
+    muplar_set_float_field(env, metrics, "descent", (8.0f * scale));
+    muplar_set_float_field(env, metrics, "bottom", (8.0f * scale));
     muplar_set_float_field(env, metrics, "leading", 0.0f);
-    return 32.0f;
+    return 38.0f * scale;
 }
 
 void Java_android_graphics_Paint_nGetCharArrayBounds(JNIEnv *env,
@@ -5268,7 +5373,12 @@ jfloat Java_android_graphics_Paint_nGetRunCharacterAdvance(JNIEnv *env,
     (void) offset;
     (void) run_info;
     count = end > start ? end - start : 0;
-    width = (jfloat) count * 16.0f;
+    width = 0.0f;
+    const jchar *chars = text ? (*env)->GetCharArrayElements(env, text, NULL) : NULL;
+    jint length = text ? (*env)->GetArrayLength(env, text) : 0;
+    for (jint i = 0; i < count; ++i)
+        width += muplar_character_advance(paint,
+            chars && start + i >= 0 && start + i < length ? chars[start + i] : ' ');
     if (advances) {
         array_len = (*env)->GetArrayLength(env, advances);
         if (advances_index >= 0 && advances_index < array_len) {
@@ -5279,7 +5389,8 @@ jfloat Java_android_graphics_Paint_nGetRunCharacterAdvance(JNIEnv *env,
             if (values) {
                 jint i;
                 for (i = 0; i < writable; i++)
-                    values[i] = 16.0f;
+                    values[i] = muplar_character_advance(paint,
+                        chars && start + i >= 0 && start + i < length ? chars[start + i] : ' ');
                 (*env)->SetFloatArrayRegion(env, advances, advances_index,
                                             writable, values);
                 free(values);
@@ -5290,6 +5401,8 @@ jfloat Java_android_graphics_Paint_nGetRunCharacterAdvance(JNIEnv *env,
     muplar_set_float_field(env, bounds, "top", -24.0f);
     muplar_set_float_field(env, bounds, "right", width > 0.0f ? width : 1.0f);
     muplar_set_float_field(env, bounds, "bottom", 8.0f);
+    if (chars)
+        (*env)->ReleaseCharArrayElements(env, text, (jchar *) chars, JNI_ABORT);
     return width;
 }
 
@@ -5422,10 +5535,7 @@ jfloat Java_android_graphics_Paint_nGetTextAdvances(JNIEnv *env,
         char ch = (chars && (index + i) >= 0 && (index + i) < text_len)
                       ? (char) (chars[index + i] & 0x7f)
                       : ' ';
-        int idx = (ch >= MUPLAR_FONT_FIRST_CHAR && ch <= MUPLAR_FONT_LAST_CHAR)
-                      ? (ch - MUPLAR_FONT_FIRST_CHAR)
-                      : ('?' - MUPLAR_FONT_FIRST_CHAR);
-        jfloat adv = (jfloat) muplar_font_advances[idx];
+        jfloat adv = muplar_character_advance(paint, (jchar) ch);
         total_width += adv;
         if (i < writable) {
             local_adv[i] = adv;
@@ -5483,10 +5593,7 @@ jfloat Java_android_graphics_Paint_nGetTextAdvancesString(JNIEnv *env,
         char ch = (chars && (index + i) >= 0 && (index + i) < text_len)
                       ? (char) (chars[index + i] & 0x7f)
                       : ' ';
-        int idx = (ch >= MUPLAR_FONT_FIRST_CHAR && ch <= MUPLAR_FONT_LAST_CHAR)
-                      ? (ch - MUPLAR_FONT_FIRST_CHAR)
-                      : ('?' - MUPLAR_FONT_FIRST_CHAR);
-        jfloat adv = (jfloat) muplar_font_advances[idx];
+        jfloat adv = muplar_character_advance(paint, (jchar) ch);
         total_width += adv;
         if (i < writable) {
             local_adv[i] = adv;
@@ -5500,6 +5607,21 @@ jfloat Java_android_graphics_Paint_nGetTextAdvancesString(JNIEnv *env,
                                     local_adv);
     }
     return total_width;
+}
+
+void Java_android_graphics_Paint_nGetStringBounds(
+    JNIEnv *env, jclass clazz, jlong paint, jstring text,
+    jint start, jint end, jint bidi_flags, jobject bounds)
+{
+    float width = Java_android_graphics_Paint_nGetTextAdvancesString(
+        env, clazz, paint, text, start, end - start, start, end - start,
+        bidi_flags, NULL, 0);
+    float scale = muplar_text_scale(paint);
+    muplar_set_int_field(env, bounds, "left", 0);
+    muplar_set_int_field(env, bounds, "top", muplar_floor_to_int(-MUPLAR_FONT_BASELINE * scale));
+    muplar_set_int_field(env, bounds, "right", muplar_ceil_to_int(width));
+    muplar_set_int_field(env, bounds, "bottom",
+        muplar_ceil_to_int((MUPLAR_FONT_H - MUPLAR_FONT_BASELINE) * scale));
 }
 
 jboolean Java_android_graphics_Paint_nHasGlyph(JNIEnv *env,
@@ -6185,10 +6307,36 @@ void Java_android_graphics_Canvas_nDrawRoundRect(JNIEnv *env,
                                                  jfloat ry,
                                                  jlong paint)
 {
-    (void) rx;
-    (void) ry;
-    Java_android_graphics_BaseCanvas_nDrawRect(env, clazz, canvas, left, top,
-                                               right, bottom, paint);
+    struct muplar_canvas_state *c = muplar_canvas_for_drawing(canvas);
+    struct muplar_bitmap_state *bitmap = c ? muplar_find_bitmap(c->bitmap_token) : NULL;
+    struct muplar_paint_state *p = muplar_find_paint(paint);
+    if (!c || !bitmap || rx <= 0 || ry <= 0 || (p && p->shader)) {
+        Java_android_graphics_BaseCanvas_nDrawRect(
+            env, clazz, canvas, left, top, right, bottom, paint);
+        return;
+    }
+    float l = fminf(left * c->sx + c->tx, right * c->sx + c->tx);
+    float r = fmaxf(left * c->sx + c->tx, right * c->sx + c->tx);
+    float t = fminf(top * c->sy + c->ty, bottom * c->sy + c->ty);
+    float b = fmaxf(top * c->sy + c->ty, bottom * c->sy + c->ty);
+    float radius_x = fminf(fabsf(rx * c->sx), (r - l) / 2);
+    float radius_y = fminf(fabsf(ry * c->sy), (b - t) / 2);
+    if (radius_x <= 0 || radius_y <= 0) return;
+    uint32_t color = muplar_paint_color(paint, 0xff000000u);
+    int start = muplar_floor_to_int(fmaxf(t, fmaxf(0, c->clip_top)));
+    int end = muplar_ceil_to_int(fminf(b, fminf(bitmap->height, c->clip_bottom)));
+    for (int y = start; y < end; ++y) {
+        float distance = fmaxf(t + radius_y - (y + 0.5f),
+                               y + 0.5f - (b - radius_y));
+        float inset = 0;
+        if (distance > 0) {
+            float normalized = fminf(distance / radius_y, 1);
+            inset = radius_x * (1 - sqrtf(1 - normalized * normalized));
+        }
+        int row_left = muplar_ceil_to_int(fmaxf(l + inset, c->clip_left));
+        int row_right = muplar_floor_to_int(fminf(r - inset, c->clip_right));
+        muplar_fill_rect(bitmap, row_left, y, row_right, y + 1, color);
+    }
 }
 
 void Java_android_graphics_BaseCanvas_nDrawPaint(JNIEnv *env,
@@ -6371,76 +6519,70 @@ static void muplar_draw_text(JNIEnv *env,
     if (!c || !dst || !dst->pixels || !text || len <= 0)
         return;
 
-    uint32_t tr = (text_color >> 16) & 0xff;
-    uint32_t tg = (text_color >> 8) & 0xff;
-    uint32_t tb = text_color & 0xff;
-
-    const char *p = text;
-    int plen = len;
-    while (plen > 0 && (*p == ' ' || *p == '\t')) {
-        p++;
-        plen--;
-    }
-    int tlen = plen;
-    while (tlen > 0 && (p[tlen - 1] == ' ' || p[tlen - 1] == '\t' ||
-                        p[tlen - 1] == '\r' || p[tlen - 1] == '\n')) {
-        tlen--;
-    }
-    if (tlen == 4 && memcmp(p, "null", 4) == 0) {
-        text = "Search apps...";
-        len = 14;
-        tr = tg = tb = 128;
-    }
-    uint32_t base_alpha = (text_color >> 24) & 0xff;
-    if (base_alpha == 0)
-        base_alpha = 255;
-
+    float scale = muplar_text_scale(paint);
+    if (scale <= 0 || c->sx == 0 || c->sy == 0)
+        return;
+    struct muplar_paint_state *style = muplar_find_paint(paint);
+    float scale_x = style ? style->text_scale_x : 1.0f;
+    if (scale_x == 0) return;
     float cur_x = x;
-    for (int i = 0; i < len; i++) {
-        char ch = text[i];
+    if (style && style->text_align) {
+        float width = 0;
+        for (int i = 0; i < len; ++i)
+            width += muplar_character_advance(paint, (unsigned char) text[i]);
+        cur_x -= style->text_align == 1 ? width * 0.5f : width;
+    }
+    for (int i = 0; i < len; ++i) {
+        unsigned char ch = text[i];
         if (ch == '\r' || ch == '\n')
             continue;
-        int idx = (ch >= MUPLAR_FONT_FIRST_CHAR && ch <= MUPLAR_FONT_LAST_CHAR)
-                      ? (ch - MUPLAR_FONT_FIRST_CHAR)
-                      : ('?' - MUPLAR_FONT_FIRST_CHAR);
-        int adv = muplar_font_advances[idx];
-        const uint8_t *glyph = muplar_font_alpha[idx];
-
-        // The font baseline is at row 11. The canvas baseline is at y.
-        // Therefore glyph top (row 0) should be at y - 11.0f.
-        int gx = muplar_floor_to_int(cur_x * c->sx + c->tx);
-        int gy = muplar_floor_to_int((y - 11.0f) * c->sy + c->ty);
-
-        for (int r = 0; r < MUPLAR_FONT_H; r++) {
-            int py = gy + r;
-            if (py < c->clip_top || py >= c->clip_bottom || py < 0 ||
-                py >= dst->height)
-                continue;
-            for (int col = 0; col < MUPLAR_FONT_W; col++) {
-                int px = gx + col;
-                if (px < c->clip_left || px >= c->clip_right || px < 0 ||
-                    px >= dst->width)
-                    continue;
-                uint8_t ga = glyph[r * MUPLAR_FONT_W + col];
-                if (ga == 0)
-                    continue;
-                uint32_t a = ((uint32_t) ga * base_alpha) / 255;
-                size_t p_idx = (size_t) py * (size_t) dst->width + (size_t) px;
-                uint32_t dp = dst->pixels[p_idx];
-                uint32_t dr = (dp >> 16) & 0xff;
-                uint32_t dg = (dp >> 8) & 0xff;
-                uint32_t db = dp & 0xff;
-                uint32_t da = (dp >> 24) & 0xff;
-
-                uint32_t out_r = (tr * a + dr * (255 - a)) / 255;
-                uint32_t out_g = (tg * a + dg * (255 - a)) / 255;
-                uint32_t out_b = (tb * a + db * (255 - a)) / 255;
-                uint32_t out_a = a + (da * (255 - a)) / 255;
-                dst->pixels[p_idx] =
-                    (out_a << 24) | (out_r << 16) | (out_g << 8) | out_b;
+        int index = ch >= MUPLAR_FONT_FIRST_CHAR && ch <= MUPLAR_FONT_LAST_CHAR
+            ? ch - MUPLAR_FONT_FIRST_CHAR : '?' - MUPLAR_FONT_FIRST_CHAR;
+        const uint8_t *glyph = muplar_font_alpha[index];
+        float origin_x = cur_x * c->sx + c->tx;
+        float origin_y = (y - MUPLAR_FONT_BASELINE * scale) * c->sy + c->ty;
+        float sx = scale * scale_x * c->sx;
+        float sy = scale * c->sy;
+        float end_x = origin_x + MUPLAR_FONT_W * sx;
+        float end_y = origin_y + MUPLAR_FONT_H * sy;
+        int left = muplar_floor_to_int(fminf(origin_x, end_x));
+        int top = muplar_floor_to_int(fminf(origin_y, end_y));
+        int right = muplar_ceil_to_int(fmaxf(origin_x, end_x));
+        int bottom = muplar_ceil_to_int(fmaxf(origin_y, end_y));
+        if (left < c->clip_left) left = c->clip_left;
+        if (top < c->clip_top) top = c->clip_top;
+        if (right > c->clip_right) right = c->clip_right;
+        if (bottom > c->clip_bottom) bottom = c->clip_bottom;
+        if (left < 0) left = 0;
+        if (top < 0) top = 0;
+        if (right > dst->width) right = dst->width;
+        if (bottom > dst->height) bottom = dst->height;
+        for (int py = top; py < bottom; ++py) {
+            float fy = (py + 0.5f - origin_y) / sy - 0.5f;
+            int row = muplar_floor_to_int(fy);
+            float wy = fy - row;
+            for (int px = left; px < right; ++px) {
+                float fx = (px + 0.5f - origin_x) / sx - 0.5f;
+                int col = muplar_floor_to_int(fx);
+                float wx = fx - col;
+                float coverage = 0;
+                for (int dy = 0; dy < 2; ++dy) {
+                    for (int dx = 0; dx < 2; ++dx) {
+                        int r = row + dy;
+                        int c = col + dx;
+                        if (r >= 0 && r < MUPLAR_FONT_H &&
+                            c >= 0 && c < MUPLAR_FONT_W)
+                            coverage += glyph[r * MUPLAR_FONT_W + c] *
+                                (dx ? wx : 1 - wx) * (dy ? wy : 1 - wy);
+                    }
+                }
+                uint32_t alpha = (uint32_t) (coverage * (text_color >> 24) / 255);
+                size_t offset = (size_t) py * dst->width + px;
+                dst->pixels[offset] = muplar_composite_over(
+                    text_color, dst->pixels[offset], alpha);
             }
         }
-        cur_x += (float) adv;
+        cur_x += muplar_character_advance(paint, ch);
     }
 }
 
@@ -6886,7 +7028,7 @@ jlong Java_android_graphics_text_LineBreaker_nGetReleaseFunc(JNIEnv *env,
 {
     (void) env;
     (void) clazz;
-    return 0;
+    return (jlong) (uintptr_t) &muplar_noop_finalizer;
 }
 
 jlong Java_android_graphics_text_LineBreaker_nGetReleaseResultFunc(JNIEnv *env,
@@ -6894,7 +7036,7 @@ jlong Java_android_graphics_text_LineBreaker_nGetReleaseResultFunc(JNIEnv *env,
 {
     (void) env;
     (void) clazz;
-    return 0;
+    return (jlong) (uintptr_t) &muplar_noop_finalizer;
 }
 
 void Java_android_graphics_text_LineBreaker_nFinish(JNIEnv *env,
@@ -7042,7 +7184,7 @@ jlong Java_android_graphics_text_MeasuredText_nGetReleaseFunc(JNIEnv *env,
 {
     (void) env;
     (void) clazz;
-    return 0;
+    return (jlong) (uintptr_t) &muplar_noop_finalizer;
 }
 
 jlong Java_android_graphics_text_MeasuredText_00024Builder_nInitBuilder(
@@ -13443,7 +13585,7 @@ jlong Java_android_content_res_AssetManager_nativeGetThemeFreeFunction(
 {
     (void) env;
     (void) clazz;
-    return 0;
+    return (jlong) (uintptr_t) &muplar_noop_finalizer;
 }
 
 jlong Java_android_os_PerfettoTrace_00024Category_native_1init(JNIEnv *env,
@@ -13956,6 +14098,17 @@ Java_com_muplar_runtime_ArtApkMain_installTypefaceDefaultsNative(JNIEnv *env,
     muplar_install_typeface_defaults(env);
 }
 
+static void muplar_apply_free_function(JNIEnv *env, jclass clazz,
+                                      jlong function, jlong pointer)
+{
+    (void) env;
+    (void) clazz;
+    // Some framework shims use synthetic handles with no allocation to free.
+    // Their zero release callback must not become a call through address zero.
+    if (function)
+        ((void (*)(void *)) (uintptr_t) function)((void *) (uintptr_t) pointer);
+}
+
 JNIEXPORT jint JNICALL JNI_OnLoad(JavaVM *vm, void *reserved)
 {
     (void) reserved;
@@ -13964,6 +14117,14 @@ JNIEXPORT jint JNICALL JNI_OnLoad(JavaVM *vm, void *reserved)
     jclass cls;
     if ((*vm)->GetEnv(vm, (void **) &env, JNI_VERSION_1_6) != JNI_OK || !env)
         return JNI_ERR;
+
+    cls = (*env)->FindClass(env, "libcore/util/NativeAllocationRegistry");
+    if (cls) {
+        muplar_register_one(env, cls, "applyFreeFunction", "(JJ)V",
+                            (void *) muplar_apply_free_function);
+    } else {
+        muplar_clear_exception(env);
+    }
 
     cls = (*env)->FindClass(env, "com/muplar/runtime/MuplarGraphics");
     if (cls) {
@@ -14508,7 +14669,7 @@ JNIEXPORT jint JNICALL JNI_OnLoad(JavaVM *vm, void *reserved)
         (void *) Java_android_graphics_Paint_nSetMyanmarEncoding);
     muplar_register_one(
         env, cls, "nSetTextAlign", "(JI)V",
-        (void *) Java_android_graphics_Paint_nSetMyanmarEncoding);
+        (void *) Java_android_graphics_Paint_nSetTextAlign);
     muplar_register_one(env, cls, "nSetStyle", "(JI)V",
                         (void *) Java_android_graphics_Paint_nSetStyle);
     muplar_register_one(env, cls, "nGetStyle", "(J)I",
@@ -14536,15 +14697,23 @@ JNIEXPORT jint JNICALL JNI_OnLoad(JavaVM *vm, void *reserved)
     muplar_register_one(env, cls, "nSetStrikeThruText", "(JZ)V",
                         (void *) Java_android_graphics_Paint_nSetBoolean);
     muplar_register_one(env, cls, "nSetTextScaleX", "(JF)V",
-                        (void *) Java_android_graphics_Paint_nSetTextSize);
+                        (void *) Java_android_graphics_Paint_nSetTextScaleX);
     muplar_register_one(env, cls, "nSetTextSkewX", "(JF)V",
-                        (void *) Java_android_graphics_Paint_nSetTextSize);
+                        (void *) Java_android_graphics_Paint_nSetTextSkewX);
     muplar_register_one(env, cls, "nSetLetterSpacing", "(JF)V",
-                        (void *) Java_android_graphics_Paint_nSetTextSize);
+                        (void *) Java_android_graphics_Paint_nSetLetterSpacing);
     muplar_register_one(env, cls, "nGetLetterSpacing", "(J)F",
                         (void *) Java_android_graphics_Paint_nGetLetterSpacing);
     muplar_register_one(env, cls, "nSetWordSpacing", "(JF)V",
-                        (void *) Java_android_graphics_Paint_nSetTextSize);
+                        (void *) Java_android_graphics_Paint_nSetWordSpacing);
+    muplar_register_one(env, cls, "nGetTextScaleX", "(J)F",
+                        (void *) Java_android_graphics_Paint_nGetTextScaleX);
+    muplar_register_one(env, cls, "nGetTextSkewX", "(J)F",
+                        (void *) Java_android_graphics_Paint_nGetTextSkewX);
+    muplar_register_one(env, cls, "nGetWordSpacing", "(J)F",
+                        (void *) Java_android_graphics_Paint_nGetWordSpacing);
+    muplar_register_one(env, cls, "nGetTextAlign", "(J)I",
+                        (void *) Java_android_graphics_Paint_nGetTextAlign);
     muplar_register_one(env, cls, "nSetStrokeWidth", "(JF)V",
                         (void *) Java_android_graphics_Paint_nSetStrokeWidth);
     muplar_register_one(env, cls, "nGetStrokeWidth", "(J)F",
@@ -14597,8 +14766,17 @@ JNIEXPORT jint JNICALL JNI_OnLoad(JavaVM *vm, void *reserved)
         "(JLandroid/graphics/Paint$FontMetricsInt;)I",
         (void *) Java_android_graphics_Paint_nGetFontMetricsInt);
     muplar_register_one(
+        env, cls, "nGetFontMetricsInt",
+        "(JLandroid/graphics/Paint$FontMetricsInt;Z)I",
+        (void *) Java_android_graphics_Paint_nGetFontMetricsIntWithFallback);
+    muplar_register_one(
         env, cls, "nGetFontMetricsIntForText",
         "(J[CIIIIZLandroid/graphics/Paint$FontMetricsInt;)V",
+        (void *) Java_android_graphics_Paint_nGetFontMetricsIntForText);
+    // Font metrics are independent of the input container in this renderer.
+    muplar_register_one(
+        env, cls, "nGetFontMetricsIntForText",
+        "(JLjava/lang/String;IIIIZLandroid/graphics/Paint$FontMetricsInt;)V",
         (void *) Java_android_graphics_Paint_nGetFontMetricsIntForText);
     muplar_register_one(env, cls, "nGetFontMetrics",
                         "(JLandroid/graphics/Paint$FontMetrics;)F",
@@ -14619,6 +14797,9 @@ JNIEXPORT jint JNICALL JNI_OnLoad(JavaVM *vm, void *reserved)
         "(J[CIIIIZI[FILandroid/graphics/RectF;)F",
         (void *)
             Java_android_graphics_Paint_nGetRunCharacterAdvanceWithoutRunInfo);
+    muplar_register_one(
+        env, cls, "nGetStringBounds", "(JLjava/lang/String;IIILandroid/graphics/Rect;)V",
+        (void *) Java_android_graphics_Paint_nGetStringBounds);
     muplar_register_one(env, cls, "nGetRunAdvance", "(J[CIIIIZI)F",
                         (void *) Java_android_graphics_Paint_nGetRunAdvance);
     muplar_register_one(env, cls, "nBreakText", "(J[CIIFI[F)I",

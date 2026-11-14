@@ -1144,6 +1144,7 @@ public final class FrameworkDeviceController {
                                        android.view.View.MeasureSpec.makeMeasureSpec(rvh, android.view.View.MeasureSpec.EXACTLY));
                             rv.layout(0, 0, rvw, rvh);
                         }
+                        ensureDrawerSearchSpacing(appsView, rv);
                     } catch (Throwable t) {
                         System.err.println("[DeviceController] rv layout error: " + t);
                     }
@@ -1205,6 +1206,48 @@ public final class FrameworkDeviceController {
             MuplarFramePresenter.requestBurst();
         } catch (Throwable t) {
             System.err.println("[DeviceController] openAllApps error: " + t);
+        }
+    }
+
+    private static void ensureDrawerSearchSpacing(android.view.View appsView,
+                                                  android.view.View recycler) {
+        if (!(appsView instanceof android.view.ViewGroup) ||
+            !(recycler instanceof android.view.ViewGroup) ||
+            recycler.getParent() != appsView || recycler.canScrollVertically(-1)) {
+            return;
+        }
+        android.view.ViewGroup container = (android.view.ViewGroup) appsView;
+        android.view.View search = null;
+        for (int i = 0; i < container.getChildCount(); i++) {
+            android.view.View child = container.getChildAt(i);
+            if (child.getClass().getSimpleName().equals("AppsSearchContainerLayout")) {
+                search = child;
+                break;
+            }
+        }
+        if (search == null || search.getVisibility() != android.view.View.VISIBLE) {
+            return;
+        }
+        android.view.ViewGroup grid = (android.view.ViewGroup) recycler;
+        for (int i = 0; i < grid.getChildCount(); i++) {
+            android.view.View item = grid.getChildAt(i);
+            if (!item.getClass().getSimpleName().contains("BubbleTextView")) {
+                continue;
+            }
+            int gap = Math.round(12 * grid.getResources().getDisplayMetrics().density);
+            int extra = search.getBottom() + gap - grid.getTop() - item.getTop();
+            if (extra > 0) {
+                grid.setPadding(grid.getPaddingLeft(), grid.getPaddingTop() + extra,
+                    grid.getPaddingRight(), grid.getPaddingBottom());
+                grid.forceLayout();
+                grid.measure(
+                    android.view.View.MeasureSpec.makeMeasureSpec(grid.getWidth(),
+                        android.view.View.MeasureSpec.EXACTLY),
+                    android.view.View.MeasureSpec.makeMeasureSpec(grid.getHeight(),
+                        android.view.View.MeasureSpec.EXACTLY));
+                grid.layout(grid.getLeft(), grid.getTop(), grid.getRight(), grid.getBottom());
+            }
+            break;
         }
     }
 
