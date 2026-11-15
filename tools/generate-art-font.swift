@@ -1,5 +1,6 @@
 // Regenerate the software renderer's ASCII atlas from an Android font.
-// Run with swift tools/generate-art-font.swift /path/to/Roboto-Regular.ttf > muplar_font.h
+// Run from the repository root:
+// swift tools/generate-art-font.swift /path/to/Roboto-Regular.ttf | clang-format --style=file > platform/android-aarch64/art-shim/muplar_font.h
 import Foundation
 import CoreGraphics
 import CoreText
