@@ -14,6 +14,15 @@ The interactive device experience across the core loop is now **functioning and 
 - **Home Launcher (Launcher3)**: 🟢 **Working**. Launcher3 binds installed applications dynamically via manifest auto-sync, responds to drawer drag gestures, launches apps on icon tap, and cleanly handles Back navigation without looper deadlocks (`test-click-icon.sh`, `test-launcher-drag.sh`, `test-app-drawer.sh`).
 - **Application Lifecycle & Back-Stack**: 🟢 **Working**. Multi-activity task back-stacks, in-session dynamic APK installation, and custom `Application` subclass instantiation are verified (`test-app-launch.sh`, `test-backstack.sh`, `test-install-ux.sh`).
 
+### Active application compatibility target
+
+Google Play Store from Open GApps is the next real-application target.
+Startup is currently blocked by missing account-service support and additional
+initialization failures. See [the Play Store implementation plan](./play-store.md)
+for verified evidence, dependency order, reproduction commands and acceptance gates.
+Launcher3 and the framework test app remain regression baselines; their success
+does not establish Play Store compatibility.
+
 ---
 
 ## 2. Component Status Matrix
@@ -23,7 +32,8 @@ The interactive device experience across the core loop is now **functioning and 
 | **Display / Window** | `BLASTBufferQueue` & Presenter | 🟢 **Functional** | Event-driven software DecorView presentation active; valid visual frames verified. | [device-window.md](./device-window.md) |
 | **Touch Input** | `MotionEvent` & Touch Routing | 🟢 **Working** | Pointer events translated and dispatched cleanly to focused View/Activity. | [device-window.md](./device-window.md) |
 | **Home Launcher** | `Launcher3` | 🟢 **Working** | App icons bound dynamically, drawer gesture working, Back navigation stable. | [launcher3.md](./launcher3.md) |
-| **Target App** | `UiTest` / Applications | 🟢 **Working** | Multi-activity task back-stack, in-session install UX, and custom Application lifecycle verified. | [framework-services.md](./framework-services.md) |
+| **Framework Test App** | `UiTest` / Applications | 🟢 **Working** | Multi-activity task back-stack, in-session install UX, and custom Application lifecycle verified. | [framework-services.md](./framework-services.md) |
+| **Target App** | Google Play Store / Open GApps | 🔴 **Blocked** | Verified fixture and launcher-alias fix; application/account initialization still fails. | [play-store.md](./play-store.md) |
 | **Database** | SQLite & CursorWindow | 🟢 **Working** | Genuine AOSP `libandroid_runtime.so` SQLite symbols bound and persisting. | [framework-services.md](./framework-services.md) |
 | **App Identity** | `ActivityThread` / `AppBindData` | 🟢 **Working** | `mBoundApplication` populated, `Process.sProcessName` set, manifest Application class resolved. | [java-art-surface.md](./java-art-surface.md) |
 | **Network & Jobs** | `ConnectivityManager` & `JobScheduler` | 🟡 **Stubbed** | Bootstrap classes added for WorkManager initialization. | [framework-services.md](./framework-services.md) |
@@ -67,6 +77,7 @@ The interactive device experience across the core loop is now **functioning and 
 ## 4. Supporting Documentation Directory
 
 - [Android Device Window (`device-window.md`)](./device-window.md) — Shell, session controller, and frame presentation.
+- [Google Play Store (`play-store.md`)](./play-store.md) — Verified blockers, implementation sequence, isolated probes and end-to-end acceptance gates.
 - [Launcher3 Status (`launcher3.md`)](./launcher3.md) — Home launcher compatibility, blockers, and lifecycle.
 - [Framework Services Architecture (`framework-services.md`)](./framework-services.md) — Daemon services, SQLite, Connectivity, and JobScheduler.
 - [Java and ART Surface (`java-art-surface.md`)](./java-art-surface.md) — JNI bindings, class loader, and `ArtApkMain`.

@@ -246,8 +246,8 @@ final class MuplarFramePresenter {
             int width = root.getWidth();
             int height = root.getHeight();
             if (width <= 0 || height <= 0) {
-                width = 1080;
-                height = 1920;
+                width = MuplarDisplayConfig.widthPixels();
+                height = MuplarDisplayConfig.heightPixels();
             }
             if (root.isLayoutRequested() || root.getWidth() <= 0 || root.getHeight() <= 0) {
                 try {
@@ -309,6 +309,9 @@ final class MuplarFramePresenter {
     private static void fixBubbleTextViews(View v) {
         if (v == null) return;
         String cls = v.getClass().getSimpleName();
+        if (cls.equals("AppsSearchContainerLayout")) {
+            MuplarLayoutInflater.layoutSearchContainer(v);
+        }
         if (cls.contains("BubbleTextView")) {
             if (v instanceof TextView) {
                 TextView label = (TextView) v;
@@ -427,11 +430,13 @@ final class MuplarFramePresenter {
     private static void debugDumpViews(View v, int depth) {
         if (v == null || depth > 10) return;
         String cls = v.getClass().getSimpleName();
-        if (cls.contains("BubbleTextView") || cls.contains("AllApps") || cls.contains("PredictionRow")) {
+        if (cls.contains("BubbleTextView") || cls.contains("AllApps") ||
+            cls.contains("PredictionRow") || cls.contains("AppsSearchContainerLayout")) {
             StringBuilder sb = new StringBuilder();
             for (int i = 0; i < depth; i++) sb.append("  ");
             sb.append(cls).append(" w=").append(v.getWidth()).append(" h=").append(v.getHeight())
-              .append(" vis=").append(v.getVisibility());
+              .append(" vis=").append(v.getVisibility())
+              .append(" x=").append(v.getLeft()).append(" y=").append(v.getTop());
             if (cls.contains("BubbleTextView")) {
                 try {
                     java.lang.reflect.Field fIconSize = v.getClass().getDeclaredField("mIconSize");

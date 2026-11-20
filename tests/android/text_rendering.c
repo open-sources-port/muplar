@@ -27,6 +27,16 @@ static int drawn_width(struct muplar_bitmap_state *bitmap)
 
 int main(void)
 {
+    setenv("MUPLAR_ANDROID_DISPLAY_WIDTH", "1920", 1);
+    setenv("MUPLAR_ANDROID_DISPLAY_HEIGHT", "1080", 1);
+    assert(muplar_display_width() == 1920);
+    assert(muplar_display_height() == 1080);
+    setenv("MUPLAR_ANDROID_DISPLAY_WIDTH", "4097", 1);
+    setenv("MUPLAR_ANDROID_DISPLAY_HEIGHT", "invalid", 1);
+    assert(muplar_display_width() == 1080);
+    assert(muplar_display_height() == 1920);
+    unsetenv("MUPLAR_ANDROID_DISPLAY_WIDTH");
+    unsetenv("MUPLAR_ANDROID_DISPLAY_HEIGHT");
     struct muplar_bitmap_state *bitmap = muplar_alloc_bitmap(400, 120);
     assert(!muplar_frame_unchanged(bitmap, "frame-a"));
     muplar_remember_frame(bitmap, "frame-a");

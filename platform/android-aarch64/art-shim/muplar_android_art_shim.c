@@ -26,6 +26,28 @@
 #include <ucontext.h>
 #include "muplar_font.h"
 
+static int muplar_display_dimension(const char *name, int fallback)
+{
+    const char *value = getenv(name);
+    char *end = NULL;
+    long dimension = value ? strtol(value, &end, 10) : 0;
+    return value && end != value && !*end && dimension >= 160 &&
+                   dimension <= 4096
+               ? (int) dimension
+               : fallback;
+}
+
+static int muplar_display_width(void)
+{
+    return muplar_display_dimension("MUPLAR_ANDROID_DISPLAY_WIDTH", 1080);
+}
+
+static int muplar_display_height(void)
+{
+    return muplar_display_dimension("MUPLAR_ANDROID_DISPLAY_HEIGHT", 1920);
+}
+
+
 static void muplar_crash_handler(int sig, siginfo_t *info, void *ucontext)
 {
     ucontext_t *uc = (ucontext_t *) ucontext;
@@ -711,8 +733,8 @@ static void muplar_canvas_reset(struct muplar_canvas_state *canvas,
     canvas->sy = 1.0f;
     canvas->clip_left = 0;
     canvas->clip_top = 0;
-    canvas->clip_right = bitmap ? bitmap->width : 1080;
-    canvas->clip_bottom = bitmap ? bitmap->height : 1920;
+    canvas->clip_right = bitmap ? bitmap->width : muplar_display_width();
+    canvas->clip_bottom = bitmap ? bitmap->height : muplar_display_height();
     canvas->stack_depth = 0;
 }
 
@@ -5880,8 +5902,8 @@ jboolean Java_android_graphics_Canvas_nGetClipBounds(JNIEnv *env,
                                                      jlong canvas_token,
                                                      jobject bounds)
 {
-    int w = 1080;
-    int h = 1920;
+    int w = muplar_display_width();
+    int h = muplar_display_height();
     struct muplar_canvas_state *canvas =
         muplar_canvas_for_drawing(canvas_token);
     (void) clazz;
@@ -5967,13 +5989,14 @@ jboolean Java_android_graphics_Canvas_nIsOpaque(jlong canvas)
 jint Java_android_graphics_Canvas_nGetWidth(jlong canvas)
 {
     struct muplar_bitmap_state *bitmap = muplar_canvas_bitmap(canvas);
-    return bitmap && bitmap->width > 0 ? bitmap->width : 1080;
+    return bitmap && bitmap->width > 0 ? bitmap->width : muplar_display_width();
 }
 
 jint Java_android_graphics_Canvas_nGetHeight(jlong canvas)
 {
     struct muplar_bitmap_state *bitmap = muplar_canvas_bitmap(canvas);
-    return bitmap && bitmap->height > 0 ? bitmap->height : 1920;
+    return bitmap && bitmap->height > 0 ? bitmap->height
+                                        : muplar_display_height();
 }
 
 void Java_android_graphics_Canvas_nSetBitmap(JNIEnv *env,
@@ -12950,7 +12973,7 @@ jint Java_android_view_Surface_nativeGetWidth(JNIEnv *env,
     (void) env;
     (void) clazz;
     (void) native_object;
-    return 1080;
+    return muplar_display_width();
 }
 
 jint Java_android_view_Surface_nativeGetHeight(JNIEnv *env,
@@ -12960,7 +12983,7 @@ jint Java_android_view_Surface_nativeGetHeight(JNIEnv *env,
     (void) env;
     (void) clazz;
     (void) native_object;
-    return 1920;
+    return muplar_display_height();
 }
 
 void Java_android_view_Surface_nativeRelease(JNIEnv *env,
@@ -13019,8 +13042,8 @@ jlong Java_android_view_Surface_nativeLockCanvas(JNIEnv *env,
             if (fid) {
                 jlong current = (*env)->GetLongField(env, canvas_obj, fid);
                 if (!current || !muplar_find_canvas(current)) {
-                    struct muplar_bitmap_state *bmp =
-                        muplar_alloc_bitmap(1080, 1920);
+                    struct muplar_bitmap_state *bmp = muplar_alloc_bitmap(
+                        muplar_display_width(), muplar_display_height());
                     struct muplar_canvas_state *c =
                         muplar_alloc_canvas(bmp ? bmp->token : 0);
                     if (c) {

@@ -41,8 +41,8 @@ final class MuplarScreenshot {
         int width = root.getWidth();
         int height = root.getHeight();
         if (width <= 0 || height <= 0) {
-            width = 1080;
-            height = 1920;
+            width = MuplarDisplayConfig.widthPixels();
+            height = MuplarDisplayConfig.heightPixels();
             try {
                 int wSpec = View.MeasureSpec.makeMeasureSpec(width, View.MeasureSpec.EXACTLY);
                 int hSpec = View.MeasureSpec.makeMeasureSpec(height, View.MeasureSpec.EXACTLY);

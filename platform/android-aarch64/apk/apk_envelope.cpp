@@ -608,15 +608,20 @@ std::optional<std::string> infer_plain_manifest_launch_activity(
 
         std::string tag =
             manifest.substr(activity_start, open_end - activity_start + 1);
-        std::optional<std::string> name = tag_attribute(tag, "android:name");
+        bool is_alias = tag.find("<activity-alias") == 0;
+        const char *attribute =
+            is_alias ? "android:targetActivity" : "android:name";
+        std::optional<std::string> name = tag_attribute(tag, attribute);
         if (!name)
-            name = tag_attribute(tag, "name");
+            name = tag_attribute(tag, is_alias ? "targetActivity" : "name");
 
-        size_t activity_end = manifest.find("</activity>", open_end);
-        size_t block_end =
-            activity_end == std::string::npos
-                ? open_end
-                : activity_end + std::string("</activity>").size();
+        std::string close_tag = is_alias ? "</activity-alias>" : "</activity>";
+        bool self_closing = tag.size() >= 2 && tag[tag.size() - 2] == '/';
+        size_t activity_end = self_closing ? std::string::npos
+                                           : manifest.find(close_tag, open_end);
+        size_t block_end = activity_end == std::string::npos
+                               ? open_end + 1
+                               : activity_end + close_tag.size();
         std::string block =
             manifest.substr(activity_start, block_end - activity_start);
 
@@ -928,12 +933,15 @@ std::optional<std::string> infer_binary_manifest_launch_activity(
             uint32_t name_idx = read_u32(manifest, off + 20);
             std::string element =
                 name_idx < strings.size() ? strings[name_idx] : std::string();
-            if (element == "activity") {
-                auto name = attribute_value(off, "name");
+            if (element == "activity" || element == "activity-alias") {
+                bool is_alias = element == "activity-alias";
+                auto name =
+                    attribute_value(off, is_alias ? "targetActivity" : "name");
+                current_activity.reset();
                 if (name) {
                     current_activity = normalize_activity_name(
                         package_name.value_or(std::string()), *name);
-                    if (!first_activity)
+                    if (!is_alias && !first_activity)
                         first_activity = current_activity;
                     has_main_action = false;
                     has_launcher_category = false;
@@ -958,7 +966,8 @@ std::optional<std::string> infer_binary_manifest_launch_activity(
                    off + 24 <= manifest.size()) {
             uint32_t name_idx = read_u32(manifest, off + 20);
             if (current_activity && name_idx < strings.size() &&
-                strings[name_idx] == "activity") {
+                (strings[name_idx] == "activity" ||
+                 strings[name_idx] == "activity-alias")) {
                 if (has_main_action && has_launcher_category)
                     launcher_activities.push_back(*current_activity);
                 current_activity.reset();

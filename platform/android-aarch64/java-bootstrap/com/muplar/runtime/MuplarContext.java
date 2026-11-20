@@ -39,6 +39,8 @@ import java.util.Map;
 import java.util.concurrent.Executor;
 
 public final class MuplarContext extends ContextWrapper {
+    private static final java.util.Set<String> unsupportedSystemServices =
+        Collections.synchronizedSet(new java.util.HashSet<String>());
     private final String packageName;
     private final ClassLoader classLoader;
     private final ApplicationInfo applicationInfo;
@@ -622,6 +624,9 @@ public final class MuplarContext extends ContextWrapper {
         }
         if (Context.WIFI_SERVICE.equals(name) || "wifi".equals(name) || "android.net.wifi.WifiManager".equals(name)) {
             return wifiManager;
+        }
+        if (name != null && unsupportedSystemServices.add(name)) {
+            System.err.println("[Muplar/Context] unsupported system service: " + name);
         }
         return null;
     }
@@ -1251,8 +1256,8 @@ public final class MuplarContext extends ContextWrapper {
     private static Resources createResourcesFromAssets(AssetManager assets) {
         DisplayMetrics metrics = new DisplayMetrics();
         metrics.setToDefaults();
-        metrics.widthPixels = 1080;
-        metrics.heightPixels = 1920;
+        metrics.widthPixels = MuplarDisplayConfig.widthPixels();
+        metrics.heightPixels = MuplarDisplayConfig.heightPixels();
         metrics.densityDpi = DisplayMetrics.DENSITY_XXHIGH;
         metrics.density = metrics.densityDpi / 160.0f;
         metrics.scaledDensity = metrics.density;
@@ -1261,10 +1266,11 @@ public final class MuplarContext extends ContextWrapper {
 
         Configuration config = new Configuration();
         config.setToDefaults();
-        config.orientation = Configuration.ORIENTATION_PORTRAIT;
-        config.screenWidthDp = 360;
-        config.screenHeightDp = 640;
-        config.smallestScreenWidthDp = 360;
+        config.orientation = metrics.widthPixels > metrics.heightPixels
+            ? Configuration.ORIENTATION_LANDSCAPE : Configuration.ORIENTATION_PORTRAIT;
+        config.screenWidthDp = Math.round(metrics.widthPixels / metrics.density);
+        config.screenHeightDp = Math.round(metrics.heightPixels / metrics.density);
+        config.smallestScreenWidthDp = Math.min(config.screenWidthDp, config.screenHeightDp);
         config.densityDpi = metrics.densityDpi;
         return new Resources(assets, metrics, config);
     }
@@ -1369,7 +1375,7 @@ public final class MuplarContext extends ContextWrapper {
         try {
             final Class<?> type = Class.forName("android.view.WindowManager");
             final WindowMetrics metrics = new WindowMetrics(
-                new Rect(0, 0, 1080, 1920),
+                new Rect(0, 0, MuplarDisplayConfig.widthPixels(), MuplarDisplayConfig.heightPixels()),
                 WindowInsets.CONSUMED,
                 3.0f);
             return java.lang.reflect.Proxy.newProxyInstance(
@@ -1611,14 +1617,14 @@ public final class MuplarContext extends ContextWrapper {
                 fromPhysicalDisplayId.invoke(null, Long.valueOf(1L)));
         } catch (Throwable ignored) {
         }
-        setFieldIfPresent(info, "appWidth", Integer.valueOf(1080));
-        setFieldIfPresent(info, "appHeight", Integer.valueOf(1920));
-        setFieldIfPresent(info, "logicalWidth", Integer.valueOf(1080));
-        setFieldIfPresent(info, "logicalHeight", Integer.valueOf(1920));
-        setFieldIfPresent(info, "smallestNominalAppWidth", Integer.valueOf(1080));
-        setFieldIfPresent(info, "smallestNominalAppHeight", Integer.valueOf(1920));
-        setFieldIfPresent(info, "largestNominalAppWidth", Integer.valueOf(1080));
-        setFieldIfPresent(info, "largestNominalAppHeight", Integer.valueOf(1920));
+        setFieldIfPresent(info, "appWidth", Integer.valueOf(MuplarDisplayConfig.widthPixels()));
+        setFieldIfPresent(info, "appHeight", Integer.valueOf(MuplarDisplayConfig.heightPixels()));
+        setFieldIfPresent(info, "logicalWidth", Integer.valueOf(MuplarDisplayConfig.widthPixels()));
+        setFieldIfPresent(info, "logicalHeight", Integer.valueOf(MuplarDisplayConfig.heightPixels()));
+        setFieldIfPresent(info, "smallestNominalAppWidth", Integer.valueOf(MuplarDisplayConfig.widthPixels()));
+        setFieldIfPresent(info, "smallestNominalAppHeight", Integer.valueOf(MuplarDisplayConfig.heightPixels()));
+        setFieldIfPresent(info, "largestNominalAppWidth", Integer.valueOf(MuplarDisplayConfig.widthPixels()));
+        setFieldIfPresent(info, "largestNominalAppHeight", Integer.valueOf(MuplarDisplayConfig.heightPixels()));
         setFieldIfPresent(info, "rotation", Integer.valueOf(0));
         setFieldIfPresent(info, "type", Integer.valueOf(1));
         setFieldIfPresent(info, "modeId", Integer.valueOf(1));
@@ -1631,8 +1637,8 @@ public final class MuplarContext extends ContextWrapper {
                 Integer.TYPE, Integer.TYPE, Integer.TYPE, Float.TYPE);
         modeCtor.setAccessible(true);
         Object mode = modeCtor.newInstance(
-            Integer.valueOf(1), Integer.valueOf(1080),
-            Integer.valueOf(1920), Float.valueOf(60.0f));
+            Integer.valueOf(1), Integer.valueOf(MuplarDisplayConfig.widthPixels()),
+            Integer.valueOf(MuplarDisplayConfig.heightPixels()), Float.valueOf(60.0f));
         Object modes = java.lang.reflect.Array.newInstance(modeType, 1);
         java.lang.reflect.Array.set(modes, 0, mode);
         setFieldIfPresent(info, "supportedModes", modes);

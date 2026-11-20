@@ -214,6 +214,8 @@ public final class MuplarLayoutInflater extends LayoutInflater {
         tv.setTextColor(0xff202124);
         tv.setHintTextColor(0xff5f6368);
         tv.setGravity(android.view.Gravity.START | android.view.Gravity.CENTER_VERTICAL);
+        tv.setSingleLine(true);
+        tv.setEllipsize(android.text.TextUtils.TruncateAt.END);
         tv.setPadding((int) (20 * density), 0, (int) (20 * density), 0);
         android.graphics.drawable.GradientDrawable background =
             new android.graphics.drawable.GradientDrawable();
@@ -247,6 +249,45 @@ public final class MuplarLayoutInflater extends LayoutInflater {
                 tv.setHint(searchHint);
             }
         }
+    }
+
+    static void layoutSearchContainer(View view) {
+        if (!(view instanceof android.widget.TextView) ||
+            !(view.getParent() instanceof View)) return;
+        View parent = (View) view.getParent();
+        int available = parent.getWidth() - parent.getPaddingLeft() - parent.getPaddingRight();
+        if (available <= 0) return;
+        android.widget.TextView search = (android.widget.TextView) view;
+        float density = search.getResources().getDisplayMetrics().density;
+        int margin = Math.min(Math.round(16 * density), available / 4);
+        int width = Math.min(available - 2 * margin, Math.round(720 * density));
+        int height = Math.max(Math.round(48 * density),
+            (int) Math.ceil(search.getPaint().getFontSpacing()) + Math.round(16 * density));
+        int left = parent.getPaddingLeft() + (available - width) / 2;
+        int top = parent.getPaddingTop() + margin;
+        if (parent.getHeight() > 0) {
+            top = Math.max(parent.getPaddingTop(), Math.min(top,
+                parent.getHeight() - parent.getPaddingBottom() - height));
+        }
+        if (search.getBackgroundTintList() != null) {
+            search.setBackgroundTintList(null);
+        }
+        if (search.getBackground() instanceof android.graphics.drawable.GradientDrawable) {
+            android.graphics.drawable.GradientDrawable background =
+                (android.graphics.drawable.GradientDrawable) search.getBackground();
+            if (background.getColor() == null ||
+                background.getColor().getDefaultColor() != 0xfff5f5fa) {
+                background.setColor(0xfff5f5fa);
+            }
+            if (background.getCornerRadius() != height / 2.0f) {
+                background.setCornerRadius(height / 2.0f);
+            }
+        }
+        if (view.getLeft() == left && view.getTop() == top &&
+            view.getWidth() == width && view.getHeight() == height) return;
+        search.measure(View.MeasureSpec.makeMeasureSpec(width, View.MeasureSpec.EXACTLY),
+            View.MeasureSpec.makeMeasureSpec(height, View.MeasureSpec.EXACTLY));
+        search.layout(left, top, left + width, top + height);
     }
 
     private static final class FrameworkThemeContext extends ContextWrapper {

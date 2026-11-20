@@ -537,6 +537,11 @@ static NSView* AndroidDeviceTabChipView(NSString* title,
     return self;
 }
 
+- (NSSize)displayPixelSize
+{
+    return NSMakeSize(_framePixelWidth, _framePixelHeight);
+}
+
 - (void)dealloc
 {
     if (_frameClientFd >= 0)

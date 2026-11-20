@@ -550,6 +550,12 @@ ArtBootstrapPlan build_art_bootstrap_plan(const ArtBootstrapConfig &config)
     }
     if (!plan.art_shim_guest_path.empty())
         plan.env.push_back("LD_PRELOAD=" + plan.art_shim_guest_path);
+    for (const char *name :
+         {"MUPLAR_ANDROID_DISPLAY_WIDTH", "MUPLAR_ANDROID_DISPLAY_HEIGHT",
+          "MUPLAR_DEBUG_VIEWS"}) {
+        if (const char *value = std::getenv(name); value && *value)
+            plan.env.push_back(std::string(name) + "=" + value);
+    }
     plan.env.push_back("ANDROID_ROOT=/system");
     plan.env.push_back("ANDROID_DATA=/data");
     if (exists_dir(sysroot_join(plan.sysroot, "/apex/com.android.runtime")))

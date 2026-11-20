@@ -16,6 +16,7 @@
                                                float x,
                                                float y);
 @property(nonatomic, copy) void (^installApkHandler)(NSString* apkPath);
+- (NSSize)displayPixelSize;
 - (instancetype)initWithPrefixName:(NSString*)prefixName;
 - (void)focusOrCreateTabWithIdentifier:(NSString*)identifier title:(NSString*)title;
 - (void)focusLauncherTab;

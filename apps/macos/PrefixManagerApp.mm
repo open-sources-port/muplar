@@ -4984,6 +4984,11 @@ static NSString* MapLinuxIconToSFSymbol(NSString* icon)
             : angleDir;
     }
     ApplyDefaultLinuxDisplayEnvironment(env);
+    NSSize displaySize = [shell displayPixelSize];
+    env[@"MUPLAR_ANDROID_DISPLAY_WIDTH"] =
+        [NSString stringWithFormat:@"%.0f", displaySize.width];
+    env[@"MUPLAR_ANDROID_DISPLAY_HEIGHT"] =
+        [NSString stringWithFormat:@"%.0f", displaySize.height];
     env[@"MUPLAR_HOST_WINDOW_FRAME_SOCKET"] = frameSocketPath;
     env[@"MUPLAR_HOST_WINDOW_SOFTWARE_FRAME_PATH"] = softwareFrameHostPath;
     env[@"MUPLAR_ANDROID_SOFTWARE_FRAME_PATH"] =

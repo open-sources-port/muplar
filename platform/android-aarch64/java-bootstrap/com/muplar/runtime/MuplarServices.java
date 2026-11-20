@@ -985,7 +985,7 @@ public final class MuplarServices {
                     setFieldIfPresent(outResult, "frames", frames);
                 }
                 if (frames != null) {
-                    android.graphics.Rect rect = new android.graphics.Rect(0, 0, 1080, 1920);
+                    android.graphics.Rect rect = new android.graphics.Rect(0, 0, MuplarDisplayConfig.widthPixels(), MuplarDisplayConfig.heightPixels());
                     setFieldIfPresent(frames, "frame", rect);
                     setFieldIfPresent(frames, "displayFrame", rect);
                     setFieldIfPresent(frames, "parentFrame", rect);
@@ -1444,14 +1444,14 @@ public final class MuplarServices {
                 fromPhysicalDisplayId.invoke(null, Long.valueOf(1L)));
         } catch (Throwable ignored) {
         }
-        setFieldIfPresent(info, "appWidth", Integer.valueOf(1080));
-        setFieldIfPresent(info, "appHeight", Integer.valueOf(1920));
-        setFieldIfPresent(info, "logicalWidth", Integer.valueOf(1080));
-        setFieldIfPresent(info, "logicalHeight", Integer.valueOf(1920));
-        setFieldIfPresent(info, "smallestNominalAppWidth", Integer.valueOf(1080));
-        setFieldIfPresent(info, "smallestNominalAppHeight", Integer.valueOf(1920));
-        setFieldIfPresent(info, "largestNominalAppWidth", Integer.valueOf(1080));
-        setFieldIfPresent(info, "largestNominalAppHeight", Integer.valueOf(1920));
+        setFieldIfPresent(info, "appWidth", Integer.valueOf(MuplarDisplayConfig.widthPixels()));
+        setFieldIfPresent(info, "appHeight", Integer.valueOf(MuplarDisplayConfig.heightPixels()));
+        setFieldIfPresent(info, "logicalWidth", Integer.valueOf(MuplarDisplayConfig.widthPixels()));
+        setFieldIfPresent(info, "logicalHeight", Integer.valueOf(MuplarDisplayConfig.heightPixels()));
+        setFieldIfPresent(info, "smallestNominalAppWidth", Integer.valueOf(MuplarDisplayConfig.widthPixels()));
+        setFieldIfPresent(info, "smallestNominalAppHeight", Integer.valueOf(MuplarDisplayConfig.heightPixels()));
+        setFieldIfPresent(info, "largestNominalAppWidth", Integer.valueOf(MuplarDisplayConfig.widthPixels()));
+        setFieldIfPresent(info, "largestNominalAppHeight", Integer.valueOf(MuplarDisplayConfig.heightPixels()));
         setFieldIfPresent(info, "rotation", Integer.valueOf(0));
         setFieldIfPresent(info, "type", Integer.valueOf(1));
         setFieldIfPresent(info, "modeId", Integer.valueOf(1));
@@ -1465,8 +1465,8 @@ public final class MuplarServices {
                 Integer.TYPE, Integer.TYPE, Integer.TYPE, Float.TYPE);
         modeCtor.setAccessible(true);
         Object mode = modeCtor.newInstance(
-            Integer.valueOf(1), Integer.valueOf(1080),
-            Integer.valueOf(1920), Float.valueOf(60.0f));
+            Integer.valueOf(1), Integer.valueOf(MuplarDisplayConfig.widthPixels()),
+            Integer.valueOf(MuplarDisplayConfig.heightPixels()), Float.valueOf(60.0f));
         Object modes = java.lang.reflect.Array.newInstance(modeType, 1);
         java.lang.reflect.Array.set(modes, 0, mode);
         setFieldIfPresent(info, "supportedModes", modes);

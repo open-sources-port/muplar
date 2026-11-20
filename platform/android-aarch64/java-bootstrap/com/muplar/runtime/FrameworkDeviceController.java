@@ -1095,8 +1095,8 @@ public final class FrameworkDeviceController {
                 java.lang.reflect.Method getDecorView = window.getClass().getMethod("getDecorView");
                 android.view.View decor = (android.view.View) getDecorView.invoke(window);
                 if (decor != null) {
-                    int w = decor.getWidth() > 0 ? decor.getWidth() : 1080;
-                    int h = decor.getHeight() > 0 ? decor.getHeight() : 1920;
+                    int w = decor.getWidth() > 0 ? decor.getWidth() : MuplarDisplayConfig.widthPixels();
+                    int h = decor.getHeight() > 0 ? decor.getHeight() : MuplarDisplayConfig.heightPixels();
                     decor.measure(android.view.View.MeasureSpec.makeMeasureSpec(w, android.view.View.MeasureSpec.EXACTLY),
                                   android.view.View.MeasureSpec.makeMeasureSpec(h, android.view.View.MeasureSpec.EXACTLY));
                     decor.layout(0, 0, w, h);
@@ -1122,8 +1122,8 @@ public final class FrameworkDeviceController {
                             }
                         }
                     }
-                    int w = 1080;
-                    int h = 1920;
+                    int w = MuplarDisplayConfig.widthPixels();
+                    int h = MuplarDisplayConfig.heightPixels();
                     if (appsView.getParent() instanceof android.view.View) {
                         android.view.View p = (android.view.View) appsView.getParent();
                         if (p.getWidth() > 0) w = p.getWidth();
@@ -1228,6 +1228,7 @@ public final class FrameworkDeviceController {
         if (search == null || search.getVisibility() != android.view.View.VISIBLE) {
             return;
         }
+        MuplarLayoutInflater.layoutSearchContainer(search);
         android.view.ViewGroup grid = (android.view.ViewGroup) recycler;
         for (int i = 0; i < grid.getChildCount(); i++) {
             android.view.View item = grid.getChildAt(i);
@@ -1294,8 +1295,8 @@ public final class FrameworkDeviceController {
                 java.lang.reflect.Method getDecorView = window.getClass().getMethod("getDecorView");
                 android.view.View decor = (android.view.View) getDecorView.invoke(window);
                 if (decor != null) {
-                    int w = decor.getWidth() > 0 ? decor.getWidth() : 1080;
-                    int h = decor.getHeight() > 0 ? decor.getHeight() : 1920;
+                    int w = decor.getWidth() > 0 ? decor.getWidth() : MuplarDisplayConfig.widthPixels();
+                    int h = decor.getHeight() > 0 ? decor.getHeight() : MuplarDisplayConfig.heightPixels();
                     decor.measure(android.view.View.MeasureSpec.makeMeasureSpec(w, android.view.View.MeasureSpec.EXACTLY),
                                   android.view.View.MeasureSpec.makeMeasureSpec(h, android.view.View.MeasureSpec.EXACTLY));
                     decor.layout(0, 0, w, h);
