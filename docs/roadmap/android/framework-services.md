@@ -59,8 +59,26 @@ Muplar hosts shared Android framework services and system manager shims through 
 | **LauncherApps** | `android.content.pm` | ✅ Backed by Manifest Auto-Sync | Completed |
 | **ConnectivityManager** | `android.net` | 🟡 Bootstrap Stubbed | In Progress |
 | **JobScheduler** | `android.app.job` | 🟡 Bootstrap Stubbed | In Progress |
-| **NotificationManager** | `android.app` | 🟡 Partial Stub | In Progress |
+| **NotificationManager** | `android.app` | 🟡 Persistent channel/group metadata; delivery remains incomplete | In Progress |
 | **AlarmManager** | `android.app` | 🟡 Basic Stub | In Progress |
 | **InputMethodManager (IME)**| `android.view.inputmethod` | 🔴 Missing | P2 |
 | **DownloadManager** | `android.app` | ⏳ Not Started | P3 |
 
+
+## Notification-channel metadata milestone
+
+`MuplarNotificationChannels` implements the public self-package channel/group
+metadata operations through the framework's `INotificationManager` interface.
+It returns valid `ParceledListSlice` results, stores defensive snapshots, retains
+channel behavior on deletion/recreation, and persists package-keyed state in the
+instance rootfs using file locks, fsync and atomic rename.
+
+The real-ART smoke test uses two packages and separate guest launches to verify
+CRUD, namespace separation and restart persistence. Account and stable-display
+regressions also pass. This does not implement notification delivery to macOS,
+full caller authorization, multi-user operation or metadata migration across
+framework versions.
+
+See [the Play Store plan](./play-store.md) for reproduction commands and the
+remaining native Binder/Parcel interoperability blocker. Play Store still does
+not reach the main looper or provide sign-in.

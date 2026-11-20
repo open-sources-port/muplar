@@ -74,24 +74,89 @@ Play Store initialization succeeds.
 
 ### Latest isolated startup result
 
-The first signature-verified launch reached Google application code and failed
-before entering the main looper:
+The initial signature-verified probe failed because the `account` system
+service was missing, followed by a null `Point` during display-size discovery.
+The next implementation step has now addressed both dependencies:
 
-- `Application.onCreate()` failed with `Failed to load configurations for FinskyApp`.
-- The nested failure was `Cannot return null from a non-@Nullable @Provides method`.
-- `getSystemService("account")` returned no service immediately before that failure.
-- Activity initialization also failed when Google code accessed a null
-  `android.graphics.Point`. Trace the display/window call producing that value;
-  the exact missing geometry API has not yet been established.
-- The probe also logged an unsupported Samsung `SemPersonaManager` request.
-  Determine whether this is an optional OEM capability check before deciding
-  that it requires implementation.
+- `MuplarContext` constructs the framework `AccountManager` with an in-process
+  `IAccountManager` bridge. Signed-out queries return empty account/authenticator
+  collections; account mutations do not report false success.
+- Initial account-listener delivery, feature queries and explicit unsupported
+  authentication callbacks have been exercised through the actual Android
+  framework frontend. This does not provide authenticator execution, credentials,
+  persistent accounts or Google sign-in.
+- `DisplayManager.getStableDisplaySize()` now returns a fresh `Point` containing
+  the configured display dimensions. The failing Google call was identified
+  from the fixture's bytecode. Portrait and landscape smoke tests verify the
+  dimensions and that callers cannot mutate shared geometry.
 
-The account service is a concrete missing dependency. Its presence alone must
-not be presented as a complete fix for all initialization failures.
+### Completed notification-channel step
+
+The framework-facing `NotificationManager` now has channel metadata backed by
+`MuplarNotificationChannels`:
+
+- Channel and group create/query/delete operations return real objects and valid
+  `ParceledListSlice` containers, including when the result is empty.
+- Duplicate channel creation updates its name/description without raising its
+  importance or replacing its established sound. Deletion/recreation retains
+  the channel's previous behavior, and group deletion removes its live channels.
+- Returned/input objects do not alias stored state. Each package has a separate
+  namespace; self-package queries are enforced. This is not a replacement for
+  the caller-UID/permission model still required in Gate C.
+- Metadata is stored under the selected rootfs at
+  `/data/system/muplar/notification-channels/u0/`. Package file locks, fsynced
+  sibling temporary files and same-filesystem rename protect updates. Cold-guest
+  restart tests verify persistence.
+- The storage code avoids Samsung `AtomicFile` hooks: the test rootfs's
+  `AtomicFile.startWrite()` invokes an unavailable `ReliableWrite` vendor native.
+
+The implementation currently supports user 0 and public self-package metadata
+operations. Posting notifications to macOS, delegation, full user-policy controls,
+and migration of serialized metadata across framework/SDK upgrades remain
+unimplemented or unverified. Do not mark all NotificationManager behavior complete.
+
+### Latest isolated startup result after channel support
+
+The account service, stable display size, and previous
+`getNotificationChannels()` null-list failure are no longer the observed startup
+exceptions. The 25-second observation did not reach the main looper; a longer
+90-second observation reproduced a native Binder/JNI abort:
+
+- `entered_main_looper` remains false and `play_store_support_verified` remains false.
+- Neither application nor activity `onCreate` exception markers appeared in that
+  extended run. That does **not** prove either initialization completed.
+- Guest logs show `SIGABRT`, with `android::ibinderForJavaObject` in the native
+  stack. The host process also exited abnormally. The probe now distinguishes
+  a still-running startup timeout from an explicit exception or native crash.
+- The remaining unsupported service diagnostic in that run was the Samsung
+  `SemPersonaManager`; the earlier `restrictions` request is still unimplemented
+  and needs triage when its path is reached.
+
+**Next vertical slice: coherent native Binder/Parcel interoperation.**
+
+Source inspection shows that genuine Parcel JNI registration is enabled while
+Binder registration is absent from the framework registration list, and the
+shim's `getNativeBBinderHolder()` returns a synthetic shared token. The abort
+stack returns to `ibinderForJavaObject+0x50`; disassembly places that call site
+immediately after JNI `IsInstanceOf`. Uninitialized Binder JNI class metadata
+and synthetic-holder interoperability are therefore concrete investigation
+targets, not yet a verified root-cause fix.
+
+1. Add a minimal real-ART reproducer using `new Binder()`,
+   `Parcel.writeStrongBinder()` / `readStrongBinder()`, identity and repeated
+   allocation/GC. Capture the original JNI failure before the fatal unwind.
+2. Establish consistent framework Binder JNI registration and valid local native
+   holder ownership/finalizers. Retain the required emulated remote transport.
+   Simply initializing offsets while leaving an incompatible fake holder is
+   insufficient.
+3. Test callback Binder objects and death/lifecycle behavior through the bridge,
+   then rerun the same Play Store fixture and record its next failure.
+4. Do not suppress the crash by silently serializing null binders or fabricating
+   successful transactions. Keep notification/account/Launcher regressions passing.
 
 The generated report records application/activity failures, whether the main
-looper was entered, native crashes, and unsupported system-service names.
+looper was entered, native crashes, pre-stop process status, startup timeouts, and unsupported
+system-service names.
 `play_store_support_verified` remains false: this probe cannot certify sign-in,
 catalog access, or installation.
 
@@ -99,17 +164,21 @@ catalog access, or installation.
 
 | Area | Current implementation | Work required |
 | --- | --- | --- |
-| Account manager | No `account` manager in `MuplarContext` | Real manager interface, account state, authenticator callbacks and lifecycle |
+| Account manager | Framework frontend and signed-out query/listener bridge implemented; authentication returns explicit unsupported errors | Authenticator execution, account persistence, identity/permission enforcement and sign-in |
 | Package discovery | `getInstalledPackages()` returns an empty list; package-info lookup is largely self-only | Cross-package identity, versions, signatures, components, metadata and updates |
 | Signature checks | `checkSignatures()` currently returns `SIGNATURE_MATCH` unconditionally | Actual signer comparison and correct mismatch/unknown-package results |
 | Services | General `startService()` returns null; binding mostly special-cases Launcher3 | Instantiate declared services, dispatch lifecycle and bind callbacks, retain connections and handle death |
 | Service/provider resolution | Service queries are empty and provider resolution is incomplete | Manifest-backed service/provider registries and cross-package loading |
+| Native Binder/Parcel | Genuine Parcel JNI coexists with synthetic Binder holders; extended probe aborts in Binder/JNI | Reproduce and resolve registration/holder/lifetime interoperability, then validate real callback round trips |
 | Network/background work | Connectivity and job APIs include bootstrap stubs | Real behavior for the methods exercised by Play Store and GMS |
+| Notification channels | Persistent package-scoped channel/group metadata and public CRUD/restart tests implemented | Notification delivery, full policy/permissions and framework-format migrations |
 | Downloads and installation | Full Play Store download-to-install flow is unverified | Persistent downloads, installer sessions, split APKs, update/rollback behavior and truthful status callbacks |
 
 Code entry points:
 
 - [APK manifest classification](../../../platform/android-aarch64/apk/apk_envelope.cpp)
+- [Notification-channel metadata service](../../../platform/android-aarch64/java-bootstrap/com/muplar/runtime/MuplarNotificationChannels.java)
+- [Signed-out account-service bridge](../../../platform/android-aarch64/java-bootstrap/com/muplar/runtime/MuplarAccountService.java)
 - [Context and manager construction](../../../platform/android-aarch64/java-bootstrap/com/muplar/runtime/MuplarContext.java)
 - [Framework service interfaces](../../../platform/android-aarch64/java-bootstrap/com/muplar/runtime/MuplarServices.java)
 - [Package-manager implementation](../../../platform/android-aarch64/java-bootstrap/com/muplar/runtime/MuplarPackageManager.java)
@@ -139,15 +208,18 @@ upgrading any of the three APKs.
 
 This is the immediate implementation priority.
 
-- [ ] Construct a genuine `AccountManager` frontend backed by an
+- [x] Construct a genuine `AccountManager` frontend backed by an
   `IAccountManager` implementation reachable through the existing service bridge.
-- [ ] Support truthful signed-out queries: no accounts means empty account
+- [x] Support truthful signed-out queries: no accounts means empty account
   collections, not null values or invented Google accounts.
-- [ ] Implement the account-query and listener/callback methods actually used
-  during startup. Unsupported operations must complete with explicit errors
-  rather than hanging a caller.
-- [ ] Trace the null `Point` failure and implement the required display/window
-  geometry contract for portrait, landscape and square displays.
+- [x] Implement signed-out account queries, initial listener delivery, feature
+  callbacks and explicit unsupported errors for asynchronous authentication.
+  Expand method coverage when additional real callers require it.
+- [x] Trace the null `Point` to `getStableDisplaySize()` and return configured
+  dimensions as a fresh object; verify portrait and landscape behavior.
+- [x] Implement persistent, package-scoped channel/group metadata and validate
+  public CRUD, object-copy isolation, deletion/recreation and cold restarts.
+- [ ] Resolve the native Binder/JNI abort before declaring initialization successful.
 - [ ] Verify package versions and application metadata needed by initialization.
 - [ ] Classify optional OEM probes separately from required Android services.
 
@@ -308,6 +380,45 @@ Generated artifacts and logs under `build/` are disposable; the historical
 failure above remains recorded here if the build tree is cleaned.
 
 ### Regression checks
+
+Run notification-channel tests in the dedicated rootfs:
+
+```sh
+bash tests/assets/android-notifications/build-apk.sh
+python3 tests/android/notification_channels.py --sysroot build/opengapps/probe-rootfs
+```
+
+The runner launches two different test packages, then launches each again in a
+fresh guest process. It checks empty queries, channel/group CRUD, importance
+rules, defensive copies, package namespaces and persisted state. It resets only
+its own test packages' metadata and phase markers inside the test rootfs.
+It does not verify notification delivery or cross-package authorization.
+
+To reproduce the longer Play Store observation and distinguish timeout from
+native failure:
+
+```sh
+python3 platform/android-aarch64/compat/opengapps/probe-launch.py \
+  --sysroot build/opengapps/probe-rootfs --timeout 90
+```
+
+
+Run the signed-out account and stable-display checks against the same dedicated
+rootfs. The test APK is never installed in the user's normal instance:
+
+```sh
+bash tests/assets/android-accounts/build-apk.sh
+python3 tests/android/account_service.py --sysroot build/opengapps/probe-rootfs
+MUPLAR_ANDROID_DISPLAY_WIDTH=1920 MUPLAR_ANDROID_DISPLAY_HEIGHT=1080 \
+  python3 tests/android/account_service.py --sysroot build/opengapps/probe-rootfs
+```
+
+The expected marker is `ACCOUNT_SERVICE_SMOKE_PASS`: empty account queries,
+an initial listener snapshot, feature-query callbacks, and add-account/auth-token
+errors all complete. Stable display size matches the configured display and
+is not shared mutable state. This test is a signed-out baseline, not an
+authentication or notification-channel test.
+
 
 ```sh
 mkdir -p build/tests

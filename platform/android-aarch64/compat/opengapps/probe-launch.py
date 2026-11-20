@@ -60,6 +60,7 @@ def main():
     socket_name = f"playstore-{os.getpid()}.sock"
     sock = sysroot / "tmp" / socket_name
     logpath = WORK / "launch.log"
+    exit_code_before_stop = None
     with (WORK / "service.log").open("w") as service_log:
         service = subprocess.Popen([
             str(ROOT / "build/bin/muplard"), "--socket", str(sock),
@@ -90,6 +91,7 @@ def main():
                             break
                         time.sleep(0.1)
                 finally:
+                    exit_code_before_stop = process.poll()
                     stop(process)
         finally:
             stop(service)
@@ -99,6 +101,12 @@ def main():
         "activity_on_create_failed": "failed to invoke onCreate" in text,
         "entered_main_looper": "entering main looper" in text,
         "native_crash": "MUPLAR CRASH HANDLER" in text,
+        "process_exit_code_before_stop": exit_code_before_stop,
+        "startup_timed_out": (exit_code_before_stop is None
+            and "entering main looper" not in text
+            and "Application onCreate failed" not in text
+            and "failed to invoke onCreate" not in text),
+        "observation_timeout_seconds": args.timeout,
         "unsupported_system_services": sorted(set(re.findall(
             r"unsupported system service: ([^\r\n]+)", text))),
         "log": str(logpath),

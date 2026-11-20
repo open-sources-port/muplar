@@ -17,8 +17,9 @@ The interactive device experience across the core loop is now **functioning and 
 ### Active application compatibility target
 
 Google Play Store from Open GApps is the next real-application target.
-Startup is currently blocked by missing account-service support and additional
-initialization failures. See [the Play Store implementation plan](./play-store.md)
+Signed-out AccountManager queries and stable display-size discovery are now
+implemented, alongside persistent notification-channel metadata. Startup remains
+blocked by a native Binder/JNI abort before the main looper. See [the Play Store implementation plan](./play-store.md)
 for verified evidence, dependency order, reproduction commands and acceptance gates.
 Launcher3 and the framework test app remain regression baselines; their success
 does not establish Play Store compatibility.
@@ -33,7 +34,7 @@ does not establish Play Store compatibility.
 | **Touch Input** | `MotionEvent` & Touch Routing | 🟢 **Working** | Pointer events translated and dispatched cleanly to focused View/Activity. | [device-window.md](./device-window.md) |
 | **Home Launcher** | `Launcher3` | 🟢 **Working** | App icons bound dynamically, drawer gesture working, Back navigation stable. | [launcher3.md](./launcher3.md) |
 | **Framework Test App** | `UiTest` / Applications | 🟢 **Working** | Multi-activity task back-stack, in-session install UX, and custom Application lifecycle verified. | [framework-services.md](./framework-services.md) |
-| **Target App** | Google Play Store / Open GApps | 🔴 **Blocked** | Verified fixture and launcher-alias fix; application/account initialization still fails. | [play-store.md](./play-store.md) |
+| **Target App** | Google Play Store / Open GApps | 🔴 **Blocked** | Verified fixtures, aliases, signed-out accounts, stable display size and channel metadata; native Binder/JNI still blocks startup. | [play-store.md](./play-store.md) |
 | **Database** | SQLite & CursorWindow | 🟢 **Working** | Genuine AOSP `libandroid_runtime.so` SQLite symbols bound and persisting. | [framework-services.md](./framework-services.md) |
 | **App Identity** | `ActivityThread` / `AppBindData` | 🟢 **Working** | `mBoundApplication` populated, `Process.sProcessName` set, manifest Application class resolved. | [java-art-surface.md](./java-art-surface.md) |
 | **Network & Jobs** | `ConnectivityManager` & `JobScheduler` | 🟡 **Stubbed** | Bootstrap classes added for WorkManager initialization. | [framework-services.md](./framework-services.md) |

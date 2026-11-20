@@ -127,6 +127,9 @@ public final class MuplarServices {
     }
 
     private static String serviceInterface(String name) {
+        if ("account".equals(name)) {
+            return "android.accounts.IAccountManager";
+        }
         if ("content".equals(name)) {
             return "android.content.IContentService";
         }
@@ -327,6 +330,13 @@ public final class MuplarServices {
             throws Throwable {
             if ("asBinder".equals(method.getName())) {
                 return binder;
+            }
+            if ("android.app.INotificationManager".equals(descriptor) &&
+                MuplarNotificationChannels.handles(method.getName())) {
+                return MuplarNotificationChannels.invoke(method, args);
+            }
+            if ("android.accounts.IAccountManager".equals(descriptor)) {
+                return MuplarAccountService.invoke(method, args);
             }
             if ("android.view.IWindowManager".equals(descriptor)) {
                 Object value = windowManagerValue(method, args);
@@ -600,6 +610,10 @@ public final class MuplarServices {
 
         private Object displayManagerValue(Method method, Object[] args) {
             String name = method.getName();
+            if ("getStableDisplaySize".equals(name)) {
+                return new android.graphics.Point(MuplarDisplayConfig.widthPixels(),
+                    MuplarDisplayConfig.heightPixels());
+            }
             if ("getDisplayInfo".equals(name)) {
                 int displayId = args != null && args.length > 0
                     ? ((Integer) args[0]).intValue() : 0;

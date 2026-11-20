@@ -47,6 +47,7 @@ public final class MuplarContext extends ContextWrapper {
     private final Resources resources;
     private final Resources.Theme theme;
     private final int themeResId;
+    private final Object accountManager;
     private final Object userManager;
     private final Object displayManager;
     private final Object windowManager;
@@ -113,6 +114,7 @@ public final class MuplarContext extends ContextWrapper {
         }
         this.theme = resources.newTheme();
         applyBaseAndAppTheme(this.theme, themeResId);
+        this.accountManager = createAccountManager(this);
         this.userManager = createUserManager(this);
         this.displayManager = createDisplayManager(this);
         this.windowManager = createWindowManager(this);
@@ -553,6 +555,9 @@ public final class MuplarContext extends ContextWrapper {
 
     @Override
     public Object getSystemService(String name) {
+        if (Context.ACCOUNT_SERVICE.equals(name)) {
+            return accountManager;
+        }
         if (Context.ACTIVITY_SERVICE.equals(name) || "activity".equals(name) || "android.app.ActivityManager".equals(name)) {
             return activityManager;
         }
@@ -741,6 +746,9 @@ public final class MuplarContext extends ContextWrapper {
 
     @Override
     public String getSystemServiceName(Class<?> serviceClass) {
+        if (serviceClass == android.accounts.AccountManager.class) {
+            return Context.ACCOUNT_SERVICE;
+        }
         if (serviceClass != null &&
             "android.app.ActivityManager".equals(serviceClass.getName())) {
             return Context.ACTIVITY_SERVICE;
@@ -1572,6 +1580,10 @@ public final class MuplarContext extends ContextWrapper {
                                          java.lang.reflect.Method method,
                                          Object[] args) throws Throwable {
                         String name = method.getName();
+                        if ("getStableDisplaySize".equals(name)) {
+                            return new android.graphics.Point(MuplarDisplayConfig.widthPixels(),
+                                MuplarDisplayConfig.heightPixels());
+                        }
                         if ("getDisplayInfo".equals(name)) {
                             int displayId = args != null && args.length > 0
                                 ? ((Integer) args[0]).intValue() : 0;
@@ -1644,6 +1656,21 @@ public final class MuplarContext extends ContextWrapper {
         setFieldIfPresent(info, "supportedModes", modes);
         setFieldIfPresent(info, "supportedRefreshRates", new float[] { 60.0f });
         return info;
+    }
+
+    private static Object createAccountManager(Context context) {
+        try {
+            Class<?> serviceType = Class.forName("android.accounts.IAccountManager");
+            Object service = Class.forName("android.accounts.IAccountManager$Stub")
+                .getMethod("asInterface", IBinder.class)
+                .invoke(null, MuplarServices.getBinder("account"));
+            Constructor<?> constructor = android.accounts.AccountManager.class
+                .getDeclaredConstructor(Context.class, serviceType);
+            constructor.setAccessible(true);
+            return constructor.newInstance(context, service);
+        } catch (ReflectiveOperationException error) {
+            throw new IllegalStateException("Cannot construct the framework AccountManager", error);
+        }
     }
 
     private static Object createUserManager(final Context context) {
