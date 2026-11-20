@@ -28,6 +28,13 @@ static int drawn_width(struct muplar_bitmap_state *bitmap)
 int main(void)
 {
     struct muplar_bitmap_state *bitmap = muplar_alloc_bitmap(400, 120);
+    assert(!muplar_frame_unchanged(bitmap, "frame-a"));
+    muplar_remember_frame(bitmap, "frame-a");
+    assert(muplar_frame_unchanged(bitmap, "frame-a"));
+    assert(!muplar_frame_unchanged(bitmap, "frame-b"));
+    bitmap->pixels[0] ^= 1;
+    assert(!muplar_frame_unchanged(bitmap, "frame-a"));
+    bitmap->pixels[0] ^= 1;
     struct muplar_canvas_state *canvas = muplar_alloc_canvas(bitmap->token);
     jlong paint = Java_android_graphics_Paint_nInit(NULL, NULL);
     Java_android_graphics_Paint_nSetTextSize(paint, 16);

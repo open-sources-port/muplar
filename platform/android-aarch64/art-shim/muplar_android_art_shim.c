@@ -8140,7 +8140,47 @@ jboolean Java_android_graphics_Bitmap_nativeCompress(JNIEnv *env,
     return ok ? JNI_TRUE : JNI_FALSE;
 }
 
-jboolean Java_com_muplar_runtime_MuplarFramePresenter_writeBitmapNative(
+static uint32_t *muplar_presented_pixels;
+static size_t muplar_presented_bytes;
+static int muplar_presented_width, muplar_presented_height;
+static char *muplar_presented_path;
+
+static int muplar_frame_unchanged(const struct muplar_bitmap_state *bitmap,
+                                  const char *path)
+{
+    size_t bytes = (size_t) bitmap->width * bitmap->height * sizeof(uint32_t);
+    return muplar_presented_pixels && muplar_presented_path && path &&
+           bytes == muplar_presented_bytes &&
+           bitmap->width == muplar_presented_width &&
+           bitmap->height == muplar_presented_height &&
+           !strcmp(path, muplar_presented_path) &&
+           !memcmp(bitmap->pixels, muplar_presented_pixels, bytes);
+}
+
+static void muplar_remember_frame(const struct muplar_bitmap_state *bitmap,
+                                  const char *path)
+{
+    size_t bytes = (size_t) bitmap->width * bitmap->height * sizeof(uint32_t);
+    uint32_t *pixels = realloc(muplar_presented_pixels, bytes);
+    char *destination = strdup(path);
+    if (!pixels || !destination) {
+        if (pixels)
+            muplar_presented_pixels = pixels;
+        free(destination);
+        free(muplar_presented_path);
+        muplar_presented_path = NULL;
+        return;
+    }
+    muplar_presented_pixels = pixels;
+    muplar_presented_bytes = bytes;
+    muplar_presented_width = bitmap->width;
+    muplar_presented_height = bitmap->height;
+    memcpy(pixels, bitmap->pixels, bytes);
+    free(muplar_presented_path);
+    muplar_presented_path = destination;
+}
+
+jint Java_com_muplar_runtime_MuplarFramePresenter_writeBitmapNative(
     JNIEnv *env,
     jclass clazz,
     jobject bitmap_object,
@@ -8153,13 +8193,13 @@ jboolean Java_com_muplar_runtime_MuplarFramePresenter_writeBitmapNative(
     int ok = 0;
     (void) clazz;
     if (!bitmap_object || !path)
-        return JNI_FALSE;
+        return 0;
     bitmap_class = (*env)->GetObjectClass(env, bitmap_object);
     if (!bitmap_class)
-        return JNI_FALSE;
+        return 0;
     path_chars = (*env)->GetStringUTFChars(env, path, NULL);
     if (!path_chars)
-        return JNI_FALSE;
+        return 0;
 
     native_ptr_field = (*env)->GetFieldID(env, bitmap_class, "mNativePtr", "J");
     if (native_ptr_field) {
@@ -8167,7 +8207,13 @@ jboolean Java_com_muplar_runtime_MuplarFramePresenter_writeBitmapNative(
             (*env)->GetLongField(env, bitmap_object, native_ptr_field);
         struct muplar_bitmap_state *bmp = muplar_find_bitmap(native_bitmap);
         if (bmp) {
+            if (muplar_frame_unchanged(bmp, path_chars)) {
+                (*env)->ReleaseStringUTFChars(env, path, path_chars);
+                return 2;
+            }
             ok = muplar_write_bitmap_frame(bmp, path_chars);
+            if (ok)
+                muplar_remember_frame(bmp, path_chars);
         }
     } else {
         (*env)->ExceptionClear(env);
@@ -8210,7 +8256,7 @@ jboolean Java_com_muplar_runtime_MuplarFramePresenter_writeBitmapNative(
     }
 
     (*env)->ReleaseStringUTFChars(env, path, path_chars);
-    return ok ? JNI_TRUE : JNI_FALSE;
+    return ok ? 1 : 0;
 }
 
 /* Minimal AF_UNIX SOCK_STREAM client used by MuplarSocketClient to reach

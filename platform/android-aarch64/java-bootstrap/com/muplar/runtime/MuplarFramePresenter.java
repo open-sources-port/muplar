@@ -18,6 +18,7 @@ final class MuplarFramePresenter {
 
     private static boolean nativeAvailable = true;
     private static long lastFrameUptime;
+    private static long captureIntervalMs = FRAME_INTERVAL_MS;
     private static volatile boolean isPresenting;
     private static volatile WeakReference<View> currentRoot;
     private static boolean loopStarted;
@@ -30,7 +31,8 @@ final class MuplarFramePresenter {
     private MuplarFramePresenter() {
     }
 
-    private static native boolean writeBitmapNative(Bitmap bitmap,
+    // 0 = failed, 1 = changed, 2 = unchanged.
+    private static native int writeBitmapNative(Bitmap bitmap,
                                                     String path);
 
     /**
@@ -43,6 +45,7 @@ final class MuplarFramePresenter {
             return;
         }
         currentRoot = new WeakReference<>(root);
+        captureIntervalMs = FRAME_INTERVAL_MS;
         burstFrames = 30;
         try {
             java.lang.reflect.Method getViewRootImpl =
@@ -81,6 +84,7 @@ final class MuplarFramePresenter {
      * e.g. following input event dispatch or tab transitions.
      */
     static void requestImmediateFrame() {
+        captureIntervalMs = FRAME_INTERVAL_MS;
         WeakReference<View> ref = currentRoot;
         View root = ref != null ? ref.get() : null;
         if (root != null) {
@@ -144,7 +148,7 @@ final class MuplarFramePresenter {
             return;
         }
         frameRequested = true;
-        long delay = Math.max(0, FRAME_INTERVAL_MS -
+        long delay = Math.max(0, captureIntervalMs -
             (android.os.SystemClock.uptimeMillis() - lastFrameUptime));
         handler.postDelayed(new Runnable() {
             @Override public void run() {
@@ -227,7 +231,7 @@ final class MuplarFramePresenter {
             return;
         }
         long now = android.os.SystemClock.uptimeMillis();
-        if (!force && now - lastFrameUptime < FRAME_INTERVAL_MS) {
+        if (!force && now - lastFrameUptime < captureIntervalMs) {
             return;
         }
         lastFrameUptime = now;
@@ -279,13 +283,18 @@ final class MuplarFramePresenter {
             }
             fixBubbleTextViews(root);
             root.draw(reusableCanvas);
-            nativeAvailable = writeBitmapNative(reusableBitmap, path);
+            int result = writeBitmapNative(reusableBitmap, path);
+            nativeAvailable = result != 0;
+            captureIntervalMs = result == 2
+                ? Math.min(LOOP_INTERVAL_MS, captureIntervalMs * 2) : FRAME_INTERVAL_MS;
             if (!nativeAvailable) {
                 System.err.println("[Muplar/Window] software frame bridge disabled");
             } else {
                 hasPresentedAny = true;
-                System.out.println("[Muplar/Window] software frame presented w="
-                    + width + " h=" + height + " path=" + path);
+                if (result == 1) {
+                    System.out.println("[Muplar/Window] software frame presented w="
+                        + width + " h=" + height + " path=" + path);
+                }
             }
         } catch (Throwable error) {
             System.err.println("[Muplar/Window] software frame failed: " +

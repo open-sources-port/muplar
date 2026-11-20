@@ -328,12 +328,14 @@ static NSView* AndroidDeviceTabChipView(NSString* title,
     _activeTabIdentifier = AndroidDeviceLauncherTabIdentifier;
     _frameServerFd = -1;
     _frameClientFd = -1;
-    _framePixelWidth = 1080;
+    // _framePixelWidth = 1080;
+    _framePixelWidth = 1920;
     _framePixelHeight = 1920;
 
     CGFloat outerPadding = 10.0;
     CGFloat bezel = 4.0;
-    CGFloat screenWidth = 440.0;
+    // CGFloat screenWidth = 440.0;
+    CGFloat screenWidth = 800.0;
     CGFloat screenHeight =
         std::round(screenWidth * _framePixelHeight / _framePixelWidth);
     CGFloat toolbarHeight = 30.0;
