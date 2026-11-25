@@ -26,6 +26,36 @@
 #include <ucontext.h>
 #include "muplar_font.h"
 
+/* Bionic's netd accept hook queries Linux SO_DOMAIN after accept4. elfuse
+ * already translates getsockname addresses, but has no SO_DOMAIN sockopt.
+ * Derive the answer from the actual socket instead of inventing a family. */
+int getsockopt(int fd, int level, int option, void *value, socklen_t *length)
+{
+    typedef int (*getsockopt_fn)(int, int, int, void *, socklen_t *);
+    if (level == SOL_SOCKET && option == SO_DOMAIN) {
+        if (!length || (!value && *length)) {
+            errno = EFAULT;
+            return -1;
+        }
+        struct sockaddr_storage address;
+        socklen_t address_length = sizeof(address);
+        if (getsockname(fd, (struct sockaddr *) &address, &address_length) < 0)
+            return -1;
+        int domain = address.ss_family;
+        socklen_t size = *length < sizeof(domain) ? *length : sizeof(domain);
+        if (size)
+            memcpy(value, &domain, size);
+        *length = size;
+        return 0;
+    }
+    getsockopt_fn next = (getsockopt_fn) dlsym(RTLD_NEXT, "getsockopt");
+    if (!next) {
+        errno = ENOSYS;
+        return -1;
+    }
+    return next(fd, level, option, value, length);
+}
+
 static int muplar_display_dimension(const char *name, int fallback)
 {
     const char *value = getenv(name);
@@ -14027,6 +14057,7 @@ static void muplar_register_one(JNIEnv *env,
 }
 
 static int muplar_motion_event_registered_by_framework = 0;
+static int muplar_binder_registered_by_framework = 0;
 
 static void muplar_register_framework_natives(JNIEnv *env)
 {
@@ -14037,7 +14068,11 @@ static void muplar_register_framework_natives(JNIEnv *env)
         "_ZN7android36register_android_content_StringBlockEP7_JNIEnv",
         "_ZN7android33register_android_content_XmlBlockEP7_JNIEnv",
         "_ZN7android42register_android_content_res_ConfigurationEP7_JNIEnv",
+        "_Z26register_android_os_BinderP7_JNIEnv",
         "_ZN7android26register_android_os_ParcelEP7_JNIEnv",
+        "_ZN7android39register_android_util_jar_StrictJarFileEP7_JNIEnv",
+        "_ZN7android50register_android_os_incremental_IncrementalManagerEP7_"
+        "JNIEnv",
         "_ZN7android33register_android_view_InputDeviceEP7_JNIEnv",
         "_ZN7android37register_android_view_KeyCharacterMapEP7_JNIEnv",
         "_ZN7android30register_android_view_KeyEventEP7_JNIEnv",
@@ -14085,6 +14120,8 @@ static void muplar_register_framework_natives(JNIEnv *env)
                     symbols[i],
                     "_ZN7android33register_android_view_MotionEventEP7_JNIEnv"))
                 muplar_motion_event_registered_by_framework = 1;
+            if (!strcmp(symbols[i], "_Z26register_android_os_BinderP7_JNIEnv"))
+                muplar_binder_registered_by_framework = 1;
         }
     }
 
@@ -17272,15 +17309,18 @@ JNIEXPORT jint JNICALL JNI_OnLoad(JavaVM *vm, void *reserved)
                         (void *) Java_android_os_Binder_setExtensionNative);
     muplar_register_one(env, cls, "flushPendingCommands", "()V",
                         (void *) Java_android_os_Binder_flushPendingCommands);
-    muplar_register_one(env, cls, "getNativeBBinderHolder", "()J",
-                        (void *) Java_android_os_Binder_getNativeBBinderHolder);
-    muplar_register_one(env, cls, "getNativeFinalizer", "()J",
-                        (void *) Java_android_os_Binder_getNativeFinalizer);
+    if (!muplar_binder_registered_by_framework) {
+        muplar_register_one(
+            env, cls, "getNativeBBinderHolder", "()J",
+            (void *) Java_android_os_Binder_getNativeBBinderHolder);
+        muplar_register_one(env, cls, "getNativeFinalizer", "()J",
+                            (void *) Java_android_os_Binder_getNativeFinalizer);
+    }
 
     cls = (*env)->FindClass(env, "android/os/BinderProxy");
     if ((*env)->ExceptionCheck(env)) {
         (*env)->ExceptionClear(env);
-    } else if (cls) {
+    } else if (cls && !muplar_binder_registered_by_framework) {
         muplar_register_one(
             env, cls, "getNativeFinalizer", "()J",
             (void *) Java_android_os_BinderProxy_getNativeFinalizer);
@@ -17589,6 +17629,21 @@ JNIEXPORT jint JNICALL JNI_OnLoad(JavaVM *vm, void *reserved)
                 Java_android_view_DisplayEventReceiver_nativeGetLatestVsyncEventData);
     }
 
+    const char *rpc_path = "/data/local/tmp/muplar/art/libmuplar_binder_rpc.so";
+    if (access(rpc_path, R_OK) == 0) {
+        void *rpc = dlopen(rpc_path, RTLD_NOW | RTLD_GLOBAL);
+        int (*register_rpc)(JNIEnv *) =
+            rpc ? dlsym(rpc, "muplar_binder_rpc_register") : NULL;
+        if (!muplar_binder_registered_by_framework || !register_rpc ||
+            register_rpc(env) != 0) {
+            const char *error = dlerror();
+            fprintf(stderr, "[Muplar/BinderRPC] initialization failed: %s\n",
+                    error ? error : "native registration failed");
+            if ((*env)->ExceptionCheck(env))
+                (*env)->ExceptionDescribe(env);
+            return JNI_ERR;
+        }
+    }
     return JNI_VERSION_1_6;
 }
 

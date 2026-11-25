@@ -5,8 +5,10 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 ROOT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 OUT="$ROOT_DIR/build/sysroot/data/local/tmp/muplar/art/libmuplar_android_art_shim.so"
 
+SYNC_DEPLOYMENTS=1
+
 usage() {
-    echo "Usage: $0 [--output PATH]"
+    echo "Usage: $0 [--output PATH] [--no-sync]"
     echo
     echo "Builds Muplar's ARM64 Android ART preload shim."
 }
@@ -17,6 +19,10 @@ while [ "$#" -gt 0 ]; do
             [ "$#" -ge 2 ] || { echo "--output requires a path" >&2; exit 2; }
             OUT="$2"
             shift 2
+            ;;
+        --no-sync)
+            SYNC_DEPLOYMENTS=0
+            shift
             ;;
         -h|--help)
             usage
@@ -65,6 +71,10 @@ echo "[ART] Built Android ART shim: $OUT"
 file "$OUT"
 
 # Sync to known deployment locations so runtime prefix and sysroots always stay updated
+if [ "$SYNC_DEPLOYMENTS" -eq 0 ]; then
+    exit 0
+fi
+
 for target in \
     "$ROOT_DIR/build/builtin-android/libmuplar_android_art_shim.so" \
     "$HOME/.muplar/sysroots/android-arm64/api-35/sysroot/data/local/tmp/muplar/art/libmuplar_android_art_shim.so" \

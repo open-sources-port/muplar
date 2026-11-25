@@ -115,7 +115,7 @@ operations. Posting notifications to macOS, delegation, full user-policy control
 and migration of serialized metadata across framework/SDK upgrades remain
 unimplemented or unverified. Do not mark all NotificationManager behavior complete.
 
-### Latest isolated startup result after channel support
+### Historical isolated startup result after channel support
 
 The account service, stable display size, and previous
 `getNotificationChannels()` null-list failure are no longer the observed startup
@@ -132,44 +132,290 @@ exceptions. The 25-second observation did not reach the main looper; a longer
   `SemPersonaManager`; the earlier `restrictions` request is still unimplemented
   and needs triage when its path is reached.
 
-**Next vertical slice: coherent native Binder/Parcel interoperation.**
+### Binder registration and isolated reproducer — November 21, 2026
 
-Source inspection shows that genuine Parcel JNI registration is enabled while
-Binder registration is absent from the framework registration list, and the
-shim's `getNativeBBinderHolder()` returns a synthetic shared token. The abort
-stack returns to `ibinderForJavaObject+0x50`; disassembly places that call site
-immediately after JNI `IsInstanceOf`. Uninitialized Binder JNI class metadata
-and synthetic-holder interoperability are therefore concrete investigation
-targets, not yet a verified root-cause fix.
+Framework Binder JNI registration is now enabled before Parcel registration.
+When it succeeds, the shim retains the genuine local Binder holder allocator
+and Binder/BinderProxy finalizers instead of substituting synthetic tokens.
+This is partial interoperability work, not a working Binder transport.
 
-1. Add a minimal real-ART reproducer using `new Binder()`,
-   `Parcel.writeStrongBinder()` / `readStrongBinder()`, identity and repeated
-   allocation/GC. Capture the original JNI failure before the fatal unwind.
-2. Establish consistent framework Binder JNI registration and valid local native
-   holder ownership/finalizers. Retain the required emulated remote transport.
-   Simply initializing offsets while leaving an incompatible fake holder is
-   insufficient.
-3. Test callback Binder objects and death/lifecycle behavior through the bridge,
-   then rerun the same Play Store fixture and record its next failure.
-4. Do not suppress the crash by silently serializing null binders or fabricating
-   successful transactions. Keep notification/account/Launcher regressions passing.
+The real-ART smoke APK now includes every generated class, including its anonymous
+DeathRecipient. It tests local Binder identity, null round trips, a local callback
+transaction, local death-registration behavior and repeated allocation/GC. Remote
+callback delivery, remote death notifications and finalizer completion are not
+established by these tests. Per-operation markers and a machine-readable report
+make failures reproducible:
 
-The generated report records application/activity failures, whether the main
-looper was entered, native crashes, pre-stop process status, startup timeouts, and unsupported
+```sh
+bash tests/assets/android-binder/build-apk.sh
+python3 tests/android/binder_parcel.py --sysroot build/opengapps/probe-rootfs
+```
+
+The current expected result is **failure**, not a passing compatibility gate.
+`build/android-binder-test/result.json` records `last_phase=roundtrip_write`,
+`native_crash=true` and `binder_driver_unavailable=true`. A genuine Binder object
+is constructed, but the first `Parcel.writeStrongBinder()` enters
+`IPCThreadState::self()` and aborts because `/dev/binder` is absent.
+
+Before the backup/manifest fixes below, a 90-second Play Store probe with this
+shim also failed before the main looper. Its log reports that `MuplarServices$NoNativeBinder` is not a native Binder
+object, followed by the missing-driver abort from `Parcel.writeInterfaceToken()`.
+Neither application nor activity completion was verified in that run. Initializing Binder JNI
+metadata therefore exposes two remaining requirements:
+
+1. Provide a coherent native Binder transport for this userland architecture,
+   including driver initialization, thread state, reference lifetime and actual
+   transaction/error semantics. A placeholder device or successful no-op ioctl
+   must not stand in for working transport.
+2. Bridge service objects represented by `NoNativeBinder` into valid native
+   Binder objects while preserving local interface dispatch and emulated remote
+   transport. Keep native holder ownership and finalizers consistent.
+3. Pass the local smoke test, then add actual cross-process callback and death
+   tests before claiming transport compatibility. Rerun account, notification
+   and Launcher regressions and the same verified Play Store fixture.
+
+Do not suppress these failures by serializing null binders or fabricating
+successful transactions. The new shim was staged only into the isolated probe
+rootfs; it was not deployed to running user instances. AccountManager signed-out
+queries/listener/async callbacks and the four notification-channel CRUD/package
+isolation/restart cases passed again with this shim. Launcher was not rerun in
+this iteration.
+
+The generated report records application/activity failures and completion, whether the main
+looper was entered or failed, native crashes, pre-stop process status, startup timeouts, and unsupported
 system-service names.
 `play_store_support_verified` remains false: this probe cannot certify sign-in,
 catalog access, or installation.
+
+### Manifest loading and optional backup absence
+
+After the manifest fixes, the isolated Play Store fixture completed both
+`Application.onCreate()` and `MainActivity.onCreate()` and entered the main looper.
+That intermediate run then exited with a null `SubscriptionManager` when Play Store
+registered a subscription listener; the subscription milestone below resolves that failure. Logs also report Google Play services as unavailable.
+`play_store_support_verified` remains false. No sign-in, catalog or installation
+has been verified.
+
+Completed in this iteration:
+
+- The unimplemented `backup` service returns absent instead of a fabricated
+  `NoNativeBinder`. Android's real BackupManager safely handles missing backup;
+  explicitly registered service binders are still honored. This avoids the
+  observed optional-backup path into the unavailable native driver. It does not
+  implement native Binder transport or make the Binder/Parcel smoke test pass.
+- `MuplarManifestInfo` reads the compiled APK manifest. Application metadata now
+  preserves typed values, resolves `android:value` resource references, retains
+  `android:resource` IDs, and excludes component metadata from the application
+  bundle. No Google-specific metadata value is invented.
+- Application themes come from the manifest; activity themes override them,
+  with application-theme inheritance and target-theme lookup for aliases.
+  Both initial and subsequent activity launches receive their component theme.
+  The prior name-based fallback remains for APKs with no declared theme.
+- APK class loaders load the declared `org.apache.http.legacy` library from the
+  Android image before APK classes. The registry currently supports only this
+  library; unknown optional libraries are skipped and missing required libraries
+  fail explicitly. This fixes the observed missing `ProtocolVersion` class.
+- The probe records application/activity completion separately and rejects a
+  `main looper exited:` failure even if the looper was entered earlier.
+
+Real-ART integration checks passed for typed manifest metadata, activity-theme
+override, a real legacy HTTP object, missing optional library handling, missing
+backup queries/dataChanged, signed-out account callbacks, and notification
+channel CRUD/package isolation/restart persistence. Launcher was not rerun.
+
+```sh
+bash tests/assets/android-backup/build-apk.sh
+python3 tests/android/backup_unavailable.py --sysroot build/opengapps/probe-rootfs
+bash tests/assets/android-manifest/build-apk.sh
+python3 tests/android/manifest_info.py --sysroot build/opengapps/probe-rootfs
+python3 platform/android-aarch64/compat/opengapps/probe-launch.py \
+  --sysroot build/opengapps/probe-rootfs --timeout 90
+```
+
+The subscription milestone below completes the frontend/listener step and a
+90-second live-looper observation. Visible rendering, cross-package GMS discovery
+and native Binder transport remain separate acceptance criteria.
+
+Build artifacts were staged under `build/sysroot` and the dedicated probe rootfs
+only. Running user prefixes and the application bundle were not updated.
+
+### Latest milestone — no-SIM subscriptions
+
+`MuplarContext` now provides genuine framework `SubscriptionManager` and
+`TelephonyRegistryManager` instances through string and typed service lookup.
+The bootstrap installs `TelephonyServiceManager` through the framework initializer
+when absent, allowing the frontend to resolve local `ISub` and
+`ITelephonyRegistry` interfaces through the existing service bridge.
+
+`MuplarSubscriptionService` models an immutable **no-modem/no-SIM** device:
+
+- Subscription lists and active ID arrays are empty, active/capacity counts are
+  zero, default/slot/phone/subscription IDs are invalid, and individual subscription
+  lookups return absent. No SIM identity, phone number or mobile service is invented.
+- Listener registration delivers an initial empty-state notification. The genuine
+  framework registry handles executor dispatch, duplicate suppression, removal
+  and re-registration. The local service retains no extra listener references
+  because its subscription state never changes.
+- Unsupported subscription mutations and unsupported registry operations raise
+  explicit errors. SIM provisioning, live subscription changes, modem events,
+  telephony permissions, multiple users and cross-process Binder are not implemented.
+
+The real-ART test verifies string/typed lookup identity, empty queries and invalid
+IDs, three initial/re-registration callbacks, duplicate suppression, removal,
+legacy main-looper callback dispatch, and explicit rejection of a default-data
+subscription mutation:
+
+```sh
+bash tests/assets/android-subscriptions/build-apk.sh
+python3 tests/android/subscription_service.py --sysroot build/opengapps/probe-rootfs
+```
+
+A fresh **90-second** Play Store probe completed application and activity creation,
+entered the main looper and remained running until the harness stopped it. The
+report records `main_looper_failed=false`, `native_crash=false`, both `onCreate`
+completion flags true, and a null pre-stop exit code. The prior subscription
+exception is absent, and Play Store logs its subscription callback.
+
+**The UI is still blank.** The software presenter produced a 1080×1920 frame;
+inspection of that frame showed white content. A live looper does not establish
+that the store UI or sign-in works. Logs repeatedly report Google Play services
+as missing. `play_store_support_verified` remains false; Gate B's visible-screen
+acceptance criterion remains open.
+
+Next work is to trace cross-package GMS/GSF discovery, actual package metadata,
+versions/signatures and service binding, and diagnose the blank rendered screen.
+Installed fixture APKs alone do not establish running Play services. Native
+Binder transport remains a separate unresolved compatibility requirement; the
+local Binder/Parcel smoke test is still expected to fail.
+
+The final subscription test (including mutation rejection), manifest/shared-library,
+backup, signed-out account and all four notification CRUD/restart cases passed.
+Launcher and interactive sign-in were not rerun.
+
+The bootstrap was built only under `build/sysroot` and exercised in the dedicated
+probe rootfs. Running user instances and the application bundle were not deployed.
+
+### Manifest-backed package discovery — November 25, 2026
+
+`MuplarPackageManager` now resolves self and registered cross-package APKs through
+Android's real `getPackageArchiveInfo()` parser. Package/application queries expose
+manifest versions, SDK levels, metadata and requested components. Enumeration is
+consistent across these two Java APIs and deduplicates self registration. Missing
+files and registry names that disagree with the APK identity are rejected.
+
+Signer queries use the framework verifier and return actual `Signature` and
+`SigningInfo` objects. The shim now registers the genuine IncrementalManager and
+StrictJarFile JNI methods required by the verifier. Package-name signature checks
+compare certificate sets instead of always returning a match. Unknown/unparseable
+packages return `SIGNATURE_UNKNOWN_PACKAGE`; UID-based checks also return unknown
+until stable package UID assignment exists. These checks do not implement a
+cross-package permission model, certificate-rotation authorization or system-app
+privileges. Unsigned archives remain discoverable without signer flags, but a
+signer request for an unverifiable archive fails closed.
+
+A bounded cache stores serialized snapshots keyed by APK path, size, modification
+time and parse flags. Returned metadata/certificates cannot mutate the cached
+record; signer queries cannot reuse an unverified snapshot. Installed APK files
+must be replaced through a managed installation path; this cache is not a defense
+against concurrent arbitrary file modification. Split-package installation,
+long-flag features beyond the legacy flag mask, Binder-facing package queries,
+service/provider execution and package visibility enforcement remain open.
+
+The real-ART package test passes for the three pinned Google APKs: exact version
+codes, legacy and modern signer information, Google certificate equality, a
+differently signed test APK mismatch, unknown/mismatched package rejection,
+version constraints, enumeration consistency and defensive metadata/certificate
+copies. The test verifies fixture SHA256 hashes before staging them:
+
+```sh
+bash tests/assets/android-packages/build-apk.sh
+python3 tests/android/package_discovery.py --sysroot build/opengapps/probe-rootfs
+```
+
+**The latest Play Store probe fails earlier than the historical blank-screen
+run.** Correct GMS discovery exposes another native Binder path: the log requests
+`network_management`, then reports `NoNativeBinder` conversion failure and aborts
+in `Parcel.writeInterfaceToken()` / `IPCThreadState::self()` because `/dev/binder`
+is absent. Neither application/activity completion nor main-looper entry is
+verified with this change. Missing-GMS and null-self-signature diagnostics from
+the previous run are absent. This does not establish that GMS is running, and no
+new screen or sign-in is verified. `play_store_support_verified` remains false.
+The probe now excludes native crashes from its startup-timeout classification.
+
+The next step is a coherent Binder/service substrate, beginning with the existing
+Binder/Parcel reproducer and the `network_management` request. Reverting truthful
+package discovery or inventing successful remote transactions would conceal this
+dependency. Keep the previous blank-screen milestone as historical evidence only.
+
+Manifest, signed-out account, no-SIM subscription and all four notification
+CRUD/restart regressions pass with these changes. An isolated Launcher3 smoke
+also completes application/activity creation, enters its main looper and presents
+a 1080×1920 software frame; drawer gestures and app-launch interaction were not
+rerun. Full CI clang-format and cppcheck commands, shellcheck for changed POSIX
+shell scripts, zsh syntax validation and `git diff --check` pass.
+Bootstrap and shim builders
+accept `--no-sync` to build without updating user installations; use it for
+isolated compatibility work. Only build artifacts and the dedicated probe rootfs
+were staged in this iteration.
+
+### Native socket Binder RPC milestone — November 25, 2026
+
+The experimental ART backend now uses the selected Android image's real
+`libbinder` RPC transport when its optional adapter is staged. The local
+Binder/Parcel fixture passes, including native service objects, truthful
+unsupported-operation replies, append/truncation, interface enforcement,
+marshalling rejection and verified release of strong references after recycling.
+A two-guest fixture also passes real socket transactions, remote callbacks,
+remote proxy identity, exception replies, unknown-transaction rejection,
+unregistration and actual peer-death notification. Calls after peer death fail.
+There is no fake `/dev/binder` device or successful no-op transaction.
+
+`NoNativeBinder` has been replaced by genuine local Binder objects. The
+`network_management` interface is locally reachable and its unsupported
+operations explicitly raise errors. No network-management functionality is
+claimed. Framework Binder/BinderProxy methods and native holder ownership are
+preserved when framework JNI registration succeeds. Socket RPC uses an owning
+proxy adapter to avoid the stock JNI bridge's kernel-only callback/finalizer
+paths. The decision, supported subset, limitations and reproduction commands are
+recorded in [the Binder RPC architecture decision](./binder-rpc.md).
+
+The next exposed application failure was `getInstalledModules()`. This userland
+has no managed-module metadata provider, so package-manager module enumeration
+now returns an empty list and unknown module lookup raises `NameNotFoundException`.
+No APEX/module package or module-update success is invented.
+
+**Latest 90-second fresh-data observation:** both application/activity creation complete,
+the main looper remains running, and no native crash or thread-table exhaustion
+is observed. The initial relay configuration consumed extra threads and hit
+elfuse's 64-thread table; reducing the local relay's worker configuration avoids
+that failure without changing the runtime's thread limit.
+
+**The screen is still blank.** The probe now saves a fresh 1080×1920 frame and
+PNG and records `frame.uniform=true`. Optional view tracing shows a laid-out shell
+with no visible content; GMS compliance queries fail. A live RPC transport does
+not start GMS or GSF, execute authenticators, or supply service/provider discovery.
+No readable store/sign-in UI, sign-in, catalog or installation is verified.
+`play_store_support_verified` remains false. Continue with actual GMS/GSF runtime
+service/provider dispatch, retaining visible-screen acceptance as an open gate.
+
+The repeated-run recovery probe separately failed during `njk.onStart()` after
+Play Store selected `RecoveryModeActivity`. Its log/report are retained alongside
+the fresh-data result. The probe's `--fresh-data` option backs up only Play Store's
+app data inside the dedicated rootfs; it does not establish persistence/recovery
+compatibility. The Binder, two-process RPC, package, manifest, account,
+subscription, notification persistence and Launcher startup/frame regressions
+pass; full formatting and cppcheck checks pass as well.
 
 ### Static implementation gaps
 
 | Area | Current implementation | Work required |
 | --- | --- | --- |
 | Account manager | Framework frontend and signed-out query/listener bridge implemented; authentication returns explicit unsupported errors | Authenticator execution, account persistence, identity/permission enforcement and sign-in |
-| Package discovery | `getInstalledPackages()` returns an empty list; package-info lookup is largely self-only | Cross-package identity, versions, signatures, components, metadata and updates |
-| Signature checks | `checkSignatures()` currently returns `SIGNATURE_MATCH` unconditionally | Actual signer comparison and correct mismatch/unknown-package results |
+| Package discovery | Java package/application lookup and enumeration use real APK manifests and requested signer data | Binder-facing consistency, stable identities, visibility policy, splits and update lifecycle |
+| Signature checks | Package-name checks compare real certificate sets; unknown/unverifiable packages and UID checks fail closed | Stable UID mapping, rotation authorization and permission enforcement |
 | Services | General `startService()` returns null; binding mostly special-cases Launcher3 | Instantiate declared services, dispatch lifecycle and bind callbacks, retain connections and handle death |
 | Service/provider resolution | Service queries are empty and provider resolution is incomplete | Manifest-backed service/provider registries and cross-package loading |
-| Native Binder/Parcel | Genuine Parcel JNI coexists with synthetic Binder holders; extended probe aborts in Binder/JNI | Reproduce and resolve registration/holder/lifetime interoperability, then validate real callback round trips |
+| Native Binder/Parcel | Optional native socket RPC adapter passes local ownership and two-process call/callback/death tests; latest Play Store run has no Binder abort | Kernel IPC, credentials/permissions, FD transfer, transparent service mapping and broader native/Java entry points |
 | Network/background work | Connectivity and job APIs include bootstrap stubs | Real behavior for the methods exercised by Play Store and GMS |
 | Notification channels | Persistent package-scoped channel/group metadata and public CRUD/restart tests implemented | Notification delivery, full policy/permissions and framework-format migrations |
 | Downloads and installation | Full Play Store download-to-install flow is unverified | Persistent downloads, installer sessions, split APKs, update/rollback behavior and truthful status callbacks |
@@ -219,8 +465,18 @@ This is the immediate implementation priority.
   dimensions as a fresh object; verify portrait and landscape behavior.
 - [x] Implement persistent, package-scoped channel/group metadata and validate
   public CRUD, object-copy isolation, deletion/recreation and cold restarts.
-- [ ] Resolve the native Binder/JNI abort before declaring initialization successful.
-- [ ] Verify package versions and application metadata needed by initialization.
+- [x] Enable framework Binder registration and add an isolated real-ART Binder/Parcel reproducer.
+- [ ] Implement native Binder transport and bridge service objects; the reproducer
+  currently aborts on the missing `/dev/binder` driver.
+- [x] Resolve the observed native Binder/JNI abort using the optional real socket
+  RPC adapter; validate local ownership plus cross-process callbacks and death.
+  This does not implement kernel Binder transport.
+- [x] Read self-application manifest metadata/themes and the declared legacy HTTP library.
+- [x] Implement no-SIM SubscriptionManager frontend/listeners and keep the main
+  looper alive for a 90-second isolated observation.
+- [ ] Render a stable, readable Play Store or sign-in screen; the captured frame
+  remains blank despite the live looper.
+- [ ] Verify cross-package versions, metadata and running Google Play services.
 - [ ] Classify optional OEM probes separately from required Android services.
 
 Acceptance: `Application.onCreate()` and `MainActivity.onCreate()` complete;

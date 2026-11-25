@@ -18,8 +18,13 @@ The interactive device experience across the core loop is now **functioning and 
 
 Google Play Store from Open GApps is the next real-application target.
 Signed-out AccountManager queries and stable display-size discovery are now
-implemented, alongside persistent notification-channel metadata. Startup remains
-blocked by a native Binder/JNI abort before the main looper. See [the Play Store implementation plan](./play-store.md)
+implemented, alongside persistent notification-channel metadata, manifest
+metadata/themes, declared legacy HTTP loading and no-SIM subscription listeners.
+Manifest-backed package discovery and the experimental native socket Binder RPC
+adapter pass focused tests, including remote callbacks/death. Play Store now
+completes initialization and survives a 90-second main-looper observation without
+a native crash, but the freshly captured screen is still blank.
+Google Play services and native Binder transport remain incomplete. See [the Play Store implementation plan](./play-store.md)
 for verified evidence, dependency order, reproduction commands and acceptance gates.
 Launcher3 and the framework test app remain regression baselines; their success
 does not establish Play Store compatibility.
@@ -34,7 +39,7 @@ does not establish Play Store compatibility.
 | **Touch Input** | `MotionEvent` & Touch Routing | 🟢 **Working** | Pointer events translated and dispatched cleanly to focused View/Activity. | [device-window.md](./device-window.md) |
 | **Home Launcher** | `Launcher3` | 🟢 **Working** | App icons bound dynamically, drawer gesture working, Back navigation stable. | [launcher3.md](./launcher3.md) |
 | **Framework Test App** | `UiTest` / Applications | 🟢 **Working** | Multi-activity task back-stack, in-session install UX, and custom Application lifecycle verified. | [framework-services.md](./framework-services.md) |
-| **Target App** | Google Play Store / Open GApps | 🔴 **Blocked** | Verified fixtures, aliases, signed-out accounts, stable display size and channel metadata; native Binder/JNI still blocks startup. | [play-store.md](./play-store.md) |
+| **Target App** | Google Play Store / Open GApps | 🔴 **Blocked** | Native socket RPC call/callback/death tests pass; latest startup survives 90 seconds without a native crash, but the screen remains blank. | [play-store.md](./play-store.md) |
 | **Database** | SQLite & CursorWindow | 🟢 **Working** | Genuine AOSP `libandroid_runtime.so` SQLite symbols bound and persisting. | [framework-services.md](./framework-services.md) |
 | **App Identity** | `ActivityThread` / `AppBindData` | 🟢 **Working** | `mBoundApplication` populated, `Process.sProcessName` set, manifest Application class resolved. | [java-art-surface.md](./java-art-surface.md) |
 | **Network & Jobs** | `ConnectivityManager` & `JobScheduler` | 🟡 **Stubbed** | Bootstrap classes added for WorkManager initialization. | [framework-services.md](./framework-services.md) |

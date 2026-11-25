@@ -62,6 +62,7 @@ Muplar hosts shared Android framework services and system manager shims through 
 | **NotificationManager** | `android.app` | 🟡 Persistent channel/group metadata; delivery remains incomplete | In Progress |
 | **AlarmManager** | `android.app` | 🟡 Basic Stub | In Progress |
 | **InputMethodManager (IME)**| `android.view.inputmethod` | 🔴 Missing | P2 |
+| **SubscriptionManager** | `android.telephony` | 🟡 No-SIM queries and initial listener lifecycle verified; no modem/SIM provisioning | In Progress |
 | **DownloadManager** | `android.app` | ⏳ Not Started | P3 |
 
 
@@ -80,5 +81,48 @@ full caller authorization, multi-user operation or metadata migration across
 framework versions.
 
 See [the Play Store plan](./play-store.md) for reproduction commands and the
-remaining native Binder/Parcel interoperability blocker. Play Store still does
-not reach the main looper or provide sign-in.
+remaining native Binder/Parcel interoperability work. Play Store now enters the
+main looper and survives a 90-second observation with no-SIM subscriptions; the
+captured frame is still blank and sign-in remains unverified.
+
+## Manifest and absent-backup milestone
+
+The self-application context reads compiled-manifest application metadata and
+application/component themes. The APK loader supports declared legacy HTTP from
+the Android image. A missing backup manager is reported as absent, allowing the
+real BackupManager frontend to take its unavailable-service path rather than
+entering native Binder through a fabricated service.
+
+See the [latest Play Store milestone](./play-store.md#manifest-loading-and-optional-backup-absence)
+for scope, real-ART regression commands, and follow-up compatibility work.
+
+## No-SIM subscription milestone
+
+Genuine framework SubscriptionManager and TelephonyRegistryManager frontends use
+local subscription/registry interfaces backed by an immutable no-SIM state.
+Queries return empty lists and invalid IDs; registration delivers an initial
+snapshot through the framework's executor/legacy looper path. Duplicate handling,
+removal and re-registration are covered by the real-ART smoke test. Unsupported
+mutations fail explicitly; modem events, SIM provisioning, multi-user policy and
+cross-process telephony transport remain unsupported.
+
+See the [subscription milestone](./play-store.md#latest-milestone--no-sim-subscriptions)
+for scope and reproduction commands. The subsequent
+[package-discovery milestone](./play-store.md#manifest-backed-package-discovery--november-25-2026)
+records real cross-package versions/signers and the latest native Binder startup
+abort; the older blank-screen result is historical.
+
+
+### Native Binder RPC experiment
+
+The optional [socket Binder RPC adapter](./binder-rpc.md) uses the image's actual
+libbinder implementation and passes local object-ownership tests and two-process
+transactions, callbacks, error propagation and remote death. Unavailable services
+now have real local Binders that report explicit errors instead of fabricated
+successful replies. `network_management` has a typed local interface; its
+operations remain unimplemented. This transport does not automatically run GMS,
+provide Android caller-UID permissions, or implement kernel Binder.
+
+Play Store's latest 90-second probe completes application/activity initialization
+with no native crash or thread-table exhaustion. Fresh frame evidence remains
+uniformly white, so visible UI and sign-in remain unverified.

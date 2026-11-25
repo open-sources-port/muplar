@@ -52,7 +52,7 @@ public final class ArtApkMain {
                 Object activityObj = ctor.newInstance();
                 System.out.println("[Muplar/ART] instantiated activity class");
                 attachBaseContext(activityObj,
-                    new MuplarContext(packageName, apkPath, loader));
+                    new MuplarContext(packageName, apkPath, loader, activityClassName));
                 attachActivityInfo(activityObj, packageName, activityClassName, apkPath);
                 attachIntent(activityObj, packageName, activityClassName);
                 attachApplication(activityObj, packageName, apkPath, loader,
@@ -131,7 +131,7 @@ public final class ArtApkMain {
             ctor.setAccessible(true);
             Object activityObj = ctor.newInstance();
             attachBaseContext(activityObj,
-                new MuplarContext(packageName, apkPath, loader));
+                new MuplarContext(packageName, apkPath, loader, activityClassName));
             attachActivityInfo(activityObj, packageName, activityClassName, apkPath);
             attachIntent(activityObj, packageName, activityClassName);
             attachApplication(activityObj, packageName, apkPath, loader,
@@ -183,6 +183,7 @@ public final class ArtApkMain {
         } catch (Throwable t) {
             System.err.println("[Muplar/ART] runtime shim load failed: "
                 + t.getClass().getName() + ": " + t.getMessage());
+            throw new IllegalStateException("Android runtime shim initialization failed", t);
         }
     }
 
@@ -698,10 +699,11 @@ public final class ArtApkMain {
             setField(appInfo, "targetSdkVersion", Integer.valueOf(30));
             try {
                 MuplarContext mCtx = new MuplarContext(packageName, apkPath,
-                    ArtApkMain.class.getClassLoader());
+                    ArtApkMain.class.getClassLoader(), activityName);
+                setField(appInfo, "metaData", mCtx.getApplicationInfo().metaData);
+                setField(appInfo, "theme", Integer.valueOf(mCtx.getApplicationInfo().theme));
                 theme = mCtx.getResolvedThemeResId();
                 if (theme != 0) {
-                    setField(appInfo, "theme", Integer.valueOf(theme));
                     setField(info, "theme", Integer.valueOf(theme));
                 }
             } catch (Throwable ignored) {
@@ -1227,6 +1229,27 @@ public final class ArtApkMain {
         ClassLoader parent = Thread.currentThread().getContextClassLoader();
         if (parent == null) {
             parent = ArtApkMain.class.getClassLoader();
+        }
+
+        // Shared libraries are loaded ahead of APK classes, and only when the
+        // application declares them. Keep this registry narrow until additional
+        // system-library dependencies have been implemented and tested.
+        MuplarManifestInfo manifest = MuplarManifestInfo.read(
+            MuplarContext.createResources(apkPath), packageName);
+        for (java.util.Map.Entry<String, Boolean> library : manifest.libraries.entrySet()) {
+            String name = library.getKey();
+            java.io.File jar = "org.apache.http.legacy".equals(name)
+                ? new java.io.File("/system/framework/org.apache.http.legacy.jar") : null;
+            if (jar == null || !jar.isFile()) {
+                if (library.getValue()) {
+                    throw new IllegalStateException("Required shared library unavailable: " + name);
+                }
+                continue;
+            }
+            Class<?> sharedLoader = Class.forName("dalvik.system.PathClassLoader");
+            parent = (ClassLoader) sharedLoader.getConstructor(String.class, ClassLoader.class)
+                .newInstance(jar.getPath(), parent);
+            System.out.println("[Muplar/ART] declared shared library loaded: " + name);
         }
 
         // 1st choice: dalvik.system.DexClassLoader  (running in ART)

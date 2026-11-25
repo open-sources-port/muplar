@@ -430,7 +430,8 @@ final class MuplarFramePresenter {
     private static void debugDumpViews(View v, int depth) {
         if (v == null || depth > 10) return;
         String cls = v.getClass().getSimpleName();
-        if (cls.contains("BubbleTextView") || cls.contains("AllApps") ||
+        if ("all".equals(System.getenv("MUPLAR_DEBUG_VIEWS")) ||
+            cls.contains("BubbleTextView") || cls.contains("AllApps") ||
             cls.contains("PredictionRow") || cls.contains("AppsSearchContainerLayout")) {
             StringBuilder sb = new StringBuilder();
             for (int i = 0; i < depth; i++) sb.append("  ");

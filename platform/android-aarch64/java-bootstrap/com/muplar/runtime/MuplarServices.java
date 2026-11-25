@@ -71,9 +71,15 @@ public final class MuplarServices {
         }
     }
 
-    static IBinder getBinder(String name) {
+    static synchronized IBinder getBinder(String name) {
         String key = name == null ? "" : name;
         IBinder binder = services.get(key);
+        // No backup manager or transport is installed. Framework BackupManager
+        // handles a missing service; a placeholder instead creates an AIDL proxy
+        // and enters native Binder for operations we cannot perform.
+        if (binder == null && "backup".equals(key)) {
+            return null;
+        }
         if (binder == null) {
             System.out.println("[Muplar/ART] create service binder name=" + key);
             binder = createBinder(key);
@@ -99,7 +105,7 @@ public final class MuplarServices {
         // unavailable kernel Binder transport while Launcher3 loads strings.
         String iface = serviceInterface(name);
         if (iface == null) {
-            return new NoNativeBinder(name);
+            return new UnavailableServiceBinder(name);
         }
         try {
             if ("device_policy".equals(name)) {
@@ -122,11 +128,14 @@ public final class MuplarServices {
                 + name + " iface=" + iface + " error="
                 + t.getClass().getName() + ": " + t.getMessage());
             t.printStackTrace(System.err);
-            return new NoNativeBinder(iface);
+            return new UnavailableServiceBinder(iface);
         }
     }
 
     private static String serviceInterface(String name) {
+        if ("network_management".equals(name)) {
+            return "android.os.INetworkManagementService";
+        }
         if ("account".equals(name)) {
             return "android.accounts.IAccountManager";
         }
@@ -201,6 +210,12 @@ public final class MuplarServices {
         }
         if ("clipboard".equals(name)) {
             return "android.content.IClipboard";
+        }
+        if ("isub".equals(name)) {
+            return "com.android.internal.telephony.ISub";
+        }
+        if ("telephony.registry".equals(name)) {
+            return "com.android.internal.telephony.ITelephonyRegistry";
         }
         if ("phone".equals(name)) {
             return "com.android.internal.telephony.ITelephony";
@@ -331,6 +346,9 @@ public final class MuplarServices {
             if ("asBinder".equals(method.getName())) {
                 return binder;
             }
+            if ("android.os.INetworkManagementService".equals(descriptor)) {
+                throw new UnsupportedOperationException("Network management operation is not implemented: " + method.getName());
+            }
             if ("android.app.INotificationManager".equals(descriptor) &&
                 MuplarNotificationChannels.handles(method.getName())) {
                 return MuplarNotificationChannels.invoke(method, args);
@@ -410,6 +428,12 @@ public final class MuplarServices {
                 if (value != null) {
                     return value;
                 }
+            }
+            if ("com.android.internal.telephony.ISub".equals(descriptor)) {
+                return MuplarSubscriptionService.query(method);
+            }
+            if ("com.android.internal.telephony.ITelephonyRegistry".equals(descriptor)) {
+                return MuplarSubscriptionService.registry(method, args);
             }
             if ("com.android.internal.telephony.ITelephony".equals(descriptor)) {
                 if (String.class.equals(method.getReturnType())) {
@@ -1544,7 +1568,9 @@ public final class MuplarServices {
             if ("addService".equals(name)) {
                 if (args != null && args.length >= 2 && args[0] instanceof String
                     && args[1] instanceof IBinder) {
-                    services.put((String)args[0], (IBinder)args[1]);
+                    synchronized (MuplarServices.class) {
+                        services.put((String)args[0], (IBinder)args[1]);
+                    }
                 }
                 return null;
             }
@@ -1588,79 +1614,25 @@ public final class MuplarServices {
         }
     }
 
-    private static final class NoNativeBinder implements IBinder {
+    /** A real local Binder that reports unsupported transactions as errors. */
+    private static final class UnavailableServiceBinder extends Binder {
         private final String descriptor;
-
-        NoNativeBinder(String descriptor) {
+        UnavailableServiceBinder(String descriptor) {
             this.descriptor = descriptor == null ? "" : descriptor;
         }
-
-        @Override
-        public String getInterfaceDescriptor() {
-            return descriptor;
-        }
-
-        @Override
-        public boolean pingBinder() {
-            return true;
-        }
-
-        @Override
-        public boolean isBinderAlive() {
-            return true;
-        }
-
-        @Override
-        public IInterface queryLocalInterface(String descriptor) {
-            return null;
-        }
-
-        @Override
-        public void dump(FileDescriptor fd, String[] args) {
-        }
-
-        @Override
-        public void dumpAsync(FileDescriptor fd, String[] args) {
-        }
-
-        @Override
-        public boolean transact(int code, Parcel data, Parcel reply, int flags)
-            throws RemoteException {
-            if (reply != null) {
-                try {
-                    reply.writeNoException();
-                    if ("android.app.admin.IDevicePolicyManager".equals(descriptor)) {
-                        if (code == 432 /* TRANSACTION_getManagedSubscriptionsPolicy */) {
-                            reply.writeInt(1); // Non-null TypedObject indicator
-                            reply.writeInt(0); // ManagedSubscriptionsPolicy type (0 = TYPE_ALL_PERSONAL_SUBSCRIPTIONS)
-                        }
-                    }
-                } catch (Throwable ignored) {
-                }
-                reply.setDataPosition(0);
+        @Override public String getInterfaceDescriptor() { return descriptor; }
+        @Override protected boolean onTransact(int code, Parcel data, Parcel reply, int flags)
+                throws RemoteException {
+            if (code == IBinder.INTERFACE_TRANSACTION) {
+                if (reply != null) reply.writeString(descriptor);
+                return true;
             }
-            return true;
-        }
-
-        @Override
-        public void linkToDeath(DeathRecipient recipient, int flags) {
-        }
-
-        @Override
-        public boolean unlinkToDeath(DeathRecipient recipient, int flags) {
-            return true;
-        }
-
-        @Override
-        public void addFrozenStateChangeCallback(
-            Executor executor,
-            FrozenStateChangeCallback callback) {
-        }
-
-        @Override
-        public boolean removeFrozenStateChangeCallback(
-            FrozenStateChangeCallback callback) {
-            return true;
+            if (reply != null && (flags & IBinder.FLAG_ONEWAY) == 0) {
+                reply.writeException(new UnsupportedOperationException(
+                    "System service " + descriptor + " transaction " + code + " is not implemented"));
+                return true;
+            }
+            return false;
         }
     }
 }

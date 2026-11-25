@@ -53,8 +53,24 @@ public final class MuplarPackageManager extends MuplarPackageManagerBridge {
     @Override public int checkPermission(String permName, String pkgName) {
         return PERMISSION_GRANTED;
     }
-    @Override public int checkSignatures(int uid1, int uid2) { return SIGNATURE_MATCH; }
-    @Override public int checkSignatures(String pkg1, String pkg2) { return SIGNATURE_MATCH; }
+    // The runtime does not yet assign distinct, stable per-package UIDs.
+    @Override public int checkSignatures(int uid1, int uid2) { return SIGNATURE_UNKNOWN_PACKAGE; }
+    @Override public int checkSignatures(String pkg1, String pkg2) {
+        try {
+            android.content.pm.Signature[] first = getPackageInfo(pkg1, GET_SIGNATURES).signatures;
+            android.content.pm.Signature[] second = getPackageInfo(pkg2, GET_SIGNATURES).signatures;
+            if (first == null || first.length == 0) {
+                return second == null || second.length == 0
+                    ? SIGNATURE_NEITHER_SIGNED : SIGNATURE_FIRST_NOT_SIGNED;
+            }
+            if (second == null || second.length == 0) return SIGNATURE_SECOND_NOT_SIGNED;
+            return new java.util.HashSet<>(java.util.Arrays.asList(first)).equals(
+                new java.util.HashSet<>(java.util.Arrays.asList(second)))
+                ? SIGNATURE_MATCH : SIGNATURE_NO_MATCH;
+        } catch (NameNotFoundException e) {
+            return SIGNATURE_UNKNOWN_PACKAGE;
+        }
+    }
     @Override public void clearInstantAppCookie() {}
     @Override public void clearPackagePreferredActivities(String packageName) {}
     @Override public String[] currentToCanonicalPackageNames(String[] names) { return names; }
@@ -105,14 +121,11 @@ public final class MuplarPackageManager extends MuplarPackageManagerBridge {
     @Override public Drawable getApplicationIcon(String packageName) { return defaultIcon(); }
     @Override public ApplicationInfo getApplicationInfo(String packageName, int flags)
             throws NameNotFoundException {
-        if (this.packageName.equals(packageName)) return applicationInfo;
-        for (MuplarServices.InstalledPackage pkg :
-                MuplarServices.queryInstalledPackages()) {
-            if (packageName.equals(pkg.packageName)) {
-                return createApplicationInfo(pkg);
-            }
-        }
-        throw new NameNotFoundException(packageName);
+        return getPackageInfo(packageName, flags).applicationInfo;
+    }
+    @Override public ApplicationInfo getApplicationInfo(String packageName, ApplicationInfoFlags flags)
+            throws NameNotFoundException {
+        return getApplicationInfo(packageName, (int) flags.getValue());
     }
     @Override public CharSequence getApplicationLabel(ApplicationInfo info) {
         return info != null && info.packageName != null ? info.packageName : packageName;
@@ -207,18 +220,36 @@ public final class MuplarPackageManager extends MuplarPackageManagerBridge {
         return drawable != null ? drawable : defaultIcon();
     }
     @Override public List<ApplicationInfo> getInstalledApplications(int flags) {
-        java.util.ArrayList<ApplicationInfo> result =
-            new java.util.ArrayList<ApplicationInfo>();
-        result.add(applicationInfo);
-        for (MuplarServices.InstalledPackage pkg :
-                MuplarServices.queryInstalledPackages()) {
-            result.add(createApplicationInfo(pkg));
-        }
+        java.util.ArrayList<ApplicationInfo> result = new java.util.ArrayList<>();
+        for (PackageInfo pkg : getInstalledPackages(flags)) result.add(pkg.applicationInfo);
         return result;
     }
     @Override public List<PackageInfo> getInstalledPackages(int flags) {
+        java.util.LinkedHashSet<String> names = new java.util.LinkedHashSet<>();
+        names.add(packageName);
+        for (MuplarServices.InstalledPackage pkg : MuplarServices.queryInstalledPackages()) {
+            names.add(pkg.packageName);
+        }
+        java.util.ArrayList<PackageInfo> result = new java.util.ArrayList<>();
+        for (String name : names) {
+            try { result.add(getPackageInfo(name, flags)); }
+            catch (NameNotFoundException ignored) { /* Stale or invalid registry entry. */ }
+        }
+        return result;
+    }
+    @Override public List<PackageInfo> getInstalledPackages(PackageInfoFlags flags) {
+        return getInstalledPackages((int) flags.getValue());
+    }
+    @Override public List<ApplicationInfo> getInstalledApplications(ApplicationInfoFlags flags) {
+        return getInstalledApplications((int) flags.getValue());
+    }
+    // No module-metadata provider or managed module packages are installed.
+    @Override public List<android.content.pm.ModuleInfo> getInstalledModules(int flags) {
         return Collections.emptyList();
     }
+    @Override public android.content.pm.ModuleInfo getModuleInfo(String name, int flags)
+            throws NameNotFoundException { throw new NameNotFoundException(name); }
+
     @Override public String getInstallerPackageName(String packageName) { return null; }
     @Override public byte[] getInstantAppCookie() { return new byte[0]; }
     @Override public int getInstantAppCookieMaxBytes() { return 0; }
@@ -230,15 +261,100 @@ public final class MuplarPackageManager extends MuplarPackageManagerBridge {
     @Override public int[] getPackageGids(String packageName) { return new int[0]; }
     @Override public int[] getPackageGids(String packageName, int flags) { return new int[0]; }
     @Override public PackageInfo getPackageInfo(VersionedPackage versionedPackage, int flags)
-            throws NameNotFoundException { throw new NameNotFoundException(); }
-    @Override public PackageInfo getPackageInfo(String packageName, int flags)
             throws NameNotFoundException {
-        if (!this.packageName.equals(packageName)) throw new NameNotFoundException(packageName);
-        PackageInfo info = new PackageInfo();
-        info.packageName = packageName;
-        info.applicationInfo = applicationInfo;
+        PackageInfo info = getPackageInfo(versionedPackage.getPackageName(), flags);
+        long version = versionedPackage.getLongVersionCode();
+        if (version != -1 && version != info.getLongVersionCode()) {
+            throw new NameNotFoundException(versionedPackage.toString());
+        }
         return info;
     }
+    @Override public PackageInfo getPackageInfo(String packageName, PackageInfoFlags flags)
+            throws NameNotFoundException {
+        return getPackageInfo(packageName, (int) flags.getValue());
+    }
+
+    @Override public PackageInfo getPackageInfo(VersionedPackage versionedPackage, PackageInfoFlags flags)
+            throws NameNotFoundException {
+        return getPackageInfo(versionedPackage, (int) flags.getValue());
+    }
+
+    // Store serialized snapshots so callers cannot mutate cached metadata or certificates.
+    // Flags are part of the key: an unsigned lookup must never satisfy a signer query.
+    private final java.util.Map<String, byte[]> archiveCache =
+        new java.util.LinkedHashMap<String, byte[]>(16, 0.75f, true) {
+            @Override protected boolean removeEldestEntry(java.util.Map.Entry<String, byte[]> entry) {
+                return size() > 64;
+            }
+        };
+
+    @Override public PackageInfo getPackageInfo(String targetPackage, int flags)
+            throws NameNotFoundException {
+        String apk;
+        boolean self = packageName.equals(targetPackage);
+        if (self) {
+            apk = applicationInfo.sourceDir;
+        } else {
+            MuplarServices.InstalledPackage pkg = MuplarServices.findInstalledPackage(targetPackage);
+            if (pkg == null) throw new NameNotFoundException(targetPackage);
+            apk = pkg.apk;
+        }
+        if (apk == null || apk.isEmpty()) throw new NameNotFoundException(targetPackage);
+        java.io.File file = new java.io.File(apk);
+        if (!file.isFile()) throw new NameNotFoundException(targetPackage);
+        int parseFlags = flags | GET_META_DATA;
+        if ((flags & (GET_SIGNATURES | GET_SIGNING_CERTIFICATES)) != 0) {
+            parseFlags |= GET_SIGNATURES | GET_SIGNING_CERTIFICATES;
+        }
+        String key = apk + ":" + file.length() + ":" + file.lastModified() + ":" + parseFlags;
+        PackageInfo info;
+        synchronized (archiveCache) {
+            byte[] snapshot = archiveCache.get(key);
+            android.os.Parcel parcel = android.os.Parcel.obtain();
+            try {
+                if (snapshot == null) {
+                    info = super.getPackageArchiveInfo(apk, parseFlags);
+                    if (info == null || !targetPackage.equals(info.packageName)) {
+                        throw new NameNotFoundException(targetPackage);
+                    }
+                    info.writeToParcel(parcel, 0);
+                    snapshot = parcel.marshall();
+                    archiveCache.put(key, snapshot);
+                }
+                parcel.unmarshall(snapshot, 0, snapshot.length);
+                parcel.setDataPosition(0);
+                info = PackageInfo.CREATOR.createFromParcel(parcel);
+            } finally {
+                parcel.recycle();
+            }
+        }
+        // Validate even on cache hits: the registry is not an authority for APK identity.
+        if (!targetPackage.equals(info.packageName)) throw new NameNotFoundException(targetPackage);
+        if ((flags & GET_SIGNATURES) == 0) info.signatures = null;
+        if ((flags & GET_SIGNING_CERTIFICATES) == 0) info.signingInfo = null;
+        if ((flags & GET_META_DATA) == 0) {
+            info.applicationInfo.metaData = null;
+            clearMetadata(info.activities);
+            clearMetadata(info.receivers);
+            clearMetadata(info.services);
+            clearMetadata(info.providers);
+            clearMetadata(info.instrumentation);
+            clearMetadata(info.permissions);
+        }
+        ApplicationInfo app = info.applicationInfo;
+        app.sourceDir = apk;
+        app.publicSourceDir = apk;
+        if (self) {
+            app.uid = applicationInfo.uid;
+            app.dataDir = applicationInfo.dataDir;
+            app.nativeLibraryDir = applicationInfo.nativeLibraryDir;
+        }
+        return info;
+    }
+    private static void clearMetadata(PackageItemInfo[] items) {
+        if (items != null) for (PackageItemInfo item : items) item.metaData = null;
+    }
+
     private final PackageInstaller packageInstaller = new android.content.pm.MuplarPackageInstaller();
     @Override public PackageInstaller getPackageInstaller() { return packageInstaller; }
     @Override public int getPackageUid(String packageName, int flags)

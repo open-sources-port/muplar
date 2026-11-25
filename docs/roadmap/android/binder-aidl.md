@@ -3,6 +3,12 @@
 Stable area: Binder service manager, Binder object lifecycle, Parcel payloads,
 AIDL-generated code, and NDK Binder compatibility.
 
+The existing NDK checklist below concerns Muplar's host-side API model; it must
+not be treated as evidence for real framework JNI or kernel Binder support.
+The separate [native socket RPC backend](./binder-rpc.md) now passes real-ART local
+ownership and two-process transaction/callback/death tests. Kernel Binder,
+caller-UID security and transparent framework service transport remain open.
+
 ## Done
 
 - [x] Basic service-manager lookup and stable remote Binder handles.

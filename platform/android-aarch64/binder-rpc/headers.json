@@ -1,0 +1,44 @@
+[
+  {
+    "repository": "https://android.googlesource.com/platform/frameworks/native",
+    "commit": "9224694e64b2464dcdc03fe42740d06c08b27a88",
+    "path": "libs/binder/include",
+    "content_sha256": "14f5453e879af08c6c88efbdb157f0c163ca41fda4bc1127c1e5c9a3cf6ad462"
+  },
+  {
+    "repository": "https://android.googlesource.com/platform/system/core",
+    "commit": "32bd7a7dd5190626302b661d818f1d23d9be7b0b",
+    "path": "libutils/include",
+    "content_sha256": "7c8f5e4e3bbe1aabc95162b5833934c8a03d54be45b3296796d144dcd218d07e"
+  },
+  {
+    "repository": "https://android.googlesource.com/platform/system/core",
+    "commit": "32bd7a7dd5190626302b661d818f1d23d9be7b0b",
+    "path": "libutils/binder/include",
+    "content_sha256": "580a260270a05196589b824fb367c5243f31dc8abcac95c6805ce8a3bcac0d86"
+  },
+  {
+    "repository": "https://android.googlesource.com/platform/system/core",
+    "commit": "32bd7a7dd5190626302b661d818f1d23d9be7b0b",
+    "path": "libcutils/include",
+    "content_sha256": "162458958f2fbcc26bd853089c08411b5f0ee9430bf399bc8f98dc0f6791ae23"
+  },
+  {
+    "repository": "https://android.googlesource.com/platform/system/core",
+    "commit": "32bd7a7dd5190626302b661d818f1d23d9be7b0b",
+    "path": "libsystem/include",
+    "content_sha256": "1143ba3feaf64dde2604326de326dd5ce07ae2adcd26f352618e9aa1eac0dffb"
+  },
+  {
+    "repository": "https://android.googlesource.com/platform/system/libbase",
+    "commit": "68f963c62f7fddc70c34df141d943ae0f7631020",
+    "path": "include",
+    "content_sha256": "f4550e0da67c782a3a7f07471decb441e803bd95d774bce00b0869bf5f13c00d"
+  },
+  {
+    "repository": "https://android.googlesource.com/platform/system/logging",
+    "commit": "54d3fa266d2123c0b076c646fae60d049311052a",
+    "path": "liblog/include",
+    "content_sha256": "927a24b25333c695acb13313ff28ee5ac1c62597e4d33675f3d7f7ad02dfab9c"
+  }
+]

@@ -71,6 +71,8 @@ public final class MuplarContext extends ContextWrapper {
     private final Object autofillManager;
     private final Object clipboardManager;
     private final Object telephonyManager;
+    private final Object subscriptionManager;
+    private final Object telephonyRegistryManager;
     private final Object wifiManager;
     private final ContentResolver contentResolver;
     private final PackageManager packageManager;
@@ -78,6 +80,11 @@ public final class MuplarContext extends ContextWrapper {
     private final Map<String, SharedPreferences> preferences = new HashMap<>();
 
     public MuplarContext(String packageName, String apkPath, ClassLoader classLoader) {
+        this(packageName, apkPath, classLoader, null);
+    }
+
+    public MuplarContext(String packageName, String apkPath, ClassLoader classLoader,
+                         String activityName) {
         super(null);
         this.packageName = packageName == null || packageName.isEmpty()
             ? "com.muplar.unknown" : packageName;
@@ -108,10 +115,12 @@ public final class MuplarContext extends ContextWrapper {
         if (launcherIcon != 0) {
             this.applicationInfo.icon = launcherIcon;
         }
-        this.themeResId = resolveThemeResource(resources, this.packageName);
-        if (themeResId != 0) {
-            this.applicationInfo.theme = themeResId;
-        }
+        MuplarManifestInfo manifest = MuplarManifestInfo.read(resources, this.packageName);
+        this.applicationInfo.metaData = manifest.metadata;
+        this.applicationInfo.theme = manifest.applicationTheme;
+        int declaredTheme = manifest.themeFor(this.packageName, activityName);
+        this.themeResId = declaredTheme != 0 ? declaredTheme
+            : resolveThemeResource(resources, this.packageName);
         this.theme = resources.newTheme();
         applyBaseAndAppTheme(this.theme, themeResId);
         this.accountManager = createAccountManager(this);
@@ -140,6 +149,11 @@ public final class MuplarContext extends ContextWrapper {
         this.accessibilityManager = createAccessibilityManager(this);
         this.autofillManager = createAutofillManager(this);
         this.clipboardManager = createClipboardManager(this);
+        MuplarSubscriptionService.installFramework();
+        this.telephonyRegistryManager = createContextService(
+            "android.telephony.TelephonyRegistryManager", this);
+        this.subscriptionManager = createContextService(
+            "android.telephony.SubscriptionManager", this);
         this.telephonyManager = createTelephonyManager(this);
         this.wifiManager = new android.net.wifi.WifiManager(this);
     }
@@ -624,6 +638,12 @@ public final class MuplarContext extends ContextWrapper {
         if (Context.CLIPBOARD_SERVICE.equals(name) || "clipboard".equals(name) || "android.content.ClipboardManager".equals(name)) {
             return clipboardManager;
         }
+        if (Context.TELEPHONY_SUBSCRIPTION_SERVICE.equals(name)) {
+            return subscriptionManager;
+        }
+        if ("telephony_registry".equals(name)) {
+            return telephonyRegistryManager;
+        }
         if (Context.TELEPHONY_SERVICE.equals(name) || "phone".equals(name) || "android.telephony.TelephonyManager".equals(name)) {
             return telephonyManager;
         }
@@ -836,6 +856,14 @@ public final class MuplarContext extends ContextWrapper {
         if (serviceClass != null &&
             "android.content.ClipboardManager".equals(serviceClass.getName())) {
             return Context.CLIPBOARD_SERVICE;
+        }
+        if (serviceClass != null &&
+            "android.telephony.SubscriptionManager".equals(serviceClass.getName())) {
+            return Context.TELEPHONY_SUBSCRIPTION_SERVICE;
+        }
+        if (serviceClass != null &&
+            "android.telephony.TelephonyRegistryManager".equals(serviceClass.getName())) {
+            return "telephony_registry";
         }
         if (serviceClass != null &&
             "android.telephony.TelephonyManager".equals(serviceClass.getName())) {
@@ -2195,6 +2223,17 @@ public final class MuplarContext extends ContextWrapper {
             System.err.println("[Muplar/ART] createClipboardManager failed: " + t);
         }
         return null;
+    }
+
+    private static Object createContextService(String className, Context context) {
+        try {
+            Class<?> type = Class.forName(className);
+            Constructor<?> ctor = type.getDeclaredConstructor(Context.class);
+            ctor.setAccessible(true);
+            return ctor.newInstance(context);
+        } catch (Exception e) {
+            throw new IllegalStateException("Cannot create framework service " + className, e);
+        }
     }
 
     private static Object createTelephonyManager(final Context context) {

@@ -6,9 +6,10 @@ ROOT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 
 SYSROOT="$ROOT_DIR/build/sysroot"
 OUT=""
+SYNC_DEPLOYMENTS=1
 
 usage() {
-    echo "Usage: $0 [--sysroot PATH] [--output PATH]"
+    echo "Usage: $0 [--sysroot PATH] [--output PATH] [--no-sync]"
     echo
     echo "Builds the Muplar Java bootstrap jar used by app_process64."
 }
@@ -30,6 +31,10 @@ while [ "$#" -gt 0 ]; do
             fi
             OUT="$2"
             shift 2
+            ;;
+        --no-sync)
+            SYNC_DEPLOYMENTS=0
+            shift
             ;;
         -h|--help)
             usage
@@ -162,6 +167,11 @@ xargs "$D8_BIN" --min-api 35 --output "$DEX_DIR" < "$BUILD_DIR/class-files.txt"
 
 echo "[ART] Built bootstrap jar: $OUT"
 file "$OUT"
+
+# Isolated compatibility probes must not update running user installations.
+if [ "$SYNC_DEPLOYMENTS" -eq 0 ]; then
+    exit 0
+fi
 
 # Sync to known deployment locations so runtime prefix and sysroots always stay updated
 for target in \

@@ -1,0 +1,15 @@
+<manifest xmlns:android="http://schemas.android.com/apk/res/android" package="com.muplar.manifestsmoke">
+    <uses-sdk android:minSdkVersion="23" android:targetSdkVersion="28" />
+    <application android:label="Manifest smoke" android:theme="@android:style/Theme.Material.Light">
+        <uses-library android:name="org.apache.http.legacy" android:required="true" />
+        <uses-library android:name="com.muplar.missing.optional" android:required="false" />
+        <meta-data android:name="test.integer" android:value="@integer/test_value" />
+        <meta-data android:name="test.resource" android:resource="@integer/test_value" />
+        <meta-data android:name="test.string" android:value="@string/test_value" />
+        <meta-data android:name="test.boolean" android:value="true" />
+        <activity android:name=".MainActivity" android:exported="true" android:theme="@android:style/Theme.Material.Light.NoActionBar">
+            <meta-data android:name="activity.only" android:value="123" />
+            <intent-filter><action android:name="android.intent.action.MAIN" /><category android:name="android.intent.category.LAUNCHER" /></intent-filter>
+        </activity>
+    </application>
+</manifest>
